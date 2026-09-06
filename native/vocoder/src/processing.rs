@@ -1,8 +1,11 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 use blip25_vocoder::enhancement::{Biquad, ClassicalConfig, Compressor, EnhancementMode};
 
 use crate::{MODE_DMR, MODE_NXDN, MODE_P25_PHASE2};
 
-pub(crate) const RX_OUTPUT_GAIN_DB: f32 = 6.0;
+pub(crate) const RX_OUTPUT_GAIN_DB: f32 = 0.0;
 pub(crate) const RX_BOUNDARY_FADE_SAMPLES: usize = 40;
 pub(crate) const RX_COMPRESSOR_ATTACK_MS: f32 = 10.0;
 pub(crate) const RX_COMPRESSOR_RELEASE_MS: f32 = 250.0;

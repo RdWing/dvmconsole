@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
@@ -30,6 +33,8 @@ public sealed class CallRecordingService : IAsyncDisposable
     private readonly Dictionary<(ChannelId ChannelId, long EpisodeId), ReceiveEncryptionState> encryption = [];
     private int retentionDays;
     private int disposed;
+    private readonly object disposalSync = new();
+    private Task? disposalTask;
 
     public CallRecordingService(
         IRecordingStore store,
@@ -266,8 +271,7 @@ public sealed class CallRecordingService : IAsyncDisposable
                 encryption.Remove(key);
             }
             transmit.Remove(channelId);
-            foreach (ActiveRecording recording in recordings)
-                await FinalizeAsync(recording, cancellationToken).ConfigureAwait(false);
+            await FinalizeAllAsync(recordings).ConfigureAwait(false);
         }
         finally
         {
@@ -275,11 +279,15 @@ public sealed class CallRecordingService : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref disposed, 1) != 0)
-            return;
+        lock (disposalSync)
+            return new ValueTask(disposalTask ??= DisposeCoreAsync());
+    }
 
+    private async Task DisposeCoreAsync()
+    {
+        Interlocked.Exchange(ref disposed, 1);
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -290,14 +298,30 @@ public sealed class CallRecordingService : IAsyncDisposable
             receive.Clear();
             transmit.Clear();
             encryption.Clear();
-            foreach (ActiveRecording recording in recordings)
-                await FinalizeAsync(recording, CancellationToken.None).ConfigureAwait(false);
+            await FinalizeAllAsync(recordings).ConfigureAwait(false);
         }
         finally
         {
             gate.Release();
-            gate.Dispose();
         }
+    }
+
+    private async ValueTask FinalizeAllAsync(IEnumerable<ActiveRecording> recordings)
+    {
+        var failures = new List<Exception>();
+        foreach (ActiveRecording recording in recordings)
+        {
+            try
+            {
+                await FinalizeAsync(recording, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failures.Add(new IOException($"Recording '{recording.Handle.Id}' could not be finalized.", exception));
+            }
+        }
+        if (failures.Count > 0)
+            throw new AggregateException("Recording cleanup failed.", failures);
     }
 
     private async ValueTask StopAsync(
@@ -402,40 +426,30 @@ public sealed class CallRecordingService : IAsyncDisposable
         }
     }
 
-    private async ValueTask FinalizeAsync(
-        ActiveRecording recording,
-        CancellationToken cancellationToken)
+    private async ValueTask FinalizeAsync(ActiveRecording recording, CancellationToken cancellationToken)
     {
         Publish(recording, isFinalizing: true, fault: null);
-        Exception? failure = null;
+        var failures = new List<Exception>();
         try
         {
             recording.Writer.Dispose();
-            TimeSpan duration = TimeSpan.FromSeconds(
-                recording.Writer.SamplesWritten /
+            TimeSpan duration = TimeSpan.FromSeconds(recording.Writer.SamplesWritten /
                 (double)PcmAudioFormat.Voice8KhzMono16Bit.SampleRate);
             await recording.Handle.CommitAsync(duration, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
-            failure = exception;
-            try
-            {
-                await recording.Handle.AbortAsync(
-                    exception.Message,
-                    CancellationToken.None).ConfigureAwait(false);
-            }
-            catch
-            {
-                // Preserve the original finalization failure.
-            }
-            throw;
+            failures.Add(exception);
+            try { await recording.Handle.AbortAsync(exception.Message, CancellationToken.None).ConfigureAwait(false); }
+            catch (Exception abortFailure) { failures.Add(abortFailure); }
         }
-        finally
-        {
-            await recording.Handle.DisposeAsync().ConfigureAwait(false);
-            Publish(recording, isFinalizing: false, failure?.Message);
-        }
+        try { await recording.Handle.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception cleanupFailure) { failures.Add(cleanupFailure); }
+        Publish(recording, isFinalizing: false, failures.FirstOrDefault()?.Message);
+        if (failures.Count == 1)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures.Count > 1)
+            throw new AggregateException("Recording finalization and cleanup failed.", failures);
     }
 
     private void Publish(

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Vocoder;
 using fnecore.DMR;
 
@@ -20,6 +23,7 @@ public sealed class DmrTxAudioSession : IDisposable
     private readonly DmrPrivacyProcessor? privacyProcessor;
     private readonly DmrBurstFSignaling? encryptedBurstFSignaling;
     private readonly byte[] pendingAmbe = new byte[DmrVoicePacketCodec.AmbeBytes];
+    private readonly byte[] frameWorkspace = new byte[DmrVoicePacketCodec.FrameBytes];
     private DmrLateEntryMessageIndicator? lateEntryMessageIndicator;
     private int pendingAmbeBytes;
     private byte embeddedSequence;
@@ -164,6 +168,7 @@ public sealed class DmrTxAudioSession : IDisposable
         privacyProcessor?.Dispose();
         encoder.Dispose();
         Array.Clear(pendingAmbe);
+        Array.Clear(frameWorkspace);
         pendingAmbeBytes = 0;
         pendingPcmSamples = 0;
         disposed = true;
@@ -193,7 +198,9 @@ public sealed class DmrTxAudioSession : IDisposable
             return;
 
         bool voiceSync = embeddedSequence == 0;
-        byte[] packet = DmrVoicePacketCodec.CreateVoicePacket(
+        byte[] packet = new byte[DmrVoicePacketCodec.PacketBytes];
+        DmrVoicePacketCodec.WriteVoicePacket(
+            packet,
             sourceId,
             destinationId,
             slot,
@@ -202,7 +209,8 @@ public sealed class DmrTxAudioSession : IDisposable
             sequence.FrameSequence,
             pendingAmbe,
             embeddedData,
-            embeddedSequence == 5 ? encryptedBurstFSignaling : null);
+            embeddedSequence == 5 ? encryptedBurstFSignaling : null,
+            frameWorkspace);
         ushort packetSequence = sequence.PacketSequence;
         EmitPacket(packet, packetSequence);
         pendingAmbeBytes = 0;
@@ -227,7 +235,7 @@ public sealed class DmrTxAudioSession : IDisposable
     }
 }
 
-internal readonly record struct DmrOutboundPacket(byte[] Payload, ushort Sequence, uint StreamId);
+internal readonly record struct DmrOutboundPacket(ReadOnlyMemory<byte> Payload, ushort Sequence, uint StreamId);
 
 // Owns the packet and DMR frame sequence numbers for one outbound call.
 // RTP sequence 65535 is reserved for call-end signaling and is never used

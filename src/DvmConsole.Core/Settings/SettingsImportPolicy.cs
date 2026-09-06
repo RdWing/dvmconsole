@@ -1,4 +1,9 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Core.Settings;
+
+using DvmConsole.Core.Configuration;
 
 internal static class SettingsImportPolicy
 {
@@ -12,15 +17,58 @@ internal static class SettingsImportPolicy
         (SettingsImportScope.Session, "Session")
     ];
 
-    public static SettingsImportPreview CreatePreview(string source, UserSettings settings)
+    public static SettingsImportPreview CreatePreview(
+        string source,
+        UserSettings settings,
+        UserSettings current)
     {
         ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(current);
         string[] sections = PreviewSections
             .Where(section => HasNonDefaultValues(settings, section.Scope))
             .Select(section => section.Name)
             .ToArray();
 
-        return new SettingsImportPreview(source, settings.SchemaVersion, settings.LastCodeplugPath, sections);
+        return new SettingsImportPreview(
+            source,
+            settings.SchemaVersion,
+            settings.LastCodeplugPath,
+            sections,
+            settings.RecordingRootPath,
+            settings.RecordingRetentionDays,
+            !FileSystemPathIdentity.Equals(settings.RecordingRootPath, current.RecordingRootPath),
+            settings.RecordingRetentionDays != current.RecordingRetentionDays);
+    }
+
+    public static void ApplyChannelPresentationToActiveConfiguration(
+        UserSettings target,
+        UserSettings source,
+        string? destinationConfigurationId,
+        SettingsImportScope scope)
+    {
+        if ((scope & (SettingsImportScope.General | SettingsImportScope.Session)) == 0 ||
+            !Guid.TryParse(destinationConfigurationId, out Guid destinationId))
+            return;
+
+        // Explicit settings import applies the exported layout and receive state to
+        // the current console. Managed IDs belong to each installation, so merely
+        // importing the source envelopes cannot select the destination layout.
+        // Transfer channel presentation only; do not infer stream authorization
+        // or transmit selection from another installation's configuration ID.
+        string id = destinationId.ToString("N");
+        if (!target.ConfigurationOperatorStates.TryGetValue(id, out ConfigurationOperatorState? state))
+        {
+            state = new ConfigurationOperatorState();
+            target.ConfigurationOperatorStates[id] = state;
+        }
+        if ((scope & SettingsImportScope.General) != 0)
+        {
+            state.ChannelWidgetPositions = UserSettingsNormalizationRules.NormalizeWidgetPositions(
+                source.ChannelWidgetPositions);
+            state.RestoreSelectedChannelsOnStartup = source.RestoreSelectedChannelsOnStartup;
+        }
+        if ((scope & SettingsImportScope.Session) != 0)
+            state.ReceiveEnabledChannelKeys = source.ReceiveEnabledChannelKeys.ToList();
     }
 
     public static void Merge(UserSettings target, UserSettings source, SettingsImportScope scope)
@@ -104,6 +152,7 @@ internal static class SettingsImportPolicy
             target.RxJitterBuffer = RxJitterBufferSetting.Normalize(source.RxJitterBuffer);
             target.RxJitterBuffersBySystem = UserSettingsNormalizationRules.NormalizeRxJitterBuffersBySystem(
                 source.RxJitterBuffersBySystem);
+            target.RequireConfiguredDmrReceiveKey = source.RequireConfiguredDmrReceiveKey;
         }
 
         if ((scope & SettingsImportScope.Presets) != 0)
@@ -115,6 +164,14 @@ internal static class SettingsImportPolicy
             target.QuickCallToneBFrequencyHz = source.QuickCallToneBFrequencyHz;
             target.DtmfPresets = source.DtmfPresets.ToList();
             target.TonePresets = source.TonePresets.ToList();
+            target.ToolbarToneAssignments = source.ToolbarToneAssignments.ToDictionary(
+                pair => pair.Key, pair => new ToolbarToneAssignmentSetting
+                {
+                    PresetName = pair.Value.PresetName,
+                    IsCustomAudio = pair.Value.IsCustomAudio,
+                    AssetId = pair.Value.AssetId,
+                    FilePath = pair.Value.FilePath
+                });
             target.AlertTones = source.AlertTones.ToList();
         }
 

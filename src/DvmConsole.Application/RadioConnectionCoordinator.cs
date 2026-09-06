@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Application;
 
 public sealed record RadioConnectionEndpoint(
@@ -72,6 +75,23 @@ public sealed class RadioConnectionCoordinator
             cancellationToken);
     }
 
+    public Task RestoreAsync(
+        IEnumerable<SystemId> systemIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(systemIds);
+        SystemId[] requested = systemIds.Distinct().ToArray();
+        foreach (SystemId systemId in requested)
+        {
+            if (!endpoints.ContainsKey(systemId))
+                throw new KeyNotFoundException($"Unknown radio system ID '{systemId}'.");
+        }
+
+        return RunStartupTransitionAsync(
+            token => RestoreCoreAsync(requested, token),
+            cancellationToken);
+    }
+
     public Task ToggleAsync(
         SystemId systemId,
         CancellationToken cancellationToken = default)
@@ -113,6 +133,38 @@ public sealed class RadioConnectionCoordinator
             await Task.WhenAll(endpoints.Values.Select(endpoint =>
                 endpoint.StopAsync(cancellationToken).AsTask()));
             publishTransition(new RadioConnectionTransition(RadioConnectionTransitionKind.StoppedAll));
+        }
+        finally
+        {
+            setBusy(false);
+        }
+    }
+
+    private async Task RestoreCoreAsync(
+        IReadOnlyList<SystemId> systemIds,
+        CancellationToken cancellationToken)
+    {
+        if (systemIds.Count == 0)
+            return;
+
+        setBusy(true);
+        try
+        {
+            foreach (SystemId systemId in systemIds)
+            {
+                RadioConnectionEndpoint endpoint = endpoints[systemId];
+                if (endpoint.IsActive())
+                    continue;
+
+                publishTransition(new RadioConnectionTransition(
+                    RadioConnectionTransitionKind.StartingSystem,
+                    endpoint.Id,
+                    endpoint.Name));
+                await StartEndpointAsync(endpoint, cancellationToken).ConfigureAwait(false);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            await synchronizeDependentSources(cancellationToken).ConfigureAwait(false);
         }
         finally
         {

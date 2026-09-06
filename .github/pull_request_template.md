@@ -40,6 +40,9 @@ unperformed tiers **not run**; one tier never silently proves another.
 | Package smoke: macOS arm64 | Not run |
 | Package smoke: macOS x64 | Not run |
 | Package smoke: Windows x64 | Not run |
+| Package smoke: Windows ARM64 | Not run |
+| Package smoke: Linux x64 | Not run |
+| Package smoke: Linux ARM64 | Not run |
 | Live FNE integration | Not run |
 | Hardware exercise | Not run |
 | Community validation | Not run |

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Settings;
 
 namespace DvmConsole.Desktop;
@@ -28,10 +31,11 @@ internal static class DesktopCrashLog
         try
         {
             string path = Path;
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+            AppDataFileProtection.EnsureDirectory(System.IO.Path.GetDirectoryName(path)!);
             File.WriteAllText(
                 path,
                 $"{DateTimeOffset.Now:O} {context}{Environment.NewLine}{exception?.ToString() ?? "No managed exception was supplied."}{Environment.NewLine}");
+            AppDataFileProtection.EnsureFile(path);
         }
         catch
         {

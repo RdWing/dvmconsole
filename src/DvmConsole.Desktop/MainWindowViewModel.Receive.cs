@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Threading;
 using DvmConsole.Application;
 using DvmConsole.Core.Diagnostics;
@@ -12,47 +15,7 @@ namespace DvmConsole.Desktop;
 public sealed partial class MainWindowViewModel
 {
     private void HandleSystemTraffic(SystemViewModel system, RadioTrafficRecord ingress)
-    {
-        if (Volatile.Read(ref disposeStarted) != 0)
-            return;
-        if (ingress.Traffic is not FneTrafficFrame traffic)
-        {
-            AddDebugLog(
-                ingress.ReceivedAt,
-                system.Name,
-                DebugLogSeverity.Warning,
-                $"Ignored unsupported radio frame type {ingress.Traffic.GetType().Name}.");
-            return;
-        }
-
-        DateTimeOffset receivedAt = ingress.ReceivedAt;
-        long receivedTimestamp = ingress.BoundaryTimestamp > 0
-            ? ingress.BoundaryTimestamp
-            : traffic.FneBoundaryTimestamp > 0
-                ? traffic.FneBoundaryTimestamp
-            : Stopwatch.GetTimestamp();
-        ReceivePacketDecisionEnvelope decision = ObserveReceivePacketAtIngress(
-            system,
-            traffic,
-            receivedAt,
-            receivedTimestamp,
-            ingress.CandidateChannels);
-        // Connection statistics are thread-safe and account for every packet
-        // before continuation-only UI projection is allowed to coalesce.
-        system.RecordTraffic(decision.Traffic, publishDiagnostics: false);
-        ObserveAdaptiveReceiveJitter(system, decision.Traffic);
-        ReceiveDispatchTargets preEnqueuedAudioChannels = EnqueuePriorityReceiveAudio(
-            system,
-            decision);
-        ReceiveDispatchTargets preEnqueuedPatchChannels = EnqueuePriorityPatchAudio(
-            system,
-            decision);
-        var workItem = new SystemTrafficWorkItem(
-            decision,
-            preEnqueuedAudioChannels,
-            preEnqueuedPatchChannels);
-        receivePresentation.Present(system, workItem);
-    }
+        => receiveTraffic.HandleIngress(system, ingress);
 
     private void PresentSystemTraffic(
         SystemViewModel system,
@@ -78,7 +41,7 @@ public sealed partial class MainWindowViewModel
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(traffic);
         DateTimeOffset now = receivedAt ?? DateTimeOffset.Now;
-        ReceivePacketDecisionEnvelope decision = ObserveReceivePacketAtIngress(
+        ReceivePacketDecisionEnvelope decision = receiveTraffic.ObserveIngress(
             system,
             traffic,
             now,
@@ -127,7 +90,7 @@ public sealed partial class MainWindowViewModel
         bool? protocolEncrypted = observedEncryption.IsKnown
             ? observedEncryption.IsSecure
             : null;
-        foreach (ChannelViewModel channel in ResolveTrafficCandidates(system, decision))
+        foreach (ChannelViewModel channel in receiveTraffic.ResolvePresentationCandidates(system, decision))
         {
             if (!decision.Routing.TryGet(
                     channel.SessionDefinition.RouteKey,
@@ -142,7 +105,7 @@ public sealed partial class MainWindowViewModel
                     preceding,
                     now) || callHistoryChanged;
             }
-            callHistoryChanged = ExpireReceiveCallEpisodes(now) || callHistoryChanged;
+            callHistoryChanged = receiveEpisodeRetirement.Advance(now) || callHistoryChanged;
             ChannelTrafficApplyResult applied = channel.ApplyTraffic(
                 system.Name,
                 traffic,
@@ -164,7 +127,7 @@ public sealed partial class MainWindowViewModel
 
             if (applied.EndedStreamId is uint endedStreamId)
             {
-                patchForwarding.StopSource(channel, endedStreamId);
+                receiveMediaDispatch.StopPatchSource(channel.Id, endedStreamId);
                 DateTimeOffset endedAt = applied.EndedAt ?? now;
                 AddDebugLog(
                     now,
@@ -172,18 +135,15 @@ public sealed partial class MainWindowViewModel
                     DebugLogSeverity.Info,
                     $"RX physical stream ended on {channel.Name}: {traffic.Protocol.ToString().ToUpperInvariant()} " +
                     $"{traffic.SourceId}→{traffic.DestinationId}, stream {endedStreamId}.");
-                receiveCallEpisodes.ObservePhysicalEnd(
+                receiveTraffic.EndPhysicalStream(
                     system.Name,
                     traffic.Protocol,
+                    channel.Id,
                     endedStreamId,
                     endedAt,
                     ReceiveTrafficClassifier.IsTerminator(traffic)
                         ? ReceivePhysicalEndReason.ConfirmedTerminator
                         : ReceivePhysicalEndReason.Replaced);
-                TaskObservation.Observe(FinalizeEndedReceiveStreamAsync(
-                    channel,
-                    endedStreamId,
-                    endedAt));
             }
             bool canStartHistory = applied.Transition is
                 ReceiveStreamTransition.Started or
@@ -276,66 +236,12 @@ public sealed partial class MainWindowViewModel
                 continue;
             }
 
-            EnqueueReceiveAudio(channel, traffic, ingressTimestamp);
+            receiveMediaDispatch.EnqueueAudio(channel.Id, traffic, ingressTimestamp);
         }
         foreach (ChannelViewModel channel in activePatchSourceChannels)
-            EnqueuePatchSource(channel, traffic);
+            receiveMediaDispatch.EnqueuePatch(channel.Id, traffic);
         if (callHistoryChanged)
             NotifyCallHistoryChanged();
-    }
-
-    private ReceivePacketDecisionEnvelope ObserveReceivePacketAtIngress(
-        SystemViewModel system,
-        FneTrafficFrame traffic,
-        DateTimeOffset receivedAt,
-        long receivedTimestamp,
-        IReadOnlyList<ChannelId>? candidateChannelIds = null)
-    {
-        traffic = NormalizeP25CallIdentity(traffic);
-        ReceiveCallEpisodeObservation? episodeObservation = receiveCallEpisodes.Observe(
-            system.Name,
-            traffic,
-            receivedAt);
-        ReceiveCallEpisodeSnapshot? episodeSnapshot = null;
-        if (episodeObservation is not null &&
-            receiveCallEpisodes.TryGet(
-                system.Name,
-                traffic.Protocol,
-                traffic.StreamId,
-                out ReceiveCallEpisodeSnapshot snapshot))
-        {
-            episodeSnapshot = snapshot;
-        }
-
-        ReceiveIngressRoutingDecision routing = ReceiveIngressRoutingDecision.Empty;
-        if (receiveTrafficRouters.TryGetValue(
-                system,
-                out ReceiveAudioTrafficRouter? router))
-        {
-            routing = router.ObserveIngress(
-                traffic,
-                (channel, streamId) =>
-                    audioCoordinator.IsTrackingStream(channel, streamId) ||
-                    channel.IsTrackingReceiveStream(streamId) ||
-                    patchSourceDecode.IsTrackingStream(channel, streamId),
-                receivedAt);
-        }
-
-        bool canCoalescePresentation =
-            routing.IsContinuationOnly &&
-            episodeObservation is not { EpisodeStarted: true } &&
-            episodeObservation is not { StreamAdded: true } &&
-            ReceiveTrafficClassifier.CarriesVoicePayload(traffic) &&
-            EncryptionSnapshotResolver.TryResolve(traffic) is null;
-        return new ReceivePacketDecisionEnvelope(
-            traffic,
-            receivedAt,
-            receivedTimestamp,
-            routing,
-            episodeObservation,
-            episodeSnapshot,
-            canCoalescePresentation,
-            candidateChannelIds);
     }
 
     private bool ProjectReceiveLifecycleDecision(
@@ -355,7 +261,7 @@ public sealed partial class MainWindowViewModel
         }
 
         DateTimeOffset endedAt = applied.EndedAt ?? now;
-        patchForwarding.StopSource(channel, streamId);
+        receiveMediaDispatch.StopPatchSource(channel.Id, streamId);
         AddDebugLog(
             now,
             channel.Definition.SystemName,
@@ -363,110 +269,22 @@ public sealed partial class MainWindowViewModel
             applied.Transition == ReceiveStreamTransition.TerminationExpired
                 ? $"RX physical stream ended on {channel.Name}: stream {streamId}."
                 : $"RX physical stream timed out on {channel.Name}: stream {streamId}.");
-        receiveCallEpisodes.ObservePhysicalEnd(
+        receiveTraffic.EndPhysicalStream(
             channel.Definition.SystemName,
             ProtocolFor(channel),
+            channel.Id,
             streamId,
             endedAt,
             applied.Transition == ReceiveStreamTransition.TerminationExpired
                 ? ReceivePhysicalEndReason.ConfirmedTerminator
                 : ReceivePhysicalEndReason.InactivityTimeout);
-        TaskObservation.Observe(FinalizeEndedReceiveStreamAsync(channel, streamId, endedAt));
         return false;
     }
 
     private bool ExpireStaleReceiveRoutes(DateTimeOffset now)
     {
-        foreach (SystemViewModel system in Systems)
-        {
-            if (!receiveTrafficRouters.TryGetValue(
-                    system,
-                    out ReceiveAudioTrafficRouter? router))
-            {
-                continue;
-            }
-
-            foreach (ReceiveRouteProjectionDecision projection in
-                     router.Advance(now))
-            {
-                uint streamId = projection.StreamDecision.EndedStreamId ??
-                    projection.StreamDecision.ActiveStreamId ??
-                    projection.PrimaryStreamId;
-                ChannelViewModel? channel = router.ResolveProjectionTarget(
-                    projection.RouteKey,
-                    streamId,
-                    channel => audioCoordinator.IsActive(channel),
-                    channel => patchSourceDecode.IsActive(channel));
-                if (channel is not null)
-                    ProjectReceiveLifecycleDecision(channel, projection, now);
-            }
-        }
+        receiveTraffic.Advance(now);
         return false;
-    }
-
-    private async Task FinalizeEndedReceiveStreamAsync(
-        ChannelViewModel channel,
-        uint streamId,
-        DateTimeOffset endedAt)
-    {
-        try
-        {
-            await receiveAudioWork.RunAfterStreamAsync(
-                channel,
-                streamId,
-                async () =>
-                {
-                    try
-                    {
-                        await audioCoordinator.CompleteStreamAsync(channel, streamId, endedAt)
-                            .ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        PublishFinalReceiveJitterSummary(channel, streamId);
-                    }
-                })
-                .ConfigureAwait(false);
-        }
-        catch (ObjectDisposedException) when (Volatile.Read(ref disposeStarted) != 0)
-        {
-            // Application shutdown already owns receive-session cleanup.
-        }
-        catch (Exception exception)
-        {
-            AddDebugLog(
-                DateTimeOffset.UtcNow,
-                "RX",
-                DebugLogSeverity.Warning,
-                $"RX audio cleanup failed for {channel.Name}, stream {streamId}: {exception.Message}");
-        }
-    }
-
-    private static FneTrafficFrame NormalizeP25CallIdentity(FneTrafficFrame traffic)
-    {
-        if (!P25DfsiFrameCodec.TryExtractCallIdentifiers(
-                traffic,
-                out uint sourceId,
-                out uint destinationId) ||
-            (sourceId == traffic.SourceId && destinationId == traffic.DestinationId))
-        {
-            return traffic;
-        }
-
-        return new FneTrafficFrame(
-            traffic.Protocol,
-            traffic.PeerId,
-            sourceId,
-            destinationId,
-            traffic.Slot,
-            traffic.CallType,
-            traffic.FrameType,
-            traffic.Subtype,
-            traffic.PacketSequence,
-            traffic.StreamId,
-            traffic.Payload,
-            traffic.FneBoundaryTimestamp,
-            traffic.TransportIngressTimestamp);
     }
 
     private static string DescribeFneSignalQuality(FneTrafficFrame traffic)
@@ -489,363 +307,38 @@ public sealed partial class MainWindowViewModel
         return errorText + rssiText;
     }
 
-    private IReadOnlyList<ChannelViewModel> ResolveTrafficCandidates(
-        SystemViewModel system,
-        ReceivePacketDecisionEnvelope decision)
-    {
-        if (!receiveTrafficRouters.TryGetValue(system, out ReceiveAudioTrafficRouter? router))
-            return [];
-
-        IReadOnlyList<ChannelViewModel> candidates = router.ResolvePresentationCandidates(
-            system.Channels,
-            decision.Traffic,
-            decision.Routing,
-            channel => audioCoordinator.IsActive(channel),
-            channel => patchSourceDecode.IsActive(channel),
-            (channel, streamId) => channel.IsTrackingReceiveStream(streamId));
-        if (decision.CandidateChannelIds is null)
-            return candidates;
-
-        var candidateIds = decision.CandidateChannelIds.ToHashSet();
-        return candidates
-            .Where(channel => candidateIds.Contains(new ChannelId(channel.SessionId)))
-            .ToArray();
-    }
-
     private Task StartAudioAsync(ChannelViewModel channel)
-        => StartAudioAsync(channel, persistSelection: false);
+        => receiveOutput.StartAsync(channel, persistSelection: false);
 
-    private async Task StartAudioAsync(ChannelViewModel channel, bool persistSelection)
-    {
-        try
-        {
-            await Task.Run(() => audioCoordinator.StartAsync(channel)).ConfigureAwait(false);
-            if (receiveOutputMutePolicy.IsMuted(channel))
-            {
-                await audioCoordinator
-                    .SetLivePlaybackEnabledAsync(channel, enabled: false)
-                    .ConfigureAwait(false);
-            }
-            receiveAudioWork.Start(channel);
-            receivePipelineTimingReporter.Reset(channel);
-            receiveJitterEventReporter.Reset(channel);
-            await RunOnUiThreadAsync(() =>
-            {
-                channel.SetAudioEnabled(true);
-                if (persistSelection)
-                    SetReceiveSelectionPreference(channel, enabled: true);
-                AudioStatusText = $"Listening to {channel.Name} ({channel.ModeText}); " +
-                    $"{audioCoordinator.LivePlaybackChannels.Count} channel(s) active.";
-            }).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            await RunOnUiThreadAsync(() =>
-            {
-                channel.SetAudioEnabled(false);
-                if (persistSelection)
-                    SetReceiveSelectionPreference(channel, enabled: false);
-                AudioStatusText = $"RX audio unavailable: {exception.Message}";
-            }).ConfigureAwait(false);
-        }
-    }
+    private Task StartAudioAsync(ChannelViewModel channel, bool persistSelection)
+        => receiveOutput.StartAsync(channel, persistSelection);
 
-    private async Task<ReceiveRouteRecoveryResult> RecoverSelectedReceiveAudioAsync(ChannelViewModel failedChannel)
-    {
-        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            ReceiveRouteRecoveryResult result = await audioCoordinator
-                .RecoverSelectedAsync([failedChannel])
-                .ConfigureAwait(false);
-            DateTimeOffset retryAt = DateTimeOffset.UtcNow.AddSeconds(5);
-            foreach (ChannelViewModel channel in ResolveChannels(result.Restarted))
-            {
-                if (receiveOutputMutePolicy.IsMuted(channel))
-                {
-                    await audioCoordinator
-                        .SetLivePlaybackEnabledAsync(channel, enabled: false)
-                        .ConfigureAwait(false);
-                }
-                receiveRetryAfter.Remove(channel);
-                receiveAudioWork.Start(channel);
-                receivePipelineTimingReporter.Reset(channel);
-                receiveJitterEventReporter.Reset(channel);
-            }
-            foreach (ChannelViewModel channel in ResolveChannels(result.Failed))
-                receiveRetryAfter[channel] = retryAt;
-            return result;
-        }
-        finally
-        {
-            audioReconfigurationLock.Release();
-        }
-    }
-
-    private void HandleReceiveAudioOutputFailed(ReceiveAudioOutputFailure failure)
-    {
-        if (Volatile.Read(ref disposeStarted) != 0)
-            return;
-        lock (receiveOutputRecoverySync)
-        {
-            foreach (ChannelViewModel channel in ResolveChannels(failure.AffectedChannels))
-                proactiveReceiveOutputRecoveries.Add(channel);
-        }
-        TaskObservation.Observe(RecoverFailedReceiveOutputAsync(failure));
-    }
-
-    private async Task RecoverFailedReceiveOutputAsync(ReceiveAudioOutputFailure failure)
-    {
-        long recoveryStarted = Stopwatch.GetTimestamp();
-        try
-        {
-            ChannelId? failedChannelId = failure.AffectedChannels
-                .Where(channelId => audioCoordinator.IsActive(channelId))
-                .Select(static channelId => (ChannelId?)channelId)
-                .FirstOrDefault();
-            if (failedChannelId is null || Volatile.Read(ref disposeStarted) != 0)
-                return;
-
-            ReceiveRouteRecoveryResult recovery = await RecoverSelectedReceiveAudioAsync(
-                    ResolveChannel(failedChannelId.Value))
-                .ConfigureAwait(false);
-            ObserveRouteRecovery(
-                Stopwatch.GetElapsedTime(recoveryStarted),
-                DescribeRouteRecovery(recovery));
-            await RunOnUiThreadAsync(() =>
-            {
-                AudioStatusText = recovery.Failed.Count == 0
-                    ? $"RX audio restarted for {recovery.Restarted.Count} selected channel(s) after the output callback stopped."
-                    : recovery.Diagnostic ?? "RX audio unavailable; retrying selected channels.";
-            }).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (Volatile.Read(ref disposeStarted) == 0)
-        {
-            ObserveRouteRecovery(
-                Stopwatch.GetElapsedTime(recoveryStarted),
-                $"failed: {exception.Message}");
-            await RunOnUiThreadAsync(() =>
-                AudioStatusText = $"RX audio recovery failed: {exception.Message}")
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            lock (receiveOutputRecoverySync)
-            {
-                foreach (ChannelViewModel channel in ResolveChannels(failure.AffectedChannels))
-                    proactiveReceiveOutputRecoveries.Remove(channel);
-            }
-        }
-    }
-
-    private bool IsProactiveReceiveOutputRecoveryRunning(ChannelViewModel channel)
-    {
-        lock (receiveOutputRecoverySync)
-            return proactiveReceiveOutputRecoveries.Contains(channel);
-    }
-
-    internal async Task ReconcileReceiveSessionsAsync()
-    {
-        if (Volatile.Read(ref disposeStarted) != 0)
-            return;
-
-        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            DateTimeOffset now = DateTimeOffset.UtcNow;
-            HashSet<ChannelId> livePlaybackChannels = audioCoordinator
-                .LivePlaybackChannels
-                .ToHashSet();
-            ChannelViewModel[] missing = Systems
-                .SelectMany(system => system.Channels)
-                .Where(channel => (channel.IsAudioEnabled || channel.IsRecordingEnabled) &&
-                    (!audioCoordinator.IsActive(channel) ||
-                     (receiveOutputMutePolicy.ShouldEnableLivePlayback(
-                          channel,
-                          isTemporarilySuspended: channel.IsAudioSuspended) &&
-                      !livePlaybackChannels.Contains(channel))) &&
-                    (!receiveRetryAfter.TryGetValue(channel, out DateTimeOffset retryAt) || retryAt <= now))
-                .Distinct()
-                .ToArray();
-            if (missing.Length == 0)
-                return;
-
-            int restarted = 0;
-            foreach (ChannelViewModel channel in missing)
-            {
-                try
-                {
-                    if (channel.IsAudioEnabled)
-                    {
-                        await audioCoordinator.StartAsync(channel).ConfigureAwait(false);
-                        if (receiveOutputMutePolicy.IsMuted(channel))
-                        {
-                            await audioCoordinator
-                                .SetLivePlaybackEnabledAsync(channel, enabled: false)
-                                .ConfigureAwait(false);
-                        }
-                    }
-                    else
-                        await audioCoordinator.EnsureDecodeAsync(channel).ConfigureAwait(false);
-                    receiveAudioWork.Start(channel);
-                    receivePipelineTimingReporter.Reset(channel);
-                    receiveJitterEventReporter.Reset(channel);
-                    receiveRetryAfter.Remove(channel);
-                    restarted++;
-                }
-                catch
-                {
-                    receiveRetryAfter[channel] = now.AddSeconds(5);
-                }
-            }
-
-            uiDispatcher.Post(() =>
-                AudioStatusText = restarted == missing.Length
-                    ? $"Restored {restarted} receive decode session(s)."
-                    : $"RX decode unavailable; retrying {missing.Length - restarted} session(s).");
-        }
-        finally
-        {
-            audioReconfigurationLock.Release();
-        }
-    }
+    internal async Task ReconcileReceiveSessionsAsync(CancellationToken cancellationToken = default)
+        => await receiveOutput.ReconcileAsync(cancellationToken).ConfigureAwait(false);
 
     private Task StopAudioAsync(ChannelViewModel channel)
-        => StopAudioAsync(channel, persistSelection: false);
+        => receiveOutput.StopAsync(channel, persistSelection: false);
 
-    private async Task StopAudioAsync(ChannelViewModel channel, bool persistSelection)
-    {
-        try
-        {
-            if (channel.IsRecordingEnabled)
-            {
-                await audioCoordinator
-                    .SetLivePlaybackEnabledAsync(channel, enabled: false)
-                    .ConfigureAwait(false);
-            }
-            else
-            {
-                await receiveAudioWork.StopAsync(channel).ConfigureAwait(false);
-                receiveJitterEventReporter.Reset(channel);
-                await Task.Run(() => audioCoordinator.StopAsync(channel)).ConfigureAwait(false);
-            }
-        }
-        finally
-        {
-            await RunOnUiThreadAsync(() =>
-            {
-                if (!channel.IsRecordingEnabled)
-                    callRecordings.StopChannel(channel);
-                channel.SetAudioEnabled(false);
-                if (persistSelection)
-                    SetReceiveSelectionPreference(channel, enabled: false);
-                AudioStatusText = audioCoordinator.LivePlaybackChannels.Count == 0
-                    ? "RX audio disabled."
-                    : $"Listening to {audioCoordinator.LivePlaybackChannels.Count} channel(s).";
-            }).ConfigureAwait(false);
-        }
-    }
+    private Task StopAudioAsync(ChannelViewModel channel, bool persistSelection)
+        => receiveOutput.StopAsync(channel, persistSelection);
 
     internal void SetReceiveSelectionPreference(ChannelViewModel channel, bool enabled)
-    {
-        ArgumentNullException.ThrowIfNull(channel);
-        HashSet<string> selected = userSettings.ReceiveEnabledChannelKeys
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        bool changed = enabled
-            ? selected.Add(channel.SettingsKey)
-            : selected.Remove(channel.SettingsKey);
-        if (!changed)
-            return;
-
-        userSettings.ReceiveEnabledChannelKeys = selected
-            .OrderBy(key => key, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        PersistUserSettings();
-    }
+        => receiveOutput.SetSelectionPreference(channel, enabled);
 
     internal async ValueTask SetChannelReceiveEnabledAsync(
         ChannelViewModel channel,
         bool enabled,
         CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(channel);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (enabled == channel.IsAudioEnabled)
-            return;
-
-        if (enabled)
-            await StartAudioAsync(channel, persistSelection: true).ConfigureAwait(false);
-        else
-            await StopAudioAsync(channel, persistSelection: true).ConfigureAwait(false);
-    }
+        => await receiveOutput.SetEnabledAsync(channel, enabled, cancellationToken).ConfigureAwait(false);
 
     internal string? GetEffectiveOutputMuteReason(ChannelViewModel channel)
-    {
-        ArgumentNullException.ThrowIfNull(channel);
-        if (channel.IsAudioSuspended)
-            return "console transmit mute";
-        return receiveOutputMutePolicy.GetEffectiveReason(channel, OutputMuted);
-    }
+        => receiveOutput.GetEffectiveMuteReason(channel, OutputMuted);
 
     private async Task ToggleSelectedSystemOutputMuteAsync()
-    {
-        SystemViewModel? system = SelectedSystem;
-        if (system is null)
-            return;
-
-        bool muted = receiveOutputMutePolicy.Toggle(system);
-        await ApplyReceiveOutputMutePolicyAsync(system.Channels).ConfigureAwait(false);
-        await RunOnUiThreadAsync(() =>
-        {
-            NotifySelectedOutputMutePresentationChanged();
-            AudioStatusText = muted
-                ? $"Live RX output for {system.Name} is muted; decoding and TAR continue."
-                : $"Live RX output for {system.Name} is restored except for any muted zones.";
-        }).ConfigureAwait(false);
-    }
+        => await receiveOutput.ToggleSystemMuteAsync(SelectedSystem).ConfigureAwait(false);
 
     private async Task ToggleSelectedZoneOutputMuteAsync()
-    {
-        ZoneViewModel? zone = SelectedSystem?.SelectedZone;
-        if (zone is null)
-            return;
-
-        bool muted = receiveOutputMutePolicy.Toggle(zone);
-        await ApplyReceiveOutputMutePolicyAsync(zone.Channels).ConfigureAwait(false);
-        await RunOnUiThreadAsync(() =>
-        {
-            NotifySelectedOutputMutePresentationChanged();
-            AudioStatusText = muted
-                ? $"Live RX output for zone {zone.Name} is muted; decoding and TAR continue."
-                : $"Live RX output for zone {zone.Name} is restored except for any muted system scope.";
-        }).ConfigureAwait(false);
-    }
-
-    private async Task ApplyReceiveOutputMutePolicyAsync(IEnumerable<ChannelViewModel> channels)
-    {
-        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            foreach (ChannelViewModel channel in channels.Distinct())
-            {
-                if (!audioCoordinator.IsActive(channel))
-                    continue;
-
-                bool livePlaybackEnabled = receiveOutputMutePolicy.ShouldEnableLivePlayback(
-                    channel,
-                    isTemporarilySuspended: channel.IsAudioSuspended);
-                await audioCoordinator
-                    .SetLivePlaybackEnabledAsync(channel, livePlaybackEnabled)
-                    .ConfigureAwait(false);
-            }
-        }
-        finally
-        {
-            audioReconfigurationLock.Release();
-        }
-
-        await ReconcileReceiveSessionsAsync().ConfigureAwait(false);
-    }
+        => await receiveOutput.ToggleZoneMuteAsync(SelectedSystem?.SelectedZone).ConfigureAwait(false);
 
     private void NotifySelectedOutputMutePresentationChanged()
     {
@@ -859,7 +352,9 @@ public sealed partial class MainWindowViewModel
 
     private async Task<ReceiveProcessingStageTiming> ProcessAudioAsync(
         ChannelViewModel channel,
-        FneTrafficFrame traffic)
+        FneTrafficFrame traffic,
+        RadioFrameEncryption? encryption,
+        CancellationToken cancellationToken)
     {
         ReceiveProcessingStageTiming processingStages = default;
         try
@@ -868,12 +363,12 @@ public sealed partial class MainWindowViewModel
             // TAR-only decoder is still opening, so retain them in this
             // ordered worker until decoding is ready.
             if (channel.IsRecordingEnabled && !audioCoordinator.IsActive(channel))
-                await EnsureRecordingAudioAsync(channel).ConfigureAwait(false);
+                await EnsureRecordingAudioAsync(channel, cancellationToken).ConfigureAwait(false);
             if (!audioCoordinator.IsActive(channel))
                 return default;
 
             ReceiveAudioProcessTiming audioTiming = await audioCoordinator
-                .ProcessWithTimingAsync(channel, traffic)
+                .ProcessWithTimingAsync(channel, traffic, encryption, cancellationToken)
                 .ConfigureAwait(false);
             processingStages = new ReceiveProcessingStageTiming(
                 audioTiming.SessionGateDelay,
@@ -882,32 +377,26 @@ public sealed partial class MainWindowViewModel
                 audioTiming.Measured);
             PublishReceiveDiagnostics(channel, traffic.StreamId, DateTimeOffset.UtcNow);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             if (IsAudioDeviceFailure(exception))
             {
-                if (IsProactiveReceiveOutputRecoveryRunning(channel))
-                    return default;
-                long recoveryStarted = Stopwatch.GetTimestamp();
-                ReceiveRouteRecoveryResult recovery = await RecoverSelectedReceiveAudioAsync(channel).ConfigureAwait(false);
-                ObserveRouteRecovery(
-                    Stopwatch.GetElapsedTime(recoveryStarted),
-                    DescribeRouteRecovery(recovery));
-                uiDispatcher.Post(() =>
-                {
-                    AudioStatusText = recovery.Failed.Count == 0
-                        ? $"RX audio restarted for {recovery.Restarted.Count} selected channel(s) after an output-device interruption."
-                        : recovery.Diagnostic ?? "RX audio unavailable; retrying selected channels.";
-                });
+                receiveOutput.RequestRecovery(channel, exception);
                 return default;
             }
 
-            uiDispatcher.Post(() =>
+            PostToUi(() =>
             {
-                channel.SetAudioEnabled(false);
-                AudioStatusText = $"RX audio stopped: {exception.Message}";
+                AddDebugLog(DateTimeOffset.Now, "RX", DebugLogSeverity.Error,
+                    $"Receive processing failed on {channel.Name}; RX and TAR selections retained. {exception}");
+                AudioStatusText = $"RX interrupted on {channel.Name}; selection retained, retrying: {exception.Message}";
             });
-            await Task.Run(() => audioCoordinator.StopAsync(channel)).ConfigureAwait(false);
+            await receiveSessions.RetireFailedSessionAsync(channel.Id, cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {
@@ -917,7 +406,7 @@ public sealed partial class MainWindowViewModel
                 // open until the logical receive episode's continuation
                 // window expires, allowing a replacement stream to append.
                 channel.MarkReceiveAudioMeterEnded(traffic.StreamId);
-                uiDispatcher.Post(() =>
+                PostToUi(() =>
                     channel.MarkReceivePlaybackEnded(traffic.StreamId));
             }
             else
@@ -941,16 +430,14 @@ public sealed partial class MainWindowViewModel
         return processingStages;
     }
 
-    private static string DescribeRouteRecovery(ReceiveRouteRecoveryResult recovery)
-        => recovery.Failed.Count == 0
-            ? $"restarted {recovery.Restarted.Count} route(s)"
-            : recovery.Diagnostic ?? $"failed {recovery.Failed.Count} route(s)";
-
     private void PublishReceiveDiagnostics(
         ChannelViewModel channel,
         uint streamId,
         DateTimeOffset now)
     {
+        if (!receiveDiagnosticsReporter.ShouldInspect(channel, now))
+            return;
+
         ReceiveAudioDiagnostics audio = audioCoordinator.GetDiagnostics(channel);
         ReceiveWorkQueueDiagnostics pipeline = receiveAudioWork.GetDiagnostics(channel, streamId);
         var warning = new ReceiveWarningDiagnostics(
@@ -978,7 +465,7 @@ public sealed partial class MainWindowViewModel
         if (uiDispatcher.CheckAccess())
             Publish();
         else
-            uiDispatcher.Post(Publish);
+            PostToUi(Publish);
     }
 
     private void HandleReceiveWorkItemTiming(
@@ -1038,154 +525,6 @@ public sealed partial class MainWindowViewModel
         => publication.Kind == ReceiveJitterEventPublicationKind.Final
             ? publication.TotalMissed > 0
             : publication.MissedSincePrevious > 0;
-
-    private ReceiveDispatchTargets EnqueuePriorityReceiveAudio(
-        SystemViewModel system,
-        ReceivePacketDecisionEnvelope decision)
-    {
-        if (!receiveTrafficRouters.TryGetValue(
-                system,
-                out ReceiveAudioTrafficRouter? router))
-        {
-            return ReceiveDispatchTargets.Empty;
-        }
-
-        ReceiveDispatchTargets targets = router.ResolveDispatchTargets(
-            ResolveChannels(audioCoordinator.ActiveChannels),
-            includeRecordingChannels: true,
-            decision.Traffic,
-            decision.Routing,
-            (channel, streamId) =>
-                audioCoordinator.IsTrackingStream(channel, streamId) ||
-                channel.IsTrackingReceiveStream(streamId));
-        if (targets.Count == 0)
-            return ReceiveDispatchTargets.Empty;
-
-        ChannelViewModel[]? accepted = targets.Count > 1
-            ? new ChannelViewModel[targets.Count]
-            : null;
-        int acceptedCount = 0;
-        foreach (ChannelViewModel channel in targets)
-        {
-            if (TryEnqueueReceiveAudio(
-                    channel,
-                    decision.Traffic,
-                    decision.ReceivedTimestamp))
-            {
-                if (accepted is not null)
-                    accepted[acceptedCount] = channel;
-                acceptedCount++;
-                if (ReceiveTrafficClassifier.IsTerminator(decision.Traffic))
-                    channel.MarkReceiveAudioMeterEnded(decision.Traffic.StreamId);
-                else
-                    channel.MarkReceiveAudioMeterActive(decision.Traffic.StreamId);
-            }
-        }
-
-        if (acceptedCount == targets.Count)
-            return targets;
-        if (acceptedCount == 0)
-            return ReceiveDispatchTargets.Empty;
-
-        ChannelViewModel[] acceptedTargets = accepted!;
-        Array.Resize(ref acceptedTargets, acceptedCount);
-        return ReceiveDispatchTargets.FromArray(acceptedTargets);
-    }
-
-    private ReceiveDispatchTargets EnqueuePriorityPatchAudio(
-        SystemViewModel system,
-        ReceivePacketDecisionEnvelope decision)
-    {
-        if (!receiveTrafficRouters.TryGetValue(
-                system,
-                out ReceiveAudioTrafficRouter? router))
-        {
-            return ReceiveDispatchTargets.Empty;
-        }
-
-        IReadOnlyList<ChannelViewModel> activeSources = ResolveChannels(patchSourceDecode.ActiveChannels);
-        ReceiveDispatchTargets targets = router.ResolveDispatchTargets(
-            activeSources,
-            includeRecordingChannels: false,
-            decision.Traffic,
-            decision.Routing,
-            (channel, streamId) => patchSourceDecode.IsTrackingStream(channel, streamId));
-        if (targets.Count == 0)
-            return ReceiveDispatchTargets.Empty;
-
-        ChannelViewModel[]? accepted = targets.Count > 1
-            ? new ChannelViewModel[targets.Count]
-            : null;
-        int acceptedCount = 0;
-        foreach (ChannelViewModel channel in targets)
-        {
-            patchSourceReceiveWork.Start(channel);
-            if (patchSourceReceiveWork.Enqueue(
-                    channel,
-                    decision.Traffic,
-                    decision.ReceivedTimestamp,
-                    out _))
-            {
-                if (accepted is not null)
-                    accepted[acceptedCount] = channel;
-                acceptedCount++;
-            }
-        }
-
-        if (acceptedCount == targets.Count)
-            return targets;
-        if (acceptedCount == 0)
-            return ReceiveDispatchTargets.Empty;
-
-        ChannelViewModel[] acceptedTargets = accepted!;
-        Array.Resize(ref acceptedTargets, acceptedCount);
-        return ReceiveDispatchTargets.FromArray(acceptedTargets);
-    }
-
-    private void EnqueueReceiveAudio(
-        ChannelViewModel channel,
-        FneTrafficFrame traffic,
-        long ingressTimestamp = 0)
-    {
-        if (!TryEnqueueReceiveAudio(channel, traffic, ingressTimestamp))
-            return;
-
-        if (ReceiveTrafficClassifier.IsTerminator(traffic))
-        {
-            channel.MarkReceiveAudioMeterEnded(traffic.StreamId);
-        }
-        else
-        {
-            channel.MarkReceiveAudioMeterActive(traffic.StreamId);
-            channel.MarkReceivePlaybackActive(traffic.SourceId, traffic.StreamId);
-        }
-    }
-
-    private bool TryEnqueueReceiveAudio(
-        ChannelViewModel channel,
-        FneTrafficFrame traffic,
-        long ingressTimestamp)
-    {
-        if (Volatile.Read(ref disposeStarted) != 0)
-            return false;
-
-        bool accepted = receiveAudioWork.Enqueue(
-            channel,
-            traffic,
-            ingressTimestamp > 0 ? ingressTimestamp : Stopwatch.GetTimestamp(),
-            out bool droppedFrame);
-        if (droppedFrame)
-            channel.RecordDroppedReceiveFrame();
-        if (!accepted)
-        {
-            PublishReceiveDiagnostics(channel, traffic.StreamId, DateTimeOffset.UtcNow);
-            return false;
-        }
-
-        if (droppedFrame)
-            PublishReceiveDiagnostics(channel, traffic.StreamId, DateTimeOffset.UtcNow);
-        return true;
-    }
 
     private async Task DrainPatchSourceWorkAsync()
     {

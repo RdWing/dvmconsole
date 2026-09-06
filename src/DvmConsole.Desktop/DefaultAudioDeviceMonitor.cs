@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 
 namespace DvmConsole.Desktop;
@@ -46,10 +49,19 @@ internal sealed class AudioBackendDeviceTopologyProvider : IAudioDeviceTopologyP
             defaultIdentity = identityProvider.GetDefaultDeviceIdentity(direction);
         defaultIdentity ??= devices.FirstOrDefault(device => device.IsDefault)?.Id ?? string.Empty;
 
-        IEnumerable<string> deviceIdentities = devices
-            .Select(device => $"{device.Id}\u001f{device.Name}")
-            .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase);
-        return string.Join('\u001e', new[] { defaultIdentity }.Concat(deviceIdentities));
+        var signatureParts = new string[devices.Count + 1];
+        signatureParts[0] = defaultIdentity;
+        for (int index = 0; index < devices.Count; index++)
+        {
+            AudioDeviceInfo device = devices[index];
+            signatureParts[index + 1] = string.Concat(device.Id, "\u001f", device.Name);
+        }
+        Array.Sort(
+            signatureParts,
+            index: 1,
+            length: devices.Count,
+            StringComparer.OrdinalIgnoreCase);
+        return string.Join('\u001e', signatureParts);
     }
 }
 
@@ -62,23 +74,29 @@ internal sealed class DefaultAudioDeviceMonitor : IAsyncDisposable
     private static readonly TimeSpan DefaultMaximumPollInterval = TimeSpan.FromSeconds(5);
     private readonly IAudioDeviceTopologyProvider topologyProvider;
     private readonly Func<AudioDeviceTopologyChange, CancellationToken, Task> changeHandler;
+    private readonly IAudioDeviceChangeSource? changeSource;
     private readonly TimeSpan pollInterval;
     private readonly TimeSpan maximumPollInterval;
     private readonly SemaphoreSlim checkGate = new(1, 1);
+    private readonly SemaphoreSlim wakeSignal = new(0, 1);
     private CancellationTokenSource? cancellation;
     private Task monitorTask = Task.CompletedTask;
     private AudioDeviceTopology? previousTopology;
     private long currentPollIntervalTicks;
+    private long platformChangeVersion;
+    private long handledPlatformChangeVersion;
     private bool disposed;
 
     public DefaultAudioDeviceMonitor(
         IAudioDeviceTopologyProvider topologyProvider,
         Func<AudioDeviceTopologyChange, CancellationToken, Task> changeHandler,
+        IAudioDeviceChangeSource? changeSource = null,
         TimeSpan? pollInterval = null,
         TimeSpan? maximumPollInterval = null)
     {
         this.topologyProvider = topologyProvider ?? throw new ArgumentNullException(nameof(topologyProvider));
         this.changeHandler = changeHandler ?? throw new ArgumentNullException(nameof(changeHandler));
+        this.changeSource = changeSource;
         this.pollInterval = pollInterval ?? DefaultPollInterval;
         this.maximumPollInterval = maximumPollInterval ?? DefaultMaximumPollInterval;
         if (this.pollInterval <= TimeSpan.Zero)
@@ -95,6 +113,20 @@ internal sealed class DefaultAudioDeviceMonitor : IAsyncDisposable
             return;
 
         cancellation = new CancellationTokenSource();
+        if (changeSource is not null)
+        {
+            changeSource.Changed += HandleDeviceChanged;
+            try
+            {
+                changeSource.Start();
+            }
+            catch
+            {
+                changeSource.Changed -= HandleDeviceChanged;
+                // Polling remains the portable fallback when the platform
+                // notification service is temporarily unavailable.
+            }
+        }
         monitorTask = MonitorAsync(cancellation.Token);
     }
 
@@ -138,8 +170,14 @@ internal sealed class DefaultAudioDeviceMonitor : IAsyncDisposable
         }
         finally
         {
+            if (changeSource is not null)
+            {
+                changeSource.Changed -= HandleDeviceChanged;
+                changeSource.Dispose();
+            }
             currentCancellation?.Dispose();
             checkGate.Dispose();
+            wakeSignal.Dispose();
         }
     }
 
@@ -163,7 +201,7 @@ internal sealed class DefaultAudioDeviceMonitor : IAsyncDisposable
 
             try
             {
-                await Task.Delay(CurrentPollInterval, cancellationToken).ConfigureAwait(false);
+                await wakeSignal.WaitAsync(CurrentPollInterval, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -172,27 +210,47 @@ internal sealed class DefaultAudioDeviceMonitor : IAsyncDisposable
         }
     }
 
+    private void HandleDeviceChanged(object? sender, EventArgs eventArgs)
+    {
+        _ = sender;
+        _ = eventArgs;
+        Interlocked.Increment(ref platformChangeVersion);
+        try
+        {
+            wakeSignal.Release();
+        }
+        catch (SemaphoreFullException)
+        {
+            // A pending wake already represents every coalesced platform event.
+        }
+    }
+
     private async Task<bool> CheckTopologyAsync(CancellationToken cancellationToken)
     {
         await checkGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            long observedPlatformChangeVersion = Volatile.Read(ref platformChangeVersion);
             AudioDeviceTopology current = topologyProvider.Read();
             AudioDeviceTopology? previous = previousTopology;
             if (previous is null)
             {
                 previousTopology = current;
+                Volatile.Write(ref handledPlatformChangeVersion, observedPlatformChangeVersion);
                 return true;
             }
-            if (previous == current)
+            bool platformReportedChange = observedPlatformChangeVersion !=
+                Volatile.Read(ref handledPlatformChangeVersion);
+            if (previous == current && !platformReportedChange)
                 return false;
 
             await changeHandler(
                 new AudioDeviceTopologyChange(
-                    InputChanged: previous.InputSignature != current.InputSignature,
-                    OutputChanged: previous.OutputSignature != current.OutputSignature),
+                    InputChanged: platformReportedChange || previous.InputSignature != current.InputSignature,
+                    OutputChanged: platformReportedChange || previous.OutputSignature != current.OutputSignature),
                 cancellationToken).ConfigureAwait(false);
             previousTopology = current;
+            Volatile.Write(ref handledPlatformChangeVersion, observedPlatformChangeVersion);
             return true;
         }
         finally

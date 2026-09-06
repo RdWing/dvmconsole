@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Vocoder;
 
@@ -31,10 +34,11 @@ public sealed class NxdnTransmitCaptureSession : ITransmitCaptureSession
             new DelegateTransmitCall(
                 call.Start,
                 samples => call.Process(samples),
-                _ => call.EndAsync(CancellationToken.None),
+                call.EndAsync,
                 call.Dispose),
             "The NXDN capture session has faulted.",
-            exception => Faulted?.Invoke(this, exception));
+            exception => Faulted?.Invoke(this, exception),
+            drainAcceptedFramesWithoutDelayOnStop: true);
     }
 
     public event EventHandler<Exception>? Faulted;

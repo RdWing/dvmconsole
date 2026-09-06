@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:presentation="using:DvmConsole.Presentation"
@@ -40,9 +43,9 @@
                 <DataTemplate x:DataType="presentation:ConfigurationStreamRow">
                   <Border Classes="dense-row">
                     <Grid ColumnDefinitions="2*,*,3*" ColumnSpacing="8">
-                      <TextBlock Text="{Binding Stream.Name}" TextWrapping="Wrap"/>
+                      <TextBlock Text="{Binding Name}" TextWrapping="Wrap"/>
                       <TextBlock Grid.Column="1" Text="{Binding ZoneName}" TextWrapping="Wrap"/>
-                      <TextBlock Grid.Column="2" Text="{Binding Stream.Url}" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Grid.Column="2" Text="{Binding Url}" TextTrimming="CharacterEllipsis"/>
                     </Grid>
                   </Border>
                 </DataTemplate>
@@ -54,7 +57,7 @@
           <StackPanel Spacing="6" IsEnabled="{Binding CanEdit}">
             <TextBlock Classes="subheading" Text="Stream Inspector"/>
             <TextBlock Classes="caption" Text="Name"/>
-            <TextBox Text="{Binding SelectedStream.Stream.Name, Mode=TwoWay}"
+            <TextBox Text="{Binding SelectedStream.Stream.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                      LostFocus="HandleDraftFieldEdit"
                      AutomationProperties.Name="Web stream name"/>
             <TextBlock Classes="caption" Text="Owning zone"/>
@@ -69,20 +72,20 @@
               </ComboBox.ItemTemplate>
             </ComboBox>
             <TextBlock Classes="caption" Text="URL"/>
-            <TextBox Text="{Binding SelectedStream.Stream.Url, Mode=TwoWay}"
+            <TextBox Text="{Binding SelectedStream.Stream.Url, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                      LostFocus="HandleDraftFieldEdit"
                      AutomationProperties.Name="Web stream URL"/>
             <TextBlock Classes="caption" Text="Username"/>
-            <TextBox Text="{Binding SelectedStream.Stream.AuthUsername, Mode=TwoWay}"
+            <TextBox Text="{Binding SelectedStream.Stream.AuthUsername, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                      LostFocus="HandleDraftFieldEdit"
                      AutomationProperties.Name="Web stream username"/>
             <TextBlock Classes="caption" Text="Password"/>
             <TextBox PasswordChar="&#x25CF;"
-                     Text="{Binding SelectedStream.Stream.AuthPassword, Mode=TwoWay}"
+                     Text="{Binding SelectedStream.Stream.AuthPassword, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                      LostFocus="HandleDraftFieldEdit"
                      AutomationProperties.Name="Web stream password"/>
             <TextBlock Classes="caption" Text="Idle color"/>
-            <TextBox Text="{Binding SelectedStream.Stream.IdleColor, Mode=TwoWay}"
+            <TextBox Text="{Binding SelectedStream.Stream.IdleColor, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                      LostFocus="HandleDraftFieldEdit"
                      AutomationProperties.Name="Web stream idle color"/>
           </StackPanel>

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Settings;
 using DvmConsole.Audio;
 using DvmConsole.Application;
@@ -44,13 +47,13 @@ public sealed class AlertToneViewModel : IAlertToneViewModel
         };
 }
 
-public sealed class BuiltInAlertToneViewModel
+public sealed class BuiltInAlertToneViewModel : System.ComponentModel.INotifyPropertyChanged
 {
     public BuiltInAlertToneViewModel(LegacyAlertTone tone)
     {
         Tone = tone;
-        Name = $"ALERT {(int)tone}";
-        Description = tone switch
+
+        defaultDescription = tone switch
         {
             LegacyAlertTone.Alert1 => "Generate 1 kHz for 3 sec",
             LegacyAlertTone.Alert2 => "Generate alternating 1.5 kHz / 800 Hz tones for 3.36 sec",
@@ -60,8 +63,38 @@ public sealed class BuiltInAlertToneViewModel
     }
 
     public LegacyAlertTone Tone { get; }
-    public string Name { get; }
-    public string Description { get; }
+    private readonly string defaultDescription;
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+    public string? AssignedPresetName { get; private set; }
+    public bool IsCustomAudio { get; private set; }
+    internal string? AssignedAssetId { get; private set; }
+    internal string? AssignedFilePath { get; private set; }
+    public string Name => AssignedPresetName ?? $"ALERT {(int)Tone}";
+    public string DisplayName
+    {
+        get
+        {
+            if (AssignedPresetName is null)
+                return Name;
+            string firstWord = AssignedPresetName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault() ?? string.Empty;
+            return (firstWord.Length > 7 ? firstWord[..7] : firstWord).ToUpperInvariant();
+        }
+    }
+    public string Description => AssignedPresetName is null
+        ? $"{defaultDescription}. Right-click to assign a saved pattern."
+        : $"Send {AssignedPresetName} on ALERT channels. Right-click to change.";
+
+    public void Assign(ToolbarToneAssignmentSetting? assignment)
+    {
+        AssignedPresetName = assignment?.PresetName;
+        IsCustomAudio = assignment?.IsCustomAudio ?? false;
+        AssignedAssetId = assignment?.AssetId;
+        AssignedFilePath = assignment?.FilePath;
+        PropertyChanged?.Invoke(this, new(nameof(Name)));
+        PropertyChanged?.Invoke(this, new(nameof(DisplayName)));
+        PropertyChanged?.Invoke(this, new(nameof(Description)));
+    }
 
     public short[] GenerateSamples()
         => LegacyAlertToneGenerator.Generate(Tone);

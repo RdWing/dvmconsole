@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Configuration;
 using DvmConsole.Audio;
 using DvmConsole.FneClient;
@@ -77,6 +80,7 @@ public sealed class NxdnPrivacyTests
         using var call = new NxdnTxCallSession(
             1001, 2002, true, 99, new FakeHalfRateSession(),
             (payload, _, _) => packets.Add(payload.ToArray()),
+            TestPacketCadence.NoDelayAsync,
             options);
 
         call.Start();
@@ -105,6 +109,7 @@ public sealed class NxdnPrivacyTests
         using var call = new NxdnTxCallSession(
             1001, 2002, true, 99, new FakeHalfRateSession(),
             (payload, _, _) => packets.Add(payload.ToArray()),
+            TestPacketCadence.NoDelayAsync,
             options);
 
         call.Start();
@@ -148,19 +153,18 @@ public sealed class NxdnPrivacyTests
             true,
             99,
             new FakeHalfRateSession(),
-            (payload, _, _) => packets.Add(payload.ToArray()));
-        call.Start();
-        call.Process(new short[160]);
-
-        await call.EndAsync(
+            (payload, _, _) => packets.Add(payload.ToArray()),
             _ =>
             {
                 packetCountsAtWait.Add(packets.Count);
                 return ValueTask.CompletedTask;
-            },
-            CancellationToken.None);
+            });
+        call.Start();
+        call.Process(new short[160]);
 
-        Assert.Equal([1, 2], packetCountsAtWait);
+        await call.EndAsync();
+
+        Assert.Equal([0, 1, 2], packetCountsAtWait);
         Assert.True(NxdnVoicePacketCodec.TryExtractAmbe(
             packets[1],
             new byte[NxdnVoicePacketCodec.AmbeBytes],
@@ -242,6 +246,7 @@ public sealed class NxdnPrivacyTests
             99,
             new FakeHalfRateSession(),
             (payload, _, _) => packets.Add(payload.ToArray()),
+            TestPacketCadence.NoDelayAsync,
             new NxdnPrivacyOptions(NxdnPrivacyAlgorithms.Ehr, 5, key)))
         {
             call.Start();
@@ -290,6 +295,7 @@ public sealed class NxdnPrivacyTests
             99,
             new FakeHalfRateSession(),
             (payload, _, _) => packets.Add(payload.ToArray()),
+            TestPacketCadence.NoDelayAsync,
             options))
         {
             call.Start();

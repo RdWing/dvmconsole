@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Desktop;
@@ -8,6 +11,28 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class ReceivePipelineTimingReporterTests
 {
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(300, true)]
+    public void OrderedAudioDrainDoesNotHideActualWorkerDelay(int workerDelay, bool shouldWarn)
+    {
+        var reporter = new ReceivePipelineTimingReporter(TimeSpan.FromSeconds(5));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "p25"
+        });
+        var timing = Timing(TimeSpan.FromMilliseconds(4500 + workerDelay)) with
+        {
+            HasQueueDelayBreakdown = true,
+            OrderedDrainHoldDuration = TimeSpan.FromMilliseconds(4500),
+            WorkerBacklogDuration = TimeSpan.FromMilliseconds(workerDelay)
+        };
+        Assert.Equal(shouldWarn, reporter.ShouldPublish(channel, timing, DateTimeOffset.UtcNow));
+    }
+
     [Fact]
     public void PublishesMaterialDelayAtMostOncePerInterval()
     {

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Diagnostics;
 using DvmConsole.Application;
 using Xunit;
@@ -6,6 +9,31 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class ReceivePacketJitterBufferTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(300)]
+    public void TerminatorReportsScheduledDrainDeadlineEvenWhenWorkerRunsLate(int lateness)
+    {
+        var profile = CreateProfile(180);
+        var buffer = new ReceivePacketJitterBuffer<ClassifiedPacket>(
+            packet => packet.StreamId, packet => packet.Sequence,
+            packet => packet.Kind, packet => packet.Profile);
+        long start = Stopwatch.GetTimestamp();
+        buffer.Enqueue(new(1, 1, ReceiveJitterPacketKind.Voice, profile), start);
+        buffer.Enqueue(new(1, 2, ReceiveJitterPacketKind.Voice, profile), start);
+        buffer.Enqueue(new(1, ushort.MaxValue, ReceiveJitterPacketKind.Terminator, profile), start);
+        Assert.True(buffer.TryDequeue(start, false, out _, out _, out _));
+        long deadline = Add(start, 60);
+        long actual = Add(deadline, lateness);
+        Assert.True(buffer.TryDequeue(actual, false, out _, out _, out _));
+        Assert.True(buffer.TryDequeue(actual, false, out var terminator, out _, out var timing));
+        Assert.Equal(ReceiveJitterPacketKind.Terminator, terminator.Kind);
+        Assert.Equal(0, timing.ReleaseDeadlineTimestamp);
+        Assert.Equal(deadline, timing.OrderedDrainDeadlineTimestamp);
+        Assert.Equal(TimeSpan.FromMilliseconds(lateness),
+            Stopwatch.GetElapsedTime(timing.OrderedDrainDeadlineTimestamp, actual));
+    }
+
     [Fact]
     public void AStreamKeepsTheTargetThatItsFirstPacketSelected()
     {
@@ -193,6 +221,86 @@ public sealed class ReceivePacketJitterBufferTests
 
         Assert.True(buffer.TryRemoveOldest(packet => packet.StreamId == 2));
         Assert.False(buffer.ContainsStream(2));
+    }
+
+    [Fact]
+    public void EmptyNxdnQueueRetainsItsEightyMillisecondPlayoutClock()
+    {
+        var profile = new ReceiveJitterBufferProfile(
+            TimeSpan.FromMilliseconds(80),
+            TimeSpan.Zero,
+            IsAdaptive: false);
+        var buffer = new ReceivePacketJitterBuffer<ClassifiedPacket>(
+            packet => packet.StreamId,
+            packet => packet.Sequence,
+            packet => packet.Kind,
+            packet => packet.Profile);
+        long start = Stopwatch.GetTimestamp();
+
+        buffer.Enqueue(new ClassifiedPacket(
+            1, 10, ReceiveJitterPacketKind.Voice, profile), start);
+        Assert.True(buffer.TryDequeue(
+            start,
+            drain: false,
+            out ClassifiedPacket first,
+            out _,
+            out _));
+        Assert.Equal((ushort)10, first.Sequence);
+        Assert.False(buffer.ContainsStream(1));
+
+        long earlyArrival = Add(start, 60);
+        buffer.Enqueue(new ClassifiedPacket(
+            1, 11, ReceiveJitterPacketKind.Voice, profile), earlyArrival);
+        Assert.False(buffer.TryDequeue(
+            earlyArrival,
+            drain: false,
+            out _,
+            out TimeSpan waitTime,
+            out _));
+        Assert.InRange(
+            waitTime,
+            TimeSpan.FromMilliseconds(19),
+            TimeSpan.FromMilliseconds(21));
+
+        Assert.True(buffer.TryDequeue(
+            Add(start, 80),
+            drain: false,
+            out ClassifiedPacket second,
+            out _,
+            out ReceiveJitterBufferDequeueMetadata metadata));
+        Assert.Equal((ushort)11, second.Sequence);
+        Assert.Equal(Add(start, 80), metadata.ReleaseDeadlineTimestamp);
+    }
+
+    [Fact]
+    public void CompletedStreamCanStartWithAFreshPlayoutClock()
+    {
+        var profile = new ReceiveJitterBufferProfile(
+            TimeSpan.FromMilliseconds(80),
+            TimeSpan.Zero,
+            IsAdaptive: false);
+        var buffer = new ReceivePacketJitterBuffer<ClassifiedPacket>(
+            packet => packet.StreamId,
+            packet => packet.Sequence,
+            packet => packet.Kind,
+            packet => packet.Profile);
+        long start = Stopwatch.GetTimestamp();
+
+        buffer.Enqueue(new ClassifiedPacket(
+            1, 10, ReceiveJitterPacketKind.Voice, profile), start);
+        Assert.True(buffer.TryDequeue(start, false, out _, out _, out _));
+        buffer.ForgetStream(1);
+
+        long nextCall = Add(start, 20);
+        buffer.Enqueue(new ClassifiedPacket(
+            1, 0, ReceiveJitterPacketKind.Voice, profile), nextCall);
+        Assert.True(buffer.TryDequeue(
+            nextCall,
+            drain: false,
+            out ClassifiedPacket firstOfNextCall,
+            out _,
+            out _));
+        Assert.Equal((ushort)0, firstOfNextCall.Sequence);
     }
 
     private static ReceiveJitterBufferProfile CreateProfile(int milliseconds)

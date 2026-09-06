@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Presentation;
 
 namespace DvmConsole.Desktop;
@@ -22,6 +25,15 @@ public sealed partial class MainWindowViewModel : IAudioSettingsViewModel
         => RxAudioProcessingModes;
     System.Collections.IEnumerable IAudioSettingsViewModel.AudioInputPresets
         => AudioInputPresets;
+    string IAudioSettingsViewModel.AudioInputPresetFilterText
+    {
+        get => audioSettings.AudioInputPresetFilterText;
+        set => audioSettings.AudioInputPresetFilterText = value;
+    }
+    bool IAudioSettingsViewModel.IsAudioInputPresetFilterVisible
+        => audioSettings.IsAudioInputPresetFilterVisible;
+    System.Collections.IEnumerable IAudioSettingsViewModel.FilteredAudioInputPresets
+        => audioSettings.FilteredAudioInputPresets;
     System.Collections.IEnumerable IAudioSettingsViewModel.AudioRouteSystems
         => Systems;
 }

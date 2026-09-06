@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Globalization;
 using System.Security.Cryptography;
 using DvmConsole.Core.Configuration;
@@ -49,7 +52,8 @@ public sealed class P25KeyRing : IP25KeyResolver, IDisposable
         var loaded = new Dictionary<(byte AlgorithmId, ushort KeyId), byte[]>();
         foreach (KeyEntry entry in container.Keys ?? [])
         {
-            if (!string.Equals(entry.Protocol, "p25", StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(entry.Protocol, "p25", StringComparison.OrdinalIgnoreCase) ||
+                !entry.AppliesToSystem(systemName))
                 continue;
             if (entry.KeyId == 0)
                 throw new FormatException("P25 key IDs must be non-zero.");
@@ -132,9 +136,19 @@ public sealed class P25KeyRing : IP25KeyResolver, IDisposable
 
     public bool CanResolve(string systemName, string? algorithm, string? keyId)
     {
-        return TryParseAlgorithmId(algorithm, out byte algorithmId) &&
-            TryParseKeyId(keyId, out ushort parsedKeyId) &&
-            TryResolve(systemName, algorithmId, parsedKeyId, out _);
+        if (!TryParseAlgorithmId(algorithm, out byte algorithmId) ||
+            !TryParseKeyId(keyId, out ushort parsedKeyId))
+        {
+            return false;
+        }
+
+        lock (sync)
+        {
+            return keys.TryGetValue(
+                    (NormalizeSystemName(systemName), algorithmId, parsedKeyId),
+                    out KeySlot? slot) &&
+                (slot.FneMaterial is not null || slot.LocalMaterial is not null);
+        }
     }
 
     public bool TryGetSource(

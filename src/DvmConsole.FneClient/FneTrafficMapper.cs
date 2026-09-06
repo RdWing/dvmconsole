@@ -1,5 +1,12 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using fnecore;
 using fnecore.DMR;
+using fnecore.P25;
+using fnecore.NXDN;
+using fnecore.Analog;
+using System.Collections.Concurrent;
 
 namespace DvmConsole.FneClient;
 
@@ -33,8 +40,8 @@ internal static class FneTrafficMapper
             args.SrcId,
             args.DstId,
             args.Slot,
-            args.CallType.ToString(),
-            args.FrameType.ToString(),
+            EnumTextCache<CallType>.Get(args.CallType),
+            EnumTextCache<FrameType>.Get(args.FrameType),
             GetDmrSubtype(args),
             args.PacketSequence,
             args.StreamId,
@@ -45,12 +52,12 @@ internal static class FneTrafficMapper
     private static string GetDmrSubtype(DMRDataReceivedEvent args)
     {
         if (args.Data.Length <= 15)
-            return args.DataType.ToString();
+            return EnumTextCache<DMRDataType>.Get(args.DataType);
 
         byte control = args.Data[15];
         return (control & 0x20) != 0
-            ? ((DMRDataType)(control & 0x0F)).ToString()
-            : args.DataType.ToString();
+            ? EnumTextCache<DMRDataType>.Get((DMRDataType)(control & 0x0F))
+            : EnumTextCache<DMRDataType>.Get(args.DataType);
     }
 
     public static FneTrafficFrame FromP25(
@@ -63,9 +70,9 @@ internal static class FneTrafficMapper
             args.SrcId,
             args.DstId,
             null,
-            args.CallType.ToString(),
-            args.FrameType.ToString(),
-            args.DUID.ToString(),
+            EnumTextCache<CallType>.Get(args.CallType),
+            EnumTextCache<FrameType>.Get(args.FrameType),
+            EnumTextCache<P25DUID>.Get(args.DUID),
             args.PacketSequence,
             args.StreamId,
             args.Data,
@@ -82,9 +89,9 @@ internal static class FneTrafficMapper
             args.SrcId,
             args.DstId,
             null,
-            args.CallType.ToString(),
-            args.FrameType.ToString(),
-            args.MessageType.ToString(),
+            EnumTextCache<CallType>.Get(args.CallType),
+            EnumTextCache<FrameType>.Get(args.FrameType),
+            EnumTextCache<NXDNMessageType>.Get(args.MessageType),
             args.PacketSequence,
             args.StreamId,
             args.Data,
@@ -101,12 +108,20 @@ internal static class FneTrafficMapper
             args.SrcId,
             args.DstId,
             null,
-            args.CallType.ToString(),
-            args.FrameType.ToString(),
-            args.AudioFrameType.ToString(),
+            EnumTextCache<CallType>.Get(args.CallType),
+            EnumTextCache<FrameType>.Get(args.FrameType),
+            EnumTextCache<AudioFrameType>.Get(args.AudioFrameType),
             args.PacketSequence,
             args.StreamId,
             args.Data,
             boundaryTimestamp,
             transportTimestamp);
+
+    private static class EnumTextCache<TEnum> where TEnum : struct, Enum
+    {
+        private static readonly ConcurrentDictionary<TEnum, string> Values = [];
+
+        public static string Get(TEnum value)
+            => Values.GetOrAdd(value, static candidate => candidate.ToString());
+    }
 }

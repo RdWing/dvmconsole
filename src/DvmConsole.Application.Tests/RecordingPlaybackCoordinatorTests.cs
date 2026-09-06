@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections.Concurrent;
 using DvmConsole.Application;
 using DvmConsole.Audio;
@@ -7,6 +10,93 @@ namespace DvmConsole.Application.Tests;
 
 public sealed class RecordingPlaybackCoordinatorTests
 {
+    [Fact]
+    public async Task StartupTimingSeparatesSlowNotificationsFromTheAudioWrite()
+    {
+        var id = RecordingId.New();
+        var clock = new ManualStartupClock();
+        var backend = new FakeAudioBackend();
+        backend.Playback.OnWrite = () => clock.Advance(7);
+        var observed = new TaskCompletionSource<RecordingPlaybackStartupMetrics>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var coordinator = new RecordingPlaybackCoordinator(
+            new FakeRecordingStore(id, CreateWave([1200, 1200])),
+            () => backend, () => "default", startupObserver: metrics => observed.TrySetResult(metrics),
+            timeProvider: clock);
+        coordinator.PlaybackStateChanged += (_, state) =>
+        {
+            if (state.IsPlaying) clock.Advance(400);
+        };
+        await coordinator.StartAsync(id);
+        var timing = await observed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(TimeSpan.FromMilliseconds(400), timing.NotificationDuration);
+        Assert.Equal(TimeSpan.FromMilliseconds(400), timing.NotificationCompleted);
+        Assert.Equal(TimeSpan.FromMilliseconds(7), timing.FirstWriteDuration);
+        Assert.Equal(TimeSpan.Zero, timing.FirstWritePacingWait);
+        Assert.Equal(TimeSpan.FromMilliseconds(407), timing.FirstOutput);
+    }
+
+    private sealed class ManualStartupClock : TimeProvider
+    {
+        private long ticks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => ticks;
+        public void Advance(int milliseconds) => ticks += TimeSpan.FromMilliseconds(milliseconds).Ticks;
+    }
+
+    [Fact]
+    public async Task SynchronousPlaybackStartupDoesNotRunOnCallingThread()
+    {
+        RecordingId id = RecordingId.New();
+        var store = new FakeRecordingStore(id, CreateWave([1200, 1200]));
+        var backend = new FakeAudioBackend();
+        await using var coordinator = new RecordingPlaybackCoordinator(store, () => backend, () => "default");
+        var startup = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int callerThreadId = 0;
+        var caller = new Thread(() =>
+        {
+            callerThreadId = Environment.CurrentManagedThreadId;
+            try
+            {
+                startup.SetResult(coordinator.StartAsync(id));
+            }
+            catch (Exception exception)
+            {
+                startup.SetException(exception);
+            }
+        });
+
+        caller.Start();
+        Task playbackStarted = await startup.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await playbackStarted.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotEqual(callerThreadId, backend.DiscoveryThreadId);
+        Assert.NotEqual(callerThreadId, backend.OutputOpenThreadId);
+    }
+
+    [Fact]
+    public async Task CanceledStopCannotReleaseBackendWhilePlaybackIsRetiring()
+    {
+        RecordingId id = RecordingId.New();
+        var store = new FakeRecordingStore(id, CreateWave([1200, 1200]));
+        var backend = new FakeAudioBackend();
+        backend.Playback.BlockDrain = true;
+        var coordinator = new RecordingPlaybackCoordinator(store, () => backend, () => "default");
+        await coordinator.StartAsync(id);
+        await backend.Playback.DrainEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        using var cancellation = new CancellationTokenSource();
+        Task stop = coordinator.StopAsync(cancellation.Token);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stop);
+        Task reset = coordinator.ResetAudioBackendAsync();
+        Task dispose = coordinator.DisposeAsync().AsTask();
+        Assert.False(reset.IsCompleted);
+        Assert.False(dispose.IsCompleted);
+        Assert.False(backend.IsDisposed);
+        backend.Playback.DrainRelease.SetResult();
+        await Task.WhenAll(reset, dispose).WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(backend.IsDisposed);
+    }
+
     [Fact]
     public async Task PlaysStoreStreamByStableIdWithoutAFilePath()
     {
@@ -113,33 +203,45 @@ public sealed class RecordingPlaybackCoordinatorTests
         public FakePlayback Playback { get; } = new();
         public string? OpenedDeviceId { get; private set; }
         public string Name => "fake";
+        public bool IsDisposed { get; private set; }
+        public int DiscoveryThreadId { get; private set; }
+        public int OutputOpenThreadId { get; private set; }
 
         public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
-            => direction == AudioDirection.Output
+        {
+            DiscoveryThreadId = Environment.CurrentManagedThreadId;
+            return direction == AudioDirection.Output
                 ? [
                     new AudioDeviceInfo("default", "Default", direction, true),
                     new AudioDeviceInfo("alternate", "Alternate", direction, false)
                 ]
                 : [];
+        }
 
         public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
             => throw new NotSupportedException();
 
         public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
         {
+            OutputOpenThreadId = Environment.CurrentManagedThreadId;
             OpenedDeviceId = device.Id;
             return Playback;
         }
 
         public void Dispose()
         {
+            IsDisposed = true;
         }
     }
 
     private sealed class FakePlayback : IAudioPlayback
     {
         public List<short[]> Frames { get; } = [];
+        public Action? OnWrite { get; set; }
         public bool DrainCalled { get; private set; }
+        public bool BlockDrain { get; set; }
+        public TaskCompletionSource DrainEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource DrainRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
 
         public ValueTask WriteAsync(
@@ -147,6 +249,7 @@ public sealed class RecordingPlaybackCoordinatorTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            OnWrite?.Invoke();
             Frames.Add(samples.ToArray());
             return ValueTask.CompletedTask;
         }
@@ -154,10 +257,13 @@ public sealed class RecordingPlaybackCoordinatorTests
         public ValueTask FlushAsync(CancellationToken cancellationToken = default)
             => ValueTask.CompletedTask;
 
-        public ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
+        public async ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
         {
             DrainCalled = true;
-            return ValueTask.FromResult<int?>(Frames.Sum(frame => frame.Length));
+            DrainEntered.TrySetResult();
+            if (BlockDrain)
+                await DrainRelease.Task;
+            return Frames.Sum(frame => frame.Length);
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

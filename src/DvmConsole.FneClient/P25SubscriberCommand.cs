@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using fnecore.P25;
 using fnecore.P25.LC.TSBK;
 using System.Globalization;

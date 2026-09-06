@@ -1,0 +1,39 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <StyleInclude Source="avares://DvmConsole.Presentation/CompactSliderStyles.axaml" />
+  <!-- Console Settings is a pointer-and-keyboard desktop surface. Keep repeated
+       form controls compact without changing the larger operator controls. -->
+  <Style Selector="Button">
+    <Setter Property="MinHeight" Value="32" />
+  </Style>
+  <Style Selector="CheckBox">
+    <Setter Property="MinHeight" Value="32" />
+  </Style>
+  <Style Selector="ComboBox">
+    <Setter Property="MinHeight" Value="32" />
+  </Style>
+  <Style Selector="TextBox">
+    <Setter Property="MinHeight" Value="32" />
+  </Style>
+  <Style Selector="ToggleButton">
+    <Setter Property="MinHeight" Value="32" />
+  </Style>
+  <Style Selector=":is(UserControl).narrow-settings Button">
+    <Setter Property="MinHeight" Value="44" />
+  </Style>
+  <Style Selector=":is(UserControl).narrow-settings CheckBox">
+    <Setter Property="MinHeight" Value="44" />
+  </Style>
+  <Style Selector=":is(UserControl).narrow-settings ComboBox">
+    <Setter Property="MinHeight" Value="44" />
+  </Style>
+  <Style Selector=":is(UserControl).narrow-settings TextBox">
+    <Setter Property="MinHeight" Value="44" />
+  </Style>
+  <Style Selector=":is(UserControl).narrow-settings ToggleButton">
+    <Setter Property="MinHeight" Value="44" />
+  </Style>
+</Styles>

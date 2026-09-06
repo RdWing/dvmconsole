@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections;
 
 namespace DvmConsole.Presentation;
@@ -44,6 +47,7 @@ public interface IConnectionsSettingsViewModel
 {
     IEnumerable ConnectionSystems { get; }
     IEnumerable KeyStatusItems { get; }
+    bool RequireConfiguredDmrReceiveKey { get; set; }
 }
 
 public sealed class ConnectionSystemEventArgs(IConnectionSystemViewModel system) : EventArgs

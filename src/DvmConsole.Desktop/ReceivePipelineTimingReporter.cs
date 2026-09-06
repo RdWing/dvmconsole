@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 
 namespace DvmConsole.Desktop;
@@ -67,7 +70,7 @@ internal sealed class ReceivePipelineTimingReporter
         => RemoveJitterTargetDelay(
             observed,
             timing.HasQueueDelayBreakdown
-                ? timing.JitterBufferHoldDuration
+                ? timing.JitterBufferHoldDuration + timing.OrderedDrainHoldDuration
                 : timing.JitterBufferTargetDelay);
 
     public void Reset(ChannelViewModel channel)

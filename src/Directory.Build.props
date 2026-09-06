@@ -10,12 +10,52 @@
     <AnalysisMode>Minimum</AnalysisMode>
     <AnalysisMode Condition="$([System.String]::Copy('$(MSBuildProjectName)').EndsWith('.Tests'))">None</AnalysisMode>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
 
     <!-- Keep tags in the form v$(Version). -->
-    <VersionPrefix>0.6.2</VersionPrefix>
+    <VersionPrefix>0.7.0</VersionPrefix>
     <Version>$(VersionPrefix)</Version>
-    <AssemblyVersion>0.6.2.0</AssemblyVersion>
-    <FileVersion>0.6.2.0</FileVersion>
+    <AssemblyVersion>0.7.0.0</AssemblyVersion>
+    <FileVersion>0.7.0.0</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
+    <Copyright>Copyright © 2025-2026 RdWing</Copyright>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(DvmConsolePackageRuntime)' != ''">
+    <!-- Release packages have platform-specific native/runtime dependency
+         graphs. Keep each graph independent so publishing one RID cannot
+         rewrite the lock used by another. -->
+    <NuGetLockFilePath>$(MSBuildProjectDirectory)/packages.$(DvmConsolePackageRuntime).lock.json</NuGetLockFilePath>
+    <!-- The trimmer rewrites both first- and third-party assemblies. Give that
+         rewrite a stable source identity and remove its CodeView records so
+         disposable intermediate paths cannot change otherwise identical
+         packages. -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <DeterministicSourcePaths>true</DeterministicSourcePaths>
+    <TrimmerRemoveSymbols>true</TrimmerRemoveSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(DvmConsoleIsolatedBuildRoot)' != ''">
+    <!-- A package build gives every project its own disposable output tree.
+         Project-name partitioning prevents generated files from colliding. -->
+    <BaseIntermediateOutputPath>$(DvmConsoleIsolatedBuildRoot)/obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(DvmConsoleIsolatedBuildRoot)/bin/$(MSBuildProjectName)/</BaseOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)/obj/**;$(MSBuildProjectDirectory)/bin/**</DefaultItemExcludes>
+    <PathMap>$(MSBuildProjectDirectory)=/_/src/$(MSBuildProjectName),$(DvmConsoleIsolatedBuildRoot)=/_/build</PathMap>
+    <!-- Roslyn treats an analyzer-config path as an input even when its bytes
+         are unchanged. Package scripts supply one stable per-RID metadata
+         root while all actual output and intermediate files remain isolated. -->
+    <GeneratedMSBuildEditorConfigFile Condition="'$(DvmConsoleDeterministicMetadataRoot)' != ''">$(DvmConsoleDeterministicMetadataRoot)/$(MSBuildProjectName).GeneratedMSBuildEditorConfig.editorconfig</GeneratedMSBuildEditorConfigFile>
+    <_ExtraTrimmerArgs>$(_ExtraTrimmerArgs) --new-mvid false</_ExtraTrimmerArgs>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(DvmConsolePackageRuntime)' != ''">
+    <!-- Resolve this per project before NuGet imports package props/targets. -->
+    <DvmConsolePackageIntermediateRoot Condition="'$(DvmConsoleIsolatedBuildRoot)' == ''">obj/dvmconsole-targets/$(DvmConsoleTargetPlatform)/$(DvmConsolePackageRuntime)/</DvmConsolePackageIntermediateRoot>
+    <DvmConsolePackageIntermediateRoot Condition="'$(DvmConsoleIsolatedBuildRoot)' != ''">$(BaseIntermediateOutputPath)dvmconsole-targets/$(DvmConsoleTargetPlatform)/$(DvmConsolePackageRuntime)/</DvmConsolePackageIntermediateRoot>
+    <MSBuildProjectExtensionsPath Condition="'$(DvmConsoleIsolatedBuildRoot)' == ''">$(MSBuildProjectDirectory)/$(DvmConsolePackageIntermediateRoot)</MSBuildProjectExtensionsPath>
+    <MSBuildProjectExtensionsPath Condition="'$(DvmConsoleIsolatedBuildRoot)' != ''">$(DvmConsolePackageIntermediateRoot)</MSBuildProjectExtensionsPath>
+    <IntermediateOutputPath>$(DvmConsolePackageIntermediateRoot)intermediate/$(Configuration)/</IntermediateOutputPath>
   </PropertyGroup>
 </Project>

@@ -4,6 +4,9 @@ Talkgroup Audio Recorder (TAR) saves selected calls as local `.opus` files. Each
 recording contains its catalog metadata, so new recordings do not need a
 separate `.json` sidecar.
 
+TAR saves received audio before the optional RX filters and compressor. Those
+controls change local listening only; they do not alter your recordings.
+
 ---
 
 # Opening TAR
@@ -48,6 +51,25 @@ the current recording location stays active.
 
 ---
 
+# Folder ownership and recording errors
+
+Only one running console can record into a given root folder. Another console
+can read completed recordings, but cannot record there while the first owns
+it. Ownership remains in place while background finalization finishes.
+
+If the Recorder page reports that another console owns the folder, close that
+console and let it finish, or choose a different recording root. Switching
+configurations within one console retries ownership after the previous session
+releases it. Do not delete recovery files to work around an ownership error.
+
+A recording error appears on the affected channel. Check available
+space, folder access, and the Recorder page's availability message, then
+re-enable TAR if the channel was disabled by an earlier error. A successful
+recording clears the previous error. Failure on one recording does
+not prevent cleanup of other calls or stop transmit audio.
+
+---
+
 # Enabling recording
 
 The Recorder page groups channels by FNE system. For each channel:
@@ -81,8 +103,14 @@ these actions:
 
 - **Play** starts playback through the master output device.
 - **Stop** stops recording playback.
-- **Open** selects the file in Finder or File Explorer.
+- **Open** shows the recording folder. Finder and File Explorer also select the
+  file.
 - **Delete** removes that recording after confirmation.
+
+The compact Activity sidebar separates calls by local date. A playing recording
+has an emphasized border and a **Playing** label. Use the same row's playback
+button to stop it. The status bar identifies the recording by channel and call
+time.
 
 **Export CSV…** exports the loaded Event History entries. **Clear session**
 clears the current History list but does not delete TAR files. A completed TAR
@@ -137,6 +165,12 @@ TAR organizes recordings by local date and system:
       <time>_<system>_<talkgroup>_<rid>_<UNKNOWN-or-CLEAR-or-SECURE_algorithm>_<stream>.opus
 ```
 
+Generated names avoid characters and reserved names that cause problems when
+recordings are moved between supported desktop platforms. Existing recordings
+are left in place. App-owned recording and recovery files use private file
+permissions where supported, including in a custom root; the console does not
+recursively change permissions on your chosen folder.
+
 The date folder and filename use local time. Embedded metadata keeps UTC start
 and end timestamps. `UNKNOWN` means the call ended before DVM Console received
 enough on-air metadata to classify it as clear or secure.
@@ -171,5 +205,7 @@ metadata.
 
 TAR trims leading and trailing silence, encodes 9 kbps mono Opus in VOIP mode,
 and embeds metadata when the call closes. Finalization runs in the background.
-During shutdown, DVM Console exits as soon as queued finalization finishes. A
-stalled item remains subject to the bounded shutdown timeout and recovery spool.
+During shutdown, DVM Console first gives pending call-end signals and
+recordings time to finish. It then cancels remaining receive work and proceeds
+with shutdown, with time limits on each step. A stalled recording has its own
+timeout, and its recovery files remain available for a later attempt.

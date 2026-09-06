@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Diagnostics;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
@@ -85,6 +88,23 @@ public sealed class ReceiveAudioTrafficRouterTests
             [otherSystem, otherSlot]);
 
         Assert.Null(target);
+    }
+
+    [Fact]
+    public void RecordingTargetIndexTracksTarStateByLogicalRoute()
+    {
+        ChannelViewModel rxOwner = Channel("Dispatch RX", "100", slot: 1);
+        ChannelViewModel tarCopy = Channel("Dispatch TAR", "100", slot: 1);
+        var index = new ReceiveRecordingTargetIndex([rxOwner, tarCopy]);
+
+        Assert.Null(index.Resolve(rxOwner));
+        tarCopy.SetRecordingEnabled(true);
+        index.Refresh();
+        Assert.Same(tarCopy, index.Resolve(rxOwner));
+
+        tarCopy.SetRecordingEnabled(false);
+        index.Refresh();
+        Assert.Null(index.Resolve(rxOwner));
     }
 
     [Fact]

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Vocoder;
@@ -21,7 +24,10 @@ public sealed class DmrRxAudioRouter : IAsyncDisposable
         IAudioPlayback playback,
         IDmrKeyResolver? keyResolver = null,
         string systemName = "",
-        bool privacyMayVary = false)
+        bool privacyMayVary = false,
+        DmrReceiveKeyPolicy receiveKeyPolicy = DmrReceiveKeyPolicy.OnAirMetadata,
+        string? configuredAlgorithm = null,
+        string? configuredKeyId = null)
     {
         this.selector = selector ?? throw new ArgumentNullException(nameof(selector));
         session = new DmrRxAudioSession(
@@ -29,7 +35,10 @@ public sealed class DmrRxAudioRouter : IAsyncDisposable
             playback,
             keyResolver,
             systemName,
-            privacyMayVary);
+            privacyMayVary,
+            receiveKeyPolicy,
+            configuredAlgorithm,
+            configuredKeyId);
     }
 
     public int FramesDecoded => session.FramesDecoded;

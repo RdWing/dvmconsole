@@ -1,189 +1,153 @@
-using DvmConsole.Audio;
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
+using DvmConsole.Audio;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
 
 public sealed class ApplicationAudioBackendProviderTests
 {
-    private static readonly AudioDeviceInfo Output =
-        new("output", "Test output", AudioDirection.Output, true);
-
     [Fact]
-    public async Task AppleModeSharesOnePhysicalPlaybackAcrossBackendClients()
+    public async Task FinalFenceStopsEveryTrackedEndpointDespiteAnEarlierFailure()
     {
-        var state = new FakeAudioState();
-        await using var provider = new ApplicationAudioBackendProvider(
-            CreateConfiguration(AudioProcessingMode.AppleVoiceProcessing),
-            _ => new FakeAudioBackend(state));
-        using IAudioBackend firstBackend = provider.CreateBackend();
-        using IAudioBackend secondBackend = provider.CreateBackend();
-        await using IAudioPlayback first = firstBackend.OpenPlayback(
-            Output,
-            PcmAudioFormat.Voice8KhzMono16Bit);
-        await using IAudioPlayback second = secondBackend.OpenPlayback(
-            Output,
-            PcmAudioFormat.Voice8KhzMono16Bit);
+        var capture = new ImmediateCapture(throwOnStop: true);
+        var playback = new ImmediatePlayback();
+        var backend = new FakeBackend(capture, playback);
+        await using var provider = CreateProvider(backend);
+        using IAudioBackend tracked = provider.CreateBackend();
+        _ = tracked.OpenCapture(backend.Input, PcmAudioFormat.Voice8KhzMono16Bit);
+        _ = tracked.OpenPlayback(backend.Output, PcmAudioFormat.Voice8KhzMono16Bit);
 
-        Assert.Equal(1, state.OpenPlaybackCalls);
+        IReadOnlyList<Exception> failures = provider.StopImmediately();
 
-        await first.WriteAsync(new short[160]);
-        await second.WriteAsync(new short[160]);
-        await WaitForAsync(() => state.PhysicalWriteCalls > 0);
+        Assert.Equal(1, capture.StopCount);
+        Assert.Equal(1, playback.StopCount);
+        Assert.Single(failures);
     }
 
     [Fact]
-    public async Task SwitchingToDvmConsoleModeReturnsToDirectPlayback()
+    public async Task EndpointOpenedAfterFinalFenceIsStoppedBeforeItEscapes()
     {
-        var state = new FakeAudioState();
-        await using var provider = new ApplicationAudioBackendProvider(
-            CreateConfiguration(AudioProcessingMode.AppleVoiceProcessing),
-            _ => new FakeAudioBackend(state));
-        using (IAudioBackend appleBackend = provider.CreateBackend())
+        var capture = new ImmediateCapture();
+        var playback = new ImmediatePlayback();
+        var backend = new FakeBackend(capture, playback);
+        await using var provider = CreateProvider(backend);
+        using IAudioBackend tracked = provider.CreateBackend();
+
+        provider.StopImmediately();
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
         {
-            await using IAudioPlayback applePlayback = appleBackend.OpenPlayback(
-                Output,
+            IAudioPlayback opened = tracked.OpenPlayback(
+                backend.Output,
                 PcmAudioFormat.Voice8KhzMono16Bit);
-            Assert.Equal(1, state.OpenPlaybackCalls);
-        }
+            await opened.DisposeAsync();
+        });
 
-        await provider.ReconfigureAsync(CreateConfiguration(AudioProcessingMode.DvmConsole));
-        using IAudioBackend dvmBackend = provider.CreateBackend();
-        await using IAudioPlayback dvmPlayback = dvmBackend.OpenPlayback(
-            Output,
-            PcmAudioFormat.Voice8KhzMono16Bit);
-
-        Assert.IsNotType<SharedOutputAudioBackend>(dvmBackend);
-        Assert.Equal(2, state.OpenPlaybackCalls);
-        Assert.Equal(1, state.DisposedPlaybackCalls);
+        Assert.Equal(1, playback.StopCount);
     }
 
     [Fact]
-    public async Task SharedRouteRejectsStereoSoReceiveCanUseItsMonoFallback()
+    public async Task TrackedBackendPreservesDefaultDeviceIdentity()
     {
-        var state = new FakeAudioState();
-        await using var provider = new ApplicationAudioBackendProvider(
-            CreateConfiguration(AudioProcessingMode.AppleVoiceProcessing),
-            _ => new FakeAudioBackend(state));
-        using IAudioBackend backend = provider.CreateBackend();
+        var backend = new FakeBackend(new ImmediateCapture(), new ImmediatePlayback());
+        await using var provider = CreateProvider(backend);
+        using IAudioBackend tracked = provider.CreateBackend();
 
-        Assert.Throws<NotSupportedException>(() =>
-            backend.OpenPlayback(Output, PcmAudioFormat.Voice8KhzStereo16Bit));
+        var identity = Assert.IsType<IDefaultAudioDeviceIdentityProvider>(tracked, exactMatch: false);
 
-        await using IAudioPlayback playback = backend.OpenPlayback(
-            Output,
-            PcmAudioFormat.Voice8KhzMono16Bit);
-        Assert.Equal(PcmAudioFormat.Voice8KhzMono16Bit, playback.Format);
+        Assert.Equal(backend.Output.Id, identity.GetDefaultDeviceIdentity(AudioDirection.Output));
     }
 
-    [Fact]
-    public async Task LocalCueDrainsItsSharedMixerLaneBeforeReturning()
+    private static ApplicationAudioBackendProvider CreateProvider(IAudioBackend backend)
+        => new(
+            new ApplicationAudioConfiguration(
+                AudioProcessingMode.DvmConsole,
+                "input",
+                "output"),
+            _ => backend);
+
+    private sealed class FakeBackend(
+        IAudioCapture capture,
+        IAudioPlayback playback) :
+        IAudioBackend,
+        IDefaultAudioDeviceIdentityProvider
     {
-        var state = new FakeAudioState();
-        await using var provider = new ApplicationAudioBackendProvider(
-            CreateConfiguration(AudioProcessingMode.AppleVoiceProcessing),
-            _ => new FakeAudioBackend(state));
-        await using var player = new LocalTonePlayer(
-            provider.CreateBackend,
-            () => Output.Id);
-
-        LocalTonePlaybackResult result = await player.PlayAsync(
-            LocalToneCues.ConnectionEstablished);
-
-        Assert.Equal(960, result.ConsumedSamples);
-        Assert.True(state.PhysicalWriteCalls > 0);
-    }
-
-    [Fact]
-    public async Task FailedSharedMixerIsReplacedForTheNextPlaybackClient()
-    {
-        var state = new FakeAudioState { FailNextPhysicalWrite = 1 };
-        await using var provider = new ApplicationAudioBackendProvider(
-            CreateConfiguration(AudioProcessingMode.AppleVoiceProcessing),
-            _ => new FakeAudioBackend(state));
-        using IAudioBackend firstBackend = provider.CreateBackend();
-        IAudioPlayback failedPlayback = firstBackend.OpenPlayback(
-            Output,
-            PcmAudioFormat.Voice8KhzMono16Bit);
-
-        await failedPlayback.WriteAsync(new short[160]);
-        await WaitForAsync(() => state.DisposedPlaybackCalls > 0);
-
-        using IAudioBackend recoveredBackend = provider.CreateBackend();
-        await using IAudioPlayback recoveredPlayback = recoveredBackend.OpenPlayback(
-            Output,
-            PcmAudioFormat.Voice8KhzMono16Bit);
-        await recoveredPlayback.WriteAsync(new short[160]);
-        await WaitForAsync(() => state.SuccessfulPhysicalWriteCalls > 0);
-
-        Assert.Equal(2, state.OpenPlaybackCalls);
-    }
-
-    private static ApplicationAudioConfiguration CreateConfiguration(AudioProcessingMode mode)
-        => new(mode, "default", "default");
-
-    private static async Task WaitForAsync(Func<bool> condition)
-    {
-        for (int attempt = 0; attempt < 100 && !condition(); attempt++)
-            await Task.Delay(5);
-        Assert.True(condition());
-    }
-
-    private sealed class FakeAudioState
-    {
-        public int OpenPlaybackCalls;
-        public int PhysicalWriteCalls;
-        public int SuccessfulPhysicalWriteCalls;
-        public int DisposedPlaybackCalls;
-        public int FailNextPhysicalWrite;
-    }
-
-    private sealed class FakeAudioBackend(FakeAudioState state) : IAudioBackend
-    {
+        public AudioDeviceInfo Input { get; } = new(
+            "input",
+            "Input",
+            AudioDirection.Input,
+            true);
+        public AudioDeviceInfo Output { get; } = new(
+            "output",
+            "Output",
+            AudioDirection.Output,
+            true);
         public string Name => "fake";
 
         public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
-            => direction == AudioDirection.Output
-                ? [Output]
-                : [new AudioDeviceInfo("input", "Test input", direction, true)];
+            => direction == AudioDirection.Input ? [Input] : [Output];
+
+        public string? GetDefaultDeviceIdentity(AudioDirection direction)
+            => direction == AudioDirection.Input ? Input.Id : Output.Id;
 
         public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
-            => throw new NotSupportedException();
+            => capture;
 
         public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
-        {
-            Interlocked.Increment(ref state.OpenPlaybackCalls);
-            return new FakePlayback(state, format);
-        }
+            => playback;
 
         public void Dispose()
         {
         }
     }
 
-    private sealed class FakePlayback(FakeAudioState state, PcmAudioFormat format) : IAudioPlayback
+    private sealed class ImmediateCapture(bool throwOnStop = false) :
+        IAudioCapture,
+        IImmediateAudioStop
     {
-        public PcmAudioFormat Format { get; } = format;
+        public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable
+        {
+            add { }
+            remove { }
+        }
+
+        public PcmAudioFormat Format => PcmAudioFormat.Voice8KhzMono16Bit;
+        public bool IsRunning => false;
+        public int StopCount { get; private set; }
+
+        public ValueTask StartAsync(CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask StopAsync(CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public void StopImmediately()
+        {
+            StopCount++;
+            if (throwOnStop)
+                throw new IOException("simulated immediate-stop failure");
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ImmediatePlayback : IAudioPlayback, IImmediateAudioStop
+    {
+        public PcmAudioFormat Format => PcmAudioFormat.Voice8KhzMono16Bit;
+        public int StopCount { get; private set; }
 
         public ValueTask WriteAsync(
             ReadOnlyMemory<short> samples,
             CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Interlocked.Increment(ref state.PhysicalWriteCalls);
-            if (Interlocked.Exchange(ref state.FailNextPhysicalWrite, 0) != 0)
-                throw new IOException("Simulated physical output failure.");
-            Interlocked.Increment(ref state.SuccessfulPhysicalWriteCalls);
-            return ValueTask.CompletedTask;
-        }
+            => ValueTask.CompletedTask;
 
         public ValueTask FlushAsync(CancellationToken cancellationToken = default)
             => ValueTask.CompletedTask;
 
-        public ValueTask DisposeAsync()
-        {
-            Interlocked.Increment(ref state.DisposedPlaybackCalls);
-            return ValueTask.CompletedTask;
-        }
+        public void StopImmediately() => StopCount++;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

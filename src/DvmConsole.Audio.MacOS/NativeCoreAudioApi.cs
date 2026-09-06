@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Runtime.InteropServices;
 
 namespace DvmConsole.Audio;
@@ -13,12 +16,12 @@ internal sealed class NativeCoreAudioApi : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int StreamStatusDelegate(IntPtr stream);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int GetSampleRateDelegate(IntPtr stream);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int StreamReadDelegate(IntPtr stream, [Out] short[] samples, int capacity);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int StreamWaitDelegate(IntPtr stream, int timeoutMilliseconds);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int StreamWriteDelegate(IntPtr stream, short[] samples, int count);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint StreamQueuedSamplesDelegate(IntPtr stream);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate ulong StreamStarvedSamplesDelegate(IntPtr stream);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void EndPlaybackContinuityDelegate(IntPtr stream);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void DestroyStreamDelegate(IntPtr stream);
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate IntPtr CreateVoiceProcessingStreamDelegate(ulong inputDeviceId, ulong outputDeviceId, int sampleRate, int channels, int bitsPerSample);
 
     private readonly IntPtr handle;
     private readonly GetDeviceCountDelegate getDeviceCount;
@@ -29,6 +32,8 @@ internal sealed class NativeCoreAudioApi : IDisposable
     private readonly StreamStatusDelegate stopStream;
     private readonly GetSampleRateDelegate getSampleRate;
     private readonly StreamReadDelegate readStream;
+    private readonly StreamWaitDelegate waitForCapture;
+    private readonly EndPlaybackContinuityDelegate wakeCapture;
     private readonly StreamWriteDelegate writeStream;
     private readonly StreamQueuedSamplesDelegate queuedSamples;
     private readonly StreamStarvedSamplesDelegate starvedSamples;
@@ -37,18 +42,6 @@ internal sealed class NativeCoreAudioApi : IDisposable
     private readonly StreamStarvedSamplesDelegate outputPresentationLatencyNanoseconds;
     private readonly EndPlaybackContinuityDelegate endPlaybackContinuity;
     private readonly DestroyStreamDelegate destroyStream;
-    private readonly CreateVoiceProcessingStreamDelegate createVoiceProcessingStream;
-    private readonly StreamStatusDelegate startVoiceProcessing;
-    private readonly StreamStatusDelegate stopVoiceProcessing;
-    private readonly StreamReadDelegate readVoiceProcessing;
-    private readonly StreamWriteDelegate writeVoiceProcessing;
-    private readonly StreamQueuedSamplesDelegate voiceProcessingQueuedSamples;
-    private readonly StreamStarvedSamplesDelegate voiceProcessingStarvedSamples;
-    private readonly StreamStarvedSamplesDelegate voiceProcessingPendingStarvedSamples;
-    private readonly StreamStarvedSamplesDelegate voiceProcessingOutputCallbackCount;
-    private readonly StreamStarvedSamplesDelegate voiceProcessingOutputPresentationLatencyNanoseconds;
-    private readonly EndPlaybackContinuityDelegate endVoiceProcessingPlaybackContinuity;
-    private readonly DestroyStreamDelegate destroyVoiceProcessingStream;
     private int referenceCount = 1;
     private int ownerDisposed;
 
@@ -64,6 +57,8 @@ internal sealed class NativeCoreAudioApi : IDisposable
         stopStream = Get<StreamStatusDelegate>("dvm_audio_stream_stop");
         getSampleRate = Get<GetSampleRateDelegate>("dvm_audio_stream_get_sample_rate");
         readStream = Get<StreamReadDelegate>("dvm_audio_stream_read");
+        waitForCapture = Get<StreamWaitDelegate>("dvm_audio_stream_wait_for_capture");
+        wakeCapture = Get<EndPlaybackContinuityDelegate>("dvm_audio_stream_wake_capture");
         writeStream = Get<StreamWriteDelegate>("dvm_audio_stream_write");
         queuedSamples = Get<StreamQueuedSamplesDelegate>("dvm_audio_stream_queued_samples");
         starvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_stream_starved_samples");
@@ -72,18 +67,6 @@ internal sealed class NativeCoreAudioApi : IDisposable
         outputPresentationLatencyNanoseconds = Get<StreamStarvedSamplesDelegate>("dvm_audio_stream_output_presentation_latency_ns");
         endPlaybackContinuity = Get<EndPlaybackContinuityDelegate>("dvm_audio_stream_end_playback_continuity");
         destroyStream = Get<DestroyStreamDelegate>("dvm_audio_stream_destroy");
-        createVoiceProcessingStream = Get<CreateVoiceProcessingStreamDelegate>("dvm_audio_voice_processing_create");
-        startVoiceProcessing = Get<StreamStatusDelegate>("dvm_audio_voice_processing_start");
-        stopVoiceProcessing = Get<StreamStatusDelegate>("dvm_audio_voice_processing_stop");
-        readVoiceProcessing = Get<StreamReadDelegate>("dvm_audio_voice_processing_read");
-        writeVoiceProcessing = Get<StreamWriteDelegate>("dvm_audio_voice_processing_write");
-        voiceProcessingQueuedSamples = Get<StreamQueuedSamplesDelegate>("dvm_audio_voice_processing_queued_samples");
-        voiceProcessingStarvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_starved_samples");
-        voiceProcessingPendingStarvedSamples = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_pending_starved_samples");
-        voiceProcessingOutputCallbackCount = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_output_callback_count");
-        voiceProcessingOutputPresentationLatencyNanoseconds = Get<StreamStarvedSamplesDelegate>("dvm_audio_voice_processing_output_presentation_latency_ns");
-        endVoiceProcessingPlaybackContinuity = Get<EndPlaybackContinuityDelegate>("dvm_audio_voice_processing_end_playback_continuity");
-        destroyVoiceProcessingStream = Get<DestroyStreamDelegate>("dvm_audio_voice_processing_destroy");
     }
 
     public string LibraryPath { get; }
@@ -113,7 +96,7 @@ internal sealed class NativeCoreAudioApi : IDisposable
     public int GetDevice(int input, int index, out ulong deviceId, byte[] name, int capacity, out int isDefault) => getDevice(input, index, out deviceId, name, capacity, out isDefault);
     public int IsBluetoothDevice(ulong deviceId) => isBluetoothDevice?.Invoke(deviceId) ?? -1;
     public SafeCoreAudioStreamHandle CreateStream(ulong id, int input, int sampleRate, int channels, int bits)
-        => CreateOwnedStream(createStream(id, input, sampleRate, channels, bits), voiceProcessing: false);
+        => CreateOwnedStream(createStream(id, input, sampleRate, channels, bits));
     public int StartStream(SafeCoreAudioStreamHandle stream)
     {
         using var lease = new SafeCoreAudioStreamLease(stream);
@@ -133,6 +116,16 @@ internal sealed class NativeCoreAudioApi : IDisposable
     {
         using var lease = new SafeCoreAudioStreamLease(stream);
         return readStream(lease.Handle, samples, capacity);
+    }
+    public int WaitForCapture(SafeCoreAudioStreamHandle stream, int timeoutMilliseconds)
+    {
+        using var lease = new SafeCoreAudioStreamLease(stream);
+        return waitForCapture(lease.Handle, timeoutMilliseconds);
+    }
+    public void WakeCapture(SafeCoreAudioStreamHandle stream)
+    {
+        using var lease = new SafeCoreAudioStreamLease(stream);
+        wakeCapture(lease.Handle);
     }
     public int WriteStream(SafeCoreAudioStreamHandle stream, short[] samples, int count)
     {
@@ -169,74 +162,13 @@ internal sealed class NativeCoreAudioApi : IDisposable
         using var lease = new SafeCoreAudioStreamLease(stream);
         endPlaybackContinuity(lease.Handle);
     }
-    public SafeCoreAudioStreamHandle CreateVoiceProcessingStream(ulong inputDeviceId, ulong outputDeviceId, int sampleRate, int channels, int bits)
-        => CreateOwnedStream(
-            createVoiceProcessingStream(inputDeviceId, outputDeviceId, sampleRate, channels, bits),
-            voiceProcessing: true);
-    public int StartVoiceProcessing(SafeCoreAudioStreamHandle stream)
-    {
-        using var lease = new SafeCoreAudioStreamLease(stream);
-        return startVoiceProcessing(lease.Handle);
-    }
-    public int StopVoiceProcessing(SafeCoreAudioStreamHandle stream)
-    {
-        using var lease = new SafeCoreAudioStreamLease(stream);
-        return stopVoiceProcessing(lease.Handle);
-    }
-    public int ReadVoiceProcessing(SafeCoreAudioStreamHandle stream, short[] samples, int capacity)
-    {
-        using var lease = new SafeCoreAudioStreamLease(stream);
-        return readVoiceProcessing(lease.Handle, samples, capacity);
-    }
-    public int WriteVoiceProcessing(SafeCoreAudioStreamHandle stream, short[] samples, int count)
-    {
-        using var lease = new SafeCoreAudioStreamLease(stream);
-        return writeVoiceProcessing(lease.Handle, samples, count);
-    }
-    public uint GetVoiceProcessingQueuedSamples(SafeCoreAudioStreamHandle stream)
-    {
-        using var lease = new SafeCoreAudioStreamLease(stream);
-        return voiceProcessingQueuedSamples(lease.Handle);
-    }
-    public ulong GetVoiceProcessingStarvedSamples(SafeCoreAudioStreamHandle stream)
-    {
-        using var lease = new SafeCoreAudioStreamLease(stream);
-        return voiceProcessingStarvedSamples(lease.Handle);
-    }
-    public ulong GetVoiceProcessingPendingStarvedSamples(SafeCoreAudioStreamHandle stream)
-    {
-        using var lease = new SafeCoreAudioStreamLease(stream);
-        return voiceProcessingPendingStarvedSamples(lease.Handle);
-    }
-    public ulong GetVoiceProcessingOutputCallbackCount(SafeCoreAudioStreamHandle stream)
-    {
-        using var lease = new SafeCoreAudioStreamLease(stream);
-        return voiceProcessingOutputCallbackCount(lease.Handle);
-    }
-    public TimeSpan GetVoiceProcessingOutputPresentationLatency(SafeCoreAudioStreamHandle stream)
-    {
-        using var lease = new SafeCoreAudioStreamLease(stream);
-        return NanosecondsToTimeSpan(
-            voiceProcessingOutputPresentationLatencyNanoseconds(lease.Handle));
-    }
-    public void EndVoiceProcessingPlaybackContinuity(SafeCoreAudioStreamHandle stream)
-    {
-        using var lease = new SafeCoreAudioStreamLease(stream);
-        endVoiceProcessingPlaybackContinuity(lease.Handle);
-    }
     public void Dispose()
     {
         if (Interlocked.Exchange(ref ownerDisposed, 1) == 0)
             ReleaseReference();
     }
 
-    internal void DestroyStream(IntPtr stream, bool voiceProcessing)
-    {
-        if (voiceProcessing)
-            destroyVoiceProcessingStream(stream);
-        else
-            destroyStream(stream);
-    }
+    internal void DestroyStream(IntPtr stream) => destroyStream(stream);
 
     internal void ReleaseReference()
     {
@@ -244,12 +176,12 @@ internal sealed class NativeCoreAudioApi : IDisposable
             NativeLibrary.Free(handle);
     }
 
-    private SafeCoreAudioStreamHandle CreateOwnedStream(IntPtr stream, bool voiceProcessing)
+    private SafeCoreAudioStreamHandle CreateOwnedStream(IntPtr stream)
     {
         if (stream == IntPtr.Zero)
             return new SafeCoreAudioStreamHandle();
         AddReference();
-        return new SafeCoreAudioStreamHandle(this, stream, voiceProcessing);
+        return new SafeCoreAudioStreamHandle(this, stream);
     }
 
     private static TimeSpan NanosecondsToTimeSpan(ulong nanoseconds)
@@ -309,7 +241,6 @@ internal ref struct SafeCoreAudioStreamLease
 internal sealed class SafeCoreAudioStreamHandle : SafeHandle
 {
     private NativeCoreAudioApi? owner;
-    private readonly bool voiceProcessing;
 
     internal SafeCoreAudioStreamHandle()
         : base(IntPtr.Zero, ownsHandle: true)
@@ -318,12 +249,10 @@ internal sealed class SafeCoreAudioStreamHandle : SafeHandle
 
     internal SafeCoreAudioStreamHandle(
         NativeCoreAudioApi owner,
-        IntPtr handle,
-        bool voiceProcessing)
+        IntPtr handle)
         : base(IntPtr.Zero, ownsHandle: true)
     {
         this.owner = owner;
-        this.voiceProcessing = voiceProcessing;
         SetHandle(handle);
     }
 
@@ -337,7 +266,7 @@ internal sealed class SafeCoreAudioStreamHandle : SafeHandle
             return true;
         try
         {
-            currentOwner.DestroyStream(handle, voiceProcessing);
+            currentOwner.DestroyStream(handle);
             return true;
         }
         finally

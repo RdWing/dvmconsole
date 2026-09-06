@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Desktop;
 
 internal readonly record struct ReceiveWarningDiagnostics(
@@ -36,6 +39,7 @@ internal readonly record struct ReceiveWarningDiagnostics(
 
 internal sealed class ReceiveDiagnosticsReporter
 {
+    private static readonly TimeSpan InspectionInterval = TimeSpan.FromMilliseconds(250);
     private readonly object sync = new();
     private readonly TimeSpan minimumInterval;
     private readonly Dictionary<ChannelViewModel, ChannelState> states = [];
@@ -45,6 +49,24 @@ internal sealed class ReceiveDiagnosticsReporter
         if (minimumInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(minimumInterval));
         this.minimumInterval = minimumInterval;
+    }
+
+    public bool ShouldInspect(ChannelViewModel channel, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(channel);
+        lock (sync)
+        {
+            if (!states.TryGetValue(channel, out ChannelState? state))
+            {
+                state = new ChannelState();
+                states.Add(channel, state);
+            }
+
+            if (state.LastInspectedAt is DateTimeOffset last && now - last < InspectionInterval)
+                return false;
+            state.LastInspectedAt = now;
+            return true;
+        }
     }
 
     public bool ShouldPublish(
@@ -98,6 +120,7 @@ internal sealed class ReceiveDiagnosticsReporter
 
     private sealed class ChannelState
     {
+        public DateTimeOffset? LastInspectedAt { get; set; }
         public ReceiveWarningDiagnostics LastPublished { get; set; }
         public ReceiveWarningDiagnostics? Pending { get; set; }
         public DateTimeOffset? LastPublishedAt { get; set; }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Globalization;
 using System.Security.Cryptography;
 using DvmConsole.Core.Configuration;
@@ -33,7 +36,8 @@ public sealed class DmrKeyRing : IDmrKeyResolver, IDisposable
         string scope = NormalizeSystemName(systemName);
         foreach (KeyEntry entry in container.Keys ?? [])
         {
-            if (!string.Equals(entry.Protocol, "dmr", StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(entry.Protocol, "dmr", StringComparison.OrdinalIgnoreCase) ||
+                !entry.AppliesToSystem(systemName))
                 continue;
             if (entry.KeyId is 0 or > byte.MaxValue)
                 throw new FormatException("DMR key IDs must be between 1 and 255.");
@@ -77,9 +81,16 @@ public sealed class DmrKeyRing : IDmrKeyResolver, IDisposable
     }
 
     public bool CanResolve(string systemName, string? algorithm, string? keyId)
-        => TryParseAlgorithmId(algorithm, out byte algorithmId) &&
-            TryParseKeyId(keyId, out byte parsedKeyId) &&
-            TryResolve(systemName, algorithmId, parsedKeyId, out _);
+    {
+        if (!TryParseAlgorithmId(algorithm, out byte algorithmId) ||
+            !TryParseKeyId(keyId, out byte parsedKeyId))
+        {
+            return false;
+        }
+
+        ObjectDisposedException.ThrowIf(disposed, this);
+        return keys.ContainsKey((NormalizeSystemName(systemName), algorithmId, parsedKeyId));
+    }
 
     public void Dispose()
     {

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
@@ -18,7 +21,7 @@ public interface IFneTrafficEndpoint : IRadioTrafficEndpoint
         uint destinationId,
         byte runtimeSlot);
     new uint CreateStreamId();
-    void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort packetSequence, uint streamId);
+    void SendTraffic(FneTrafficProtocol protocol, ReadOnlyMemory<byte> payload, ushort packetSequence, uint streamId);
 
     string IRadioTrafficEndpoint.Name => Name;
     IReadOnlyCollection<TransmitChannelDescriptor> IRadioTrafficEndpoint.ChannelDescriptors
@@ -54,7 +57,7 @@ public interface IFneTrafficEndpoint : IRadioTrafficEndpoint
 
     void IRadioTrafficEndpoint.SendTraffic(
         RadioMediaProtocol protocol,
-        ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> payload,
         ushort packetSequence,
         uint streamId)
         => SendTraffic(

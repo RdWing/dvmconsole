@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.Audio;
 
@@ -17,7 +20,7 @@ internal interface IDesktopPrivacyPermissionService : IMicrophonePermissionServi
 }
 
 // Native privacy APIs stay at the desktop composition edge. In particular,
-// Windows target builds do not reference the macOS audio assembly at all.
+// Non-macOS target builds do not reference the macOS audio assembly at all.
 internal sealed class DesktopPrivacyPermissionService : IDesktopPrivacyPermissionService
 {
     public static DesktopPrivacyPermissionService Instance { get; } = new();
@@ -30,7 +33,7 @@ internal sealed class DesktopPrivacyPermissionService : IDesktopPrivacyPermissio
 
     public KeyboardPermissionState RequestKeyboardAccess()
     {
-#if !DVMCONSOLE_WINDOWS
+#if DVMCONSOLE_MACOS
         if (OperatingSystem.IsMacOS())
         {
             return MacOsPrivacyPermissionRequester.RequestKeyboardAccess() switch
@@ -58,7 +61,7 @@ internal sealed class DesktopPrivacyPermissionService : IDesktopPrivacyPermissio
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-#if !DVMCONSOLE_WINDOWS
+#if DVMCONSOLE_MACOS
         if (OperatingSystem.IsMacOS())
         {
             MicrophonePermissionState state = MacOsPrivacyPermissionRequester.RequestMicrophoneAccess() switch

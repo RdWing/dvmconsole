@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Globalization;
 using System.Security.Cryptography;
 using DvmConsole.Core.Configuration;
@@ -25,7 +28,8 @@ public sealed class NxdnKeyRing : INxdnKeyResolver, IDisposable
         string scope = Normalize(systemName);
         foreach (KeyEntry entry in container.Keys ?? [])
         {
-            if (!string.Equals(entry.Protocol, "nxdn", StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(entry.Protocol, "nxdn", StringComparison.OrdinalIgnoreCase) ||
+                !entry.AppliesToSystem(systemName))
                 continue;
             if (entry.KeyId is 0 or > 63)
                 throw new FormatException("NXDN key IDs must be between 1 and 63.");
@@ -54,9 +58,16 @@ public sealed class NxdnKeyRing : INxdnKeyResolver, IDisposable
     }
 
     public bool CanResolve(string systemName, string? algorithm, string? keyId)
-        => TryParseAlgorithmId(algorithm, out byte parsedAlgorithm) &&
-            TryParseKeyId(keyId, out byte parsedKey) &&
-            TryResolve(systemName, parsedAlgorithm, parsedKey, out _);
+    {
+        if (!TryParseAlgorithmId(algorithm, out byte parsedAlgorithm) ||
+            !TryParseKeyId(keyId, out byte parsedKey))
+        {
+            return false;
+        }
+
+        ObjectDisposedException.ThrowIf(disposed, this);
+        return keys.ContainsKey((Normalize(systemName), parsedAlgorithm, parsedKey));
+    }
 
     public void Dispose()
     {

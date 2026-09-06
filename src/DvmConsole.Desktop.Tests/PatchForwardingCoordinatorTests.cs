@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections.Concurrent;
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
@@ -12,6 +15,74 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class PatchForwardingCoordinatorTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FullDestinationSkipsWholeCallAndExpiredWaiterCannotBypassRetiringCall(bool overflowCurrentCall)
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        (_, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
+        var time = new PatchTestTimeProvider();
+        var diagnostics = new ConcurrentQueue<PatchForwardingDiagnostic>();
+        using var releaseSend = new ManualResetEventSlim();
+        await using var coordinator = new PatchForwardingCoordinator([sourceSystem, targetSystem],
+            diagnosticObserver: diagnostics.Enqueue, timeProvider: time);
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+        Task firstTick = Task.CompletedTask;
+        try
+        {
+            targetSystem.BlockNextSendUntil(releaseSend);
+            ObserveVoice(coordinator, source, 77, 7001);
+            coordinator.ObserveDecodedSamples(source, 77, 7001, new short[160 * 8]);
+            await WaitUntilAsync(() => coordinator.CaptureQueueHealth().Depth == 7);
+            await WaitUntilAsync(() => time.HasTimerWithin(TimeSpan.FromMilliseconds(20)));
+            // Timer continuations may run inline. Keep the controlled clock
+            // callback off the test thread while the transport barrier is held.
+            firstTick = Task.Run(() => time.Advance(TimeSpan.FromMilliseconds(20)));
+            await targetSystem.SendEntered.WaitAsync(TimeSpan.FromSeconds(1));
+            if (overflowCurrentCall)
+            {
+                coordinator.ObserveDecodedSamples(source, 77, 7001, new short[160 * 251]);
+                coordinator.ObserveDecodedSamples(source, 77, 7001, ActiveSamples());
+                Assert.Equal(PatchTransmitPump.DefaultCapacity, coordinator.CaptureQueueHealth().Capacity);
+            }
+            coordinator.StopSource(source, 77);
+            ObserveVoice(coordinator, source, 78, 7002);
+            coordinator.ObserveDecodedSamples(source, 78, 7002, new short[160 * 8]);
+            coordinator.StopSource(source, 78);
+            ObserveVoice(coordinator, source, 79, 7003);
+            coordinator.ObserveDecodedSamples(source, 79, 7003, ActiveSamples());
+            Assert.Single(diagnostics, d => d.Kind == PatchForwardingDiagnosticKind.TargetOverloaded);
+            Assert.Equal(overflowCurrentCall ? 258 : 15, coordinator.CaptureQueueHealth().Depth);
+            time.Advance(TimeSpan.FromSeconds(1));
+            await WaitUntilAsync(() => diagnostics.Count(d => d.Kind == PatchForwardingDiagnosticKind.TargetOverloaded) == 2);
+            // Capacity is free again, but this skipped source call must not
+            // restart halfway through, even when more audio arrives.
+            coordinator.ObserveDecodedSamples(source, 79, 7003, ActiveSamples());
+            Assert.Equal(2, diagnostics.Count(d => d.Kind == PatchForwardingDiagnosticKind.TargetOverloaded));
+            coordinator.StopSource(source, 79);
+            ObserveVoice(coordinator, source, 80, 7004);
+            coordinator.ObserveDecodedSamples(source, 80, 7004, ActiveSamples());
+            Assert.Empty(targetSystem.Sent);
+            releaseSend.Set();
+            await WaitUntilAsync(() => targetSystem.Sent.Count == 2 && coordinator.CaptureQueueHealth().Depth == 0);
+            await WaitUntilAsync(() => time.HasTimerWithin(TimeSpan.FromMilliseconds(20)));
+            time.Advance(TimeSpan.FromMilliseconds(20));
+            await WaitForSentCountAsync(targetSystem, 3);
+            Assert.NotEqual(targetSystem.Sent[0].OutboundStreamId, targetSystem.Sent[2].OutboundStreamId);
+            Assert.Equal((byte)AnalogAudioFrameType.Terminator,
+                targetSystem.Sent[1].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
+        }
+        finally
+        {
+            releaseSend.Set();
+            await firstTick.WaitAsync(TimeSpan.FromSeconds(1));
+        }
+    }
+
     [Fact]
     public async Task ForwardsAnalogAudioAndEndsTheTargetLifecycle()
     {
@@ -424,6 +495,106 @@ public sealed class PatchForwardingCoordinatorTests
             targetSystem.Sent[^1].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
     }
 
+    [Fact]
+    public async Task QueueHealthIncludesRetiringCallsUntilTheirAudioFinishes()
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        (_, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
+        using var releaseSend = new ManualResetEventSlim();
+        var coordinator = new PatchForwardingCoordinator([sourceSystem, targetSystem]);
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+        try
+        {
+            targetSystem.BlockNextSendUntil(releaseSend);
+            ObserveVoice(coordinator, source, 77, 7001);
+            coordinator.ObserveDecodedSamples(source, 77, 7001, new short[160 * 8]);
+            await targetSystem.SendEntered.WaitAsync(TimeSpan.FromSeconds(10));
+            coordinator.StopSource(source, 77);
+            ObserveVoice(coordinator, source, 78, 7002);
+            coordinator.ObserveDecodedSamples(source, 78, 7002, new short[160 * 8]);
+
+            Assert.Equal(15, coordinator.CaptureQueueHealth().Depth);
+        }
+        finally
+        {
+            releaseSend.Set();
+            await coordinator.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task FinalDisposalTerminatesCurrentCallWithoutStartingQueuedReplacement()
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        (_, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
+        using var releaseSend = new ManualResetEventSlim();
+        var coordinator = new PatchForwardingCoordinator([sourceSystem, targetSystem]);
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+        try
+        {
+            targetSystem.BlockNextSendUntil(releaseSend);
+            ObserveVoice(coordinator, source, 77, 7001);
+            coordinator.ObserveDecodedSamples(source, 77, 7001, new short[160 * 8]);
+            await targetSystem.SendEntered.WaitAsync(TimeSpan.FromSeconds(1));
+            coordinator.StopSource(source, 77);
+            ObserveVoice(coordinator, source, 78, 7002);
+            coordinator.ObserveDecodedSamples(source, 78, 7002, new short[160 * 8]);
+
+            Task cleanup = coordinator.DisposeAsync().AsTask();
+            Assert.False(cleanup.IsCompleted);
+            releaseSend.Set();
+            await cleanup.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Equal(2, targetSystem.Sent.Count);
+            Assert.Single(targetSystem.Sent.Select(packet => packet.OutboundStreamId).Distinct());
+            Assert.Equal((byte)AnalogAudioFrameType.Terminator,
+                targetSystem.Sent[^1].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
+            Assert.Equal(0, coordinator.CaptureQueueHealth().Depth);
+        }
+        finally
+        {
+            releaseSend.Set();
+            await coordinator.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task CanceledDisposeWaiterDoesNotAbandonABlockedTargetPump()
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        (_, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
+        using var releaseSend = new ManualResetEventSlim();
+        var coordinator = new PatchForwardingCoordinator([sourceSystem, targetSystem]);
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+        targetSystem.BlockNextSendUntil(releaseSend);
+        ObserveVoice(coordinator, source, streamId: 77, sourceId: 7001);
+        coordinator.ObserveDecodedSamples(source, streamId: 77, sourceId: 7001, ActiveSamples());
+        await targetSystem.SendEntered.WaitAsync(TimeSpan.FromSeconds(1));
+
+        using var canceledWait = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => coordinator.DisposeAsync(canceledWait.Token).AsTask());
+
+        Task sharedCleanup = coordinator.DisposeAsync().AsTask();
+        Assert.False(sharedCleanup.IsCompleted);
+        releaseSend.Set();
+        await sharedCleanup.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(2, targetSystem.Sent.Count);
+        Assert.Equal(
+            (byte)AnalogAudioFrameType.Terminator,
+            targetSystem.Sent[^1].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
+    }
+
     private static (ChannelViewModel Channel, FakeEndpoint System) Create(string system, uint talkgroup, uint sourceId, bool connected = true)
     {
         var channel = new ChannelViewModel(new ChannelConfiguration { Name = system, System = system, Tgid = talkgroup.ToString(), Mode = "analog" });
@@ -477,6 +648,9 @@ public sealed class PatchForwardingCoordinatorTests
     {
         private uint streamId;
         private int throwOnNextSend;
+        private ManualResetEventSlim? blockedSendRelease;
+        private readonly TaskCompletionSource sendEntered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly ConcurrentQueue<(
             FneTrafficProtocol Protocol,
             byte[] Payload,
@@ -498,6 +672,7 @@ public sealed class PatchForwardingCoordinatorTests
             get => Volatile.Read(ref throwOnNextSend) != 0;
             set => Volatile.Write(ref throwOnNextSend, value ? 1 : 0);
         }
+        public Task SendEntered => sendEntered.Task;
         public FneTalkgroupAvailability TalkgroupAvailability { get; set; } =
             FneTalkgroupAvailability.Pending;
         public FneTalkgroupAvailability GetTalkgroupAvailability(
@@ -506,8 +681,14 @@ public sealed class PatchForwardingCoordinatorTests
             byte runtimeSlot)
             => TalkgroupAvailability;
         public uint CreateStreamId() => ++streamId;
-        public void SendTraffic(FneTrafficProtocol protocol, ReadOnlySpan<byte> payload, ushort sequence, uint outboundStreamId)
+        public void SendTraffic(FneTrafficProtocol protocol, ReadOnlyMemory<byte> payload, ushort sequence, uint outboundStreamId)
         {
+            ManualResetEventSlim? release = Interlocked.Exchange(ref blockedSendRelease, null);
+            if (release is not null)
+            {
+                sendEntered.TrySetResult();
+                release.Wait(TimeSpan.FromSeconds(2));
+            }
             if (Interlocked.Exchange(ref throwOnNextSend, 0) != 0)
             {
                 throw new IOException("Simulated patch transport interruption.");
@@ -515,6 +696,9 @@ public sealed class PatchForwardingCoordinatorTests
 
             sent.Enqueue((protocol, payload.ToArray(), outboundStreamId));
         }
+
+        public void BlockNextSendUntil(ManualResetEventSlim release)
+            => blockedSendRelease = release ?? throw new ArgumentNullException(nameof(release));
 
         public void ClearSent() => sent.Clear();
     }

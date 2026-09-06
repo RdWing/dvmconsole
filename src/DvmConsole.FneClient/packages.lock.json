@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "SharpZipLib": {
+        "type": "Transitive",
+        "resolved": "1.4.2",
+        "contentHash": "yjj+3zgz8zgXpiiC3ZdF/iyTBbz2fFvMxZFEBPUcwZjIvXOf37Ylm+K58hqMfIBt5JgU/Z2uoUS67JmTLe973A=="
+      },
+      "YamlDotNet": {
+        "type": "Transitive",
+        "resolved": "16.2.0",
+        "contentHash": "iKVYog7JNiFOTr4gMHSjCqrGFD2NyABUHgSkRq9XR8A2+fsWepSWTpjHAOnKo1LVAHjy33o6I0u6lo5Ng0NtAw=="
+      },
+      "dvmconsole.core": {
+        "type": "Project",
+        "dependencies": {
+          "YamlDotNet": "[16.2.0, )"
+        }
+      },
+      "dvmconsole.fne": {
+        "type": "Project",
+        "dependencies": {
+          "SharpZipLib": "[1.4.2, )"
+        }
+      }
+    }
+  }
+}

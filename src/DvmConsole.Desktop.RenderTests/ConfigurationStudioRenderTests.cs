@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -6,6 +9,7 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -16,8 +20,14 @@ using DvmConsole.Core.Settings;
 using DvmConsole.Desktop;
 using DvmConsole.Presentation;
 using System.Text.Json;
+using SkiaSharp;
 using Xunit;
 
+// Real windows retire asynchronous session work. Keep one headless dispatcher
+// alive for the suite rather than disposing its font/render services while
+// queued window cleanup is still completing. Tests own their windows/state.
+[assembly: AvaloniaTestIsolation(AvaloniaTestIsolationLevel.PerAssembly)]
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
 [assembly: AvaloniaTestApplication(typeof(DvmConsole.Desktop.RenderTests.HeadlessTestApp))]
 
 namespace DvmConsole.Desktop.RenderTests;
@@ -36,6 +46,102 @@ public sealed class ConfigurationStudioRenderTests
     {
         PropertyNameCaseInsensitive = true
     };
+
+    [AvaloniaTheory]
+    [InlineData(1.0)]
+    [InlineData(1.5)]
+    [InlineData(2.0)]
+    public async Task WebStreamCardsCenterUnityAndFitStartLabel(double scale)
+    {
+        using DemoSessionState demoState = DemoSessionState.Create();
+        string root = Path.GetDirectoryName(demoState.UserSettingsPath)!;
+        string demoRoot = Path.Combine(AppContext.BaseDirectory, "Demo");
+        foreach (string name in new[] { "keys.clear", "aliases.yml" })
+            File.Copy(Path.Combine(demoRoot, name), Path.Combine(root, name), overwrite: true);
+        string yaml = File.ReadAllText(Path.Combine(demoRoot, "codeplug.yml"));
+        int channels = yaml.IndexOf("    channels:", StringComparison.Ordinal);
+        yaml = yaml.Insert(channels, "    web_streams:\n      - name: \"Airport Test\"\n        url: \"https://example.invalid/live\"\n");
+        string codeplug = Path.Combine(root, "streams.yml");
+        File.WriteAllText(codeplug, yaml);
+        var window = new MainWindow(codeplug, new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath), demoMode: true);
+        try
+        {
+            window.Width = 1488;
+            window.Height = 1000;
+            window.Show();
+            var viewModel = Assert.IsType<MainWindowViewModel>(window.DataContext);
+            viewModel.UiScale = scale;
+            window.UpdateLayout();
+            await App.WaitForRenderAsync();
+            Border card = Assert.Single(window.GetVisualDescendants().OfType<Border>(),
+                border => border.Classes.Contains("web-stream-card"));
+            NeutralSnapSlider slider = Assert.Single(card.GetVisualDescendants().OfType<NeutralSnapSlider>());
+            Assert.Equal(-1, slider.Minimum);
+            Assert.Equal(1, slider.Maximum);
+            Assert.Equal(0, slider.Value);
+            Button start = Assert.Single(card.GetVisualDescendants().OfType<Button>(),
+                button => button.Classes.Contains("card-action"));
+            TextBlock text = Assert.Single(start.GetVisualDescendants().OfType<TextBlock>());
+            Point origin = text.TranslatePoint(default, start)!.Value;
+            Assert.True(origin.Y >= 0);
+            Assert.True(origin.Y + text.Bounds.Height <= start.Bounds.Height + 0.5);
+            string? captures = Environment.GetEnvironmentVariable("DVMCONSOLE_STREAM_CARD_CAPTURES");
+            if (!string.IsNullOrWhiteSpace(captures))
+            {
+                Directory.CreateDirectory(captures);
+                App.SaveVisual(card, Path.Combine(captures, $"streams-{scale:0.0}.png"));
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void DocumentationScreenshotsIncludeTransparentShadowFrame()
+    {
+        var content = new Border
+        {
+            Width = 100,
+            Height = 60,
+            Background = Brushes.White
+        };
+        var host = new Window { Content = content };
+        string path = Path.Combine(
+            Path.GetTempPath(),
+            $"dvmconsole-screenshot-{Guid.NewGuid():N}.png");
+
+        try
+        {
+            host.Show();
+            host.UpdateLayout();
+            App.SaveVisual(content, path);
+
+            using SKBitmap screenshot = SKBitmap.Decode(path);
+            Assert.Equal(100 + (DocumentationScreenshotWriter.ShadowPadding * 2), screenshot.Width);
+            Assert.Equal(60 + (DocumentationScreenshotWriter.ShadowPadding * 2), screenshot.Height);
+            Assert.Equal(0, screenshot.GetPixel(0, 0).Alpha);
+            Assert.InRange(
+                screenshot.GetPixel(
+                DocumentationScreenshotWriter.ShadowPadding,
+                DocumentationScreenshotWriter.ShadowPadding).Alpha,
+                (byte)0,
+                (byte)254);
+            Assert.Equal(255, screenshot.GetPixel(
+                DocumentationScreenshotWriter.ShadowPadding + 20,
+                DocumentationScreenshotWriter.ShadowPadding + 20).Alpha);
+            Assert.InRange(
+                screenshot.GetPixel(
+                    DocumentationScreenshotWriter.ShadowPadding - 4,
+                    DocumentationScreenshotWriter.ShadowPadding + 30).Alpha,
+                (byte)1,
+                (byte)254);
+        }
+        finally
+        {
+            host.Close();
+            File.Delete(path);
+        }
+    }
 
     [AvaloniaFact]
     public async Task NewUserConfigurationEncryptionJourneyRemainsContinuousAndValid()
@@ -208,6 +314,57 @@ public sealed class ConfigurationStudioRenderTests
         finally
         {
             mainWindow.OpenConfigurationStudioWindow?.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task SelectedResourceColorKeepsItsColorAndUsesAnOutline()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+
+        try
+        {
+            mainWindow.Show();
+            ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(
+                ConfigurationStudioSection.Zones);
+            studio.Width = 1488;
+            studio.Height = 760;
+            studio.Show(mainWindow);
+            studio.UpdateLayout();
+            await App.WaitForRenderAsync();
+
+            ConfigurationStudioZonesView zones = studio
+                .FindControl<ConfigurationStudioView>("studioView")!
+                .ZonesView;
+            ToggleButton green = FindEditor<ToggleButton>(zones, "Green resource color");
+            ToggleButton orange = FindEditor<ToggleButton>(zones, "Orange resource color");
+            green.IsChecked = true;
+            orange.IsChecked = false;
+            await App.WaitForRenderAsync();
+            studio.UpdateLayout();
+
+            Assert.True(green.IsChecked);
+            Assert.False(orange.IsChecked);
+            Border surface = Assert.Single(
+                green.GetVisualDescendants().OfType<Border>(),
+                border => border.Name == "SwatchSurface");
+            Color selectedColor = Assert.IsAssignableFrom<ISolidColorBrush>(surface.Background).Color;
+            Color outlineColor = Assert.IsAssignableFrom<ISolidColorBrush>(surface.BorderBrush).Color;
+            Assert.Equal(Color.Parse("#65B95A"), selectedColor);
+            Assert.NotEqual(selectedColor, outlineColor);
+            Assert.Equal(new Thickness(3), surface.BorderThickness);
+
+            studio.CloseForSessionReplacement();
+        }
+        finally
+        {
             mainWindow.Close();
         }
     }
@@ -425,6 +582,68 @@ public sealed class ConfigurationStudioRenderTests
     }
 
     [AvaloniaFact]
+    public async Task NewFneEncryptedChannelAndScopedKeyCanReviewAndSaveInOneSession()
+    {
+        string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            demoCodeplug,
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath),
+            demoMode: true);
+
+        try
+        {
+            mainWindow.Show();
+            await mainWindow.OpenConfigurationStudioAsync(
+                ConfigurationStudioSection.Systems,
+                createNew: true);
+            ConfigurationStudioWindow studio = Assert.IsType<ConfigurationStudioWindow>(
+                mainWindow.OpenConfigurationStudioWindow);
+            ConfigurationStudioViewModel viewModel = studio.StudioViewModel;
+            viewModel.AddSystem();
+            SystemConfiguration system = Assert.Single(viewModel.Systems);
+            system.Name = "Encrypted FNE";
+            system.PeerId = 7201;
+            system.Rid = "7201";
+            viewModel.CommitFieldEdit();
+            ZoneConfiguration zone = Assert.Single(viewModel.Zones);
+            viewModel.SelectedZoneName = "Secure Dispatch";
+            viewModel.CommitFieldEdit();
+
+            viewModel.AddChannelToSelectedSystem();
+            ChannelConfiguration channel = Assert.Single(zone.Channels);
+            viewModel.SelectedChannel = channel;
+            viewModel.SelectedChannelAlgorithm = Assert.Single(
+                viewModel.AvailableChannelAlgorithms,
+                option => option.ConfigurationValue == "aes");
+            viewModel.SelectedChannelKeyIdHexDigits = "1";
+            viewModel.CommitChannelAlgorithmEdit();
+
+            viewModel.AddKey();
+            KeyEntry key = Assert.Single(viewModel.KeyEntries);
+            key.Key = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F";
+            viewModel.CommitKeyEdit();
+
+            Assert.Equal(system.Name, key.System);
+            Assert.DoesNotContain(viewModel.ValidationIssues, issue => issue.IsError);
+            studio.DialogConfirmationOverride = (_, _, _) => Task.FromResult(true);
+            studio.MessageOverride = (_, _) => Task.CompletedTask;
+
+            bool saved = await studio.ReviewAndSaveForCaptureAsync(offerReload: false)
+                .WaitAsync(TimeSpan.FromSeconds(10));
+
+            Assert.True(saved);
+            Assert.False(viewModel.IsDirty);
+        }
+        finally
+        {
+            mainWindow.OpenConfigurationStudioWindow?.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public async Task SaveAndReloadCanCloseStudioWithoutResumingAgainstDetachedView()
     {
         string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
@@ -512,7 +731,8 @@ public sealed class ConfigurationStudioRenderTests
                 return Task.CompletedTask;
             };
             studio.ConfigurationMaterializationOverride = _ =>
-                ValueTask.FromException<string>(new IOException("Injected materialization failure"));
+                ValueTask.FromException<IConfigurationMaterializationLease>(
+                    new IOException("Injected materialization failure"));
 
             bool saved = await studio.ReviewAndSaveForCaptureAsync(offerReload: false);
 
@@ -620,6 +840,77 @@ public sealed class ConfigurationStudioRenderTests
             Assert.True(scroller.Offset.Y > 0);
             Assert.True(IsWithinViewport(groups, scroller));
             Assert.True(IsWithinViewport(encryptionKeys, scroller));
+        }
+        finally
+        {
+            studio.CloseForSessionReplacement();
+            mainWindow.Close();
+        }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(ConfigurationStudioSection.Streams, "Web stream configurations", 1480, false)]
+    [InlineData(ConfigurationStudioSection.Streams, "Web stream configurations", 1480, true)]
+    [InlineData(ConfigurationStudioSection.Streams, "Web stream configurations", 1100, false)]
+    [InlineData(ConfigurationStudioSection.Groups, "Group configurations", 1480, false)]
+    [InlineData(ConfigurationStudioSection.Groups, "Group configurations", 1480, true)]
+    [InlineData(ConfigurationStudioSection.Groups, "Group configurations", 1100, false)]
+    [InlineData(ConfigurationStudioSection.EncryptionKeys, "Encryption keys", 1480, false)]
+    [InlineData(ConfigurationStudioSection.EncryptionKeys, "Encryption keys", 1480, true)]
+    [InlineData(ConfigurationStudioSection.EncryptionKeys, "Encryption keys", 1100, false)]
+    public async Task StudioSidebarPointerNavigationRetainsSectionFocusAndScroll(
+        ConfigurationStudioSection section, string buttonName, double width, bool pendingEdit)
+    {
+        using DemoSessionState demoState = DemoSessionState.Create();
+        var mainWindow = new MainWindow(
+            Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml"),
+            new UserSettingsStore(demoState.UserSettingsPath),
+            new OperatorViewStore(demoState.OperatorViewPath), demoMode: true);
+        ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(
+            ConfigurationStudioSection.Zones);
+        try
+        {
+            mainWindow.Show();
+            for (int index = 0; index < 18; index++)
+                studio.StudioViewModel.DuplicateZone();
+            studio.Width = width;
+            studio.StudioViewModel.SelectedZone = studio.StudioViewModel.Zones.First();
+            studio.StudioViewModel.SelectedChannel = studio.StudioViewModel.Channels.Last();
+            studio.Show(mainWindow);
+            await App.WaitForRenderAsync();
+            ConfigurationStudioNavigationView navigation = studio
+                .FindControl<ConfigurationStudioView>("studioView")!
+                .FindControl<ConfigurationStudioNavigationView>("Navigation")!;
+            ScrollViewer scroller = navigation.FindControl<ScrollViewer>("NavigationScroller")!;
+            Button button = navigation.GetVisualDescendants().OfType<Button>()
+                .Single(candidate => AutomationProperties.GetName(candidate) == buttonName);
+            ChannelConfiguration selectedChannel = studio.StudioViewModel.SelectedChannel!;
+            string expectedName = selectedChannel.Name;
+            if (pendingEdit)
+            {
+                TextBox editor = studio.GetVisualDescendants().OfType<TextBox>()
+                    .Single(candidate => AutomationProperties.GetName(candidate) == "Channel name");
+                Assert.True(editor.Focus());
+                expectedName += " edited";
+                editor.Text = expectedName;
+            }
+            scroller.ScrollToEnd();
+            await App.WaitForRenderAsync();
+            Assert.True(IsWithinViewport(button, scroller));
+            Point point = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), studio)!.Value;
+            studio.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+            await App.WaitForRenderAsync();
+            studio.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+            await App.WaitForRenderAsync();
+            Assert.Equal(section, studio.StudioViewModel.SelectedNavigation.Section);
+            Assert.True(IsWithinViewport(button, scroller));
+            Assert.True(button.IsFocused);
+            Assert.Same(selectedChannel, studio.StudioViewModel.SelectedChannel);
+            Assert.Equal(expectedName, selectedChannel.Name);
+            Assert.Same(selectedChannel, Assert.Single(studio.StudioViewModel.PreviewChannels,
+                preview => preview.IsSelected).Channel);
+            if (pendingEdit)
+                Assert.Contains(expectedName, studio.StudioViewModel.CaptureSaveState().Yaml, StringComparison.Ordinal);
         }
         finally
         {
@@ -793,11 +1084,12 @@ public sealed class ConfigurationStudioRenderTests
             studio.UpdateLayout();
             ConfigurationStudioViewModel viewModel = studio.StudioViewModel;
             int initialCount = viewModel.Systems.Count;
+            int initialZoneCount = viewModel.Zones.Count;
             ConfigurationStudioSystemsView systemsView = Assert.Single(
                 studio.GetVisualDescendants().OfType<ConfigurationStudioSystemsView>());
             Button add = Assert.Single(
                 systemsView.GetVisualDescendants().OfType<Button>(),
-                button => Equals(button.Content, "Add"));
+                button => AutomationProperties.GetName(button) == "Add system");
             Button duplicate = Assert.Single(
                 systemsView.GetVisualDescendants().OfType<Button>(),
                 button => Equals(button.Content, "Duplicate"));
@@ -806,6 +1098,7 @@ public sealed class ConfigurationStudioRenderTests
             studio.UpdateLayout();
 
             Assert.Equal(initialCount + 1, viewModel.Systems.Count);
+            Assert.Equal(initialZoneCount + 1, viewModel.Zones.Count);
             Assert.Same(viewModel.Systems[^1], viewModel.SelectedSystem);
             Assert.StartsWith("New System", viewModel.SelectedSystem!.Name, StringComparison.Ordinal);
 
@@ -1110,7 +1403,7 @@ public sealed class ConfigurationStudioRenderTests
             ConfigurationStudioView sharedStudio = studio.FindControl<ConfigurationStudioView>("studioView")!;
             Border footer = sharedStudio.FindControl<Border>("Footer")!;
             Grid footerGrid = sharedStudio.FindControl<Grid>("FooterGrid")!;
-            StackPanel footerActions = sharedStudio.FindControl<StackPanel>("FooterActions")!;
+            WrapPanel footerActions = sharedStudio.FindControl<WrapPanel>("FooterActions")!;
             foreach (string automationName in new[]
                      {
                          "Save configuration copy",
@@ -1158,7 +1451,7 @@ public sealed class ConfigurationStudioRenderTests
             if (!string.IsNullOrWhiteSpace(captureDirectory))
                 await App.CaptureDemoScreenshotsCoreAsync(mainWindow, captureDirectory);
 
-            VerifyReviewPlanMigratesOperatorState(mainWindow, settingsStore, demoCodeplug);
+            await VerifyReviewPlanMigratesOperatorStateAsync(mainWindow, settingsStore, demoCodeplug);
         }
         finally
         {
@@ -1167,12 +1460,14 @@ public sealed class ConfigurationStudioRenderTests
     }
 
     [AvaloniaTheory]
-    [InlineData(1200, false)]
+    [InlineData(1488, false)]
+    [InlineData(1180, true)]
     [InlineData(880, false)]
+    [InlineData(720, true)]
     [InlineData(599, true)]
     [InlineData(390, false)]
     [InlineData(360, true)]
-    public void SharedConfigurationStudioRendersAtMobileWidths(double width, bool dark)
+    public async Task SharedConfigurationStudioRendersAtMobileWidths(double width, bool dark)
     {
         string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
         using DemoSessionState demoState = DemoSessionState.Create();
@@ -1190,9 +1485,12 @@ public sealed class ConfigurationStudioRenderTests
             Height = 760,
             RequestedThemeVariant = dark ? ThemeVariant.Dark : ThemeVariant.Light
         };
+        ThemeVariant? previousApplicationTheme = Avalonia.Application.Current?.RequestedThemeVariant;
 
         try
         {
+            if (Avalonia.Application.Current is { } application)
+                application.RequestedThemeVariant = host.RequestedThemeVariant;
             mainWindow.Show();
             ConfigurationStudioViewModel viewModel = studio.StudioViewModel;
             var overview = new ConfigurationStudioOverviewView { DataContext = viewModel };
@@ -1228,24 +1526,55 @@ public sealed class ConfigurationStudioRenderTests
             host.Content = zones;
             host.UpdateLayout();
             AssertPortableZonesPage(zones, width);
-            string? widthAuditDirectory = Environment.GetEnvironmentVariable("DVMCONSOLE_STUDIO_WIDTH_AUDIT_DIR");
-            if (!string.IsNullOrWhiteSpace(widthAuditDirectory))
-            {
-                Directory.CreateDirectory(widthAuditDirectory);
-                App.SaveVisual(zones, Path.Combine(widthAuditDirectory, $"zones-{width:0}.png"));
-            }
 
             var shell = new ConfigurationStudioView { DataContext = viewModel };
             host.Content = shell;
             host.UpdateLayout();
+            await App.WaitForRenderAsync();
+            host.UpdateLayout();
             Grid shellLayout = shell.FindControl<Grid>("ShellLayout")!;
+            Grid pageHost = shell.FindControl<Grid>("PageHost")!;
+            Border footer = shell.FindControl<Border>("Footer")!;
             Assert.True(
                 shellLayout.DesiredSize.Width <= shell.Bounds.Width + 1,
                 $"Studio shell desired width {shellLayout.DesiredSize.Width} exceeded {shell.Bounds.Width} at {width} logical pixels.");
-            StackPanel footerActions = shell.FindControl<StackPanel>("FooterActions")!;
+            Point? footerOrigin = footer.TranslatePoint(default, shell);
+            Assert.True(
+                footerOrigin.HasValue,
+                $"Studio footer was detached from the {width}-pixel shell visual tree.");
+            Assert.True(
+                footer.IsEffectivelyVisible && footer.Bounds.Height >= 50 &&
+                footerOrigin.Value.Y + footer.Bounds.Height <= shell.Bounds.Height + 1,
+                $"Studio footer escaped the {width}-pixel shell; origin={footerOrigin}, footer={footer.Bounds}, shell={shell.Bounds}.");
+            Assert.True(
+                pageHost.Bounds.Height >= 240,
+                $"Studio editor retained only {pageHost.Bounds.Height} pixels of height at width {width}.");
+            TextBlock zoneHeading = shell.ZonesView.FindControl<TextBlock>("ZoneHeading")!;
+            TextBox channelSearch = shell.ZonesView.FindControl<TextBox>("ChannelSearchBox")!;
+            AssertControlContainedIn(zoneHeading, pageHost, shell, "zone heading", width);
+            AssertControlContainedIn(channelSearch, pageHost, shell, "channel search", width);
+            WrapPanel footerActions = shell.FindControl<WrapPanel>("FooterActions")!;
             Assert.True(
                 footerActions.Bounds.Right <= shell.Bounds.Width + 1,
                 $"Studio footer exceeded the {width}-pixel viewport.");
+            foreach (Button action in footerActions.Children.OfType<Button>())
+            {
+                Point? actionOrigin = action.TranslatePoint(default, shell);
+                Assert.True(
+                    actionOrigin.HasValue &&
+                    actionOrigin.Value.X >= 0 &&
+                    actionOrigin.Value.Y >= 0 &&
+                    actionOrigin.Value.X + action.Bounds.Width <= shell.Bounds.Width + 1 &&
+                    actionOrigin.Value.Y + action.Bounds.Height <= shell.Bounds.Height + 1,
+                    $"Studio footer action '{action.Content}' escaped the {width}-pixel shell; " +
+                    $"origin={actionOrigin}, action={action.Bounds}, shell={shell.Bounds}.");
+            }
+            string? widthAuditDirectory = Environment.GetEnvironmentVariable("DVMCONSOLE_STUDIO_WIDTH_AUDIT_DIR");
+            if (!string.IsNullOrWhiteSpace(widthAuditDirectory))
+            {
+                Directory.CreateDirectory(widthAuditDirectory);
+                App.SaveVisual(shell, Path.Combine(widthAuditDirectory, $"zones-{width:0}.png"));
+            }
             Control[] visibleButtons = shell.GetVisualDescendants().OfType<Button>()
                 .Where(button => button.GetType() == typeof(Button) && button.IsEffectivelyVisible)
                 .ToArray();
@@ -1266,7 +1595,33 @@ public sealed class ConfigurationStudioRenderTests
             host.Close();
             studio.CloseForSessionReplacement();
             mainWindow.Close();
+            if (Avalonia.Application.Current is { } application)
+                application.RequestedThemeVariant = previousApplicationTheme;
         }
+    }
+
+    private static void AssertControlContainedIn(
+        Control control,
+        Control container,
+        Control root,
+        string description,
+        double width)
+    {
+        Point? controlOrigin = control.TranslatePoint(default, root);
+        Point? containerOrigin = container.TranslatePoint(default, root);
+        Assert.True(
+            controlOrigin.HasValue &&
+            containerOrigin.HasValue &&
+            controlOrigin.Value.X >= containerOrigin.Value.X - 1 &&
+            controlOrigin.Value.Y >= containerOrigin.Value.Y - 1 &&
+            controlOrigin.Value.X + control.Bounds.Width <=
+                containerOrigin.Value.X + container.Bounds.Width + 1 &&
+            controlOrigin.Value.Y + control.Bounds.Height <=
+                containerOrigin.Value.Y + container.Bounds.Height + 1,
+            $"Studio {description} escaped its editor at {width} logical pixels; " +
+            $"control={controlOrigin}/{control.Bounds}, container={containerOrigin}/{container.Bounds}, " +
+            $"grid-row={Grid.GetRow(control)}, " +
+            $"ancestors={string.Join(" <- ", control.GetVisualAncestors().Take(6).Select(ancestor => $"{ancestor.GetType().Name}:{ancestor.Bounds}"))}.");
     }
 
     private static void AssertPortableStudioPage(
@@ -1303,13 +1658,22 @@ public sealed class ConfigurationStudioRenderTests
     private static void AssertPortableZonesPage(ConfigurationStudioZonesView page, double width)
     {
         Grid layout = page.FindControl<Grid>("ZoneLayout")!;
+        Grid channelPane = page.FindControl<Grid>("ChannelPane")!;
+        Border inspector = page.FindControl<Border>("ChannelInspector")!;
+        Border header = page.FindControl<Border>("ZoneHeader")!;
+        TextBlock heading = page.FindControl<TextBlock>("ZoneHeading")!;
+        TextBox search = page.FindControl<TextBox>("ChannelSearchBox")!;
         Grid desktopTable = page.FindControl<Grid>("DesktopChannelTable")!;
+        ScrollViewer desktopTableScroller = page.FindControl<ScrollViewer>("DesktopChannelTableScroller")!;
         ListBox narrowList = page.FindControl<ListBox>("narrowChannelList")!;
         Assert.True(
             layout.DesiredSize.Width <= page.Bounds.Width + 1,
             $"Studio zones desired width {layout.DesiredSize.Width} exceeded {page.Bounds.Width} at {width} logical pixels.");
-        Assert.Equal(width < 1180, narrowList.IsVisible);
-        Assert.Equal(width >= 1180, desktopTable.IsVisible);
+        Assert.Equal(width < 600, narrowList.IsVisible);
+        Assert.Equal(width >= 600, desktopTable.IsVisible);
+        Assert.Equal(width >= 600, desktopTableScroller.IsVisible);
+        Assert.True(header.Bounds.Height >= 50, "The zone heading and search region collapsed.");
+        Assert.True(inspector.Bounds.Height >= 200, "The zone/channel inspector lost its usable editor region.");
         if (desktopTable.IsVisible)
         {
             Grid columns = desktopTable.GetVisualDescendants()
@@ -1320,6 +1684,26 @@ public sealed class ConfigurationStudioRenderTests
             Assert.True(columns.ColumnDefinitions[3].ActualWidth >= 130, "The Mode column is too narrow.");
             Assert.True(columns.ColumnDefinitions[4].ActualWidth >= 60, "The DMR Slot column is too narrow.");
             Assert.True(columns.ColumnDefinitions[5].ActualWidth >= 120, "The Encryption column is too narrow.");
+            Assert.True(
+                desktopTableScroller.Extent.Width >= 860 &&
+                desktopTableScroller.Viewport.Width <= desktopTableScroller.Extent.Width + 1,
+                "The desktop channel grid did not retain its usable column width and overflow behavior.");
+        }
+        else
+        {
+            Assert.True(narrowList.Bounds.Height >= 100, "The compact channel list lost its usable viewport.");
+            Assert.NotEmpty(narrowList.GetVisualDescendants().OfType<ListBoxItem>());
+            Point paneOrigin = channelPane.TranslatePoint(default, page) ?? default;
+            Point inspectorOrigin = inspector.TranslatePoint(default, page) ?? default;
+            Assert.True(
+                paneOrigin.Y + channelPane.Bounds.Height <= inspectorOrigin.Y + 1,
+                "The channel list overlapped the zone/channel inspector.");
+
+            Point headingOrigin = heading.TranslatePoint(default, header) ?? default;
+            Point searchOrigin = search.TranslatePoint(default, header) ?? default;
+            Assert.True(
+                headingOrigin.Y + heading.Bounds.Height <= searchOrigin.Y + 1,
+                "The zone heading overlapped the channel search box.");
         }
 
         Control[] interactive = page.GetVisualDescendants().OfType<Control>()
@@ -1740,12 +2124,17 @@ public sealed class ConfigurationStudioRenderTests
     private static async Task<int> CountAsync<T>(IAsyncEnumerable<T> source)
         => (await ReadAllAsync(source)).Count;
 
-    private static void VerifyReviewPlanMigratesOperatorState(
+    private static async Task VerifyReviewPlanMigratesOperatorStateAsync(
         MainWindow mainWindow,
         UserSettingsStore settingsStore,
         string demoCodeplug)
     {
-        string activeCodeplug = ((MainWindowViewModel)mainWindow.DataContext!).CurrentCodeplugPath
+        var runtime = (MainWindowViewModel)mainWindow.DataContext!;
+        // Earlier UI edits may still have a debounced save pending. Seed the
+        // live settings owner through its adoption contract so that save cannot
+        // overwrite this fixture's migration state.
+        await runtime.FlushUserSettingsAsync();
+        string activeCodeplug = runtime.CurrentCodeplugPath
             ?? throw new InvalidOperationException("The managed demo configuration was not loaded.");
         UserSettings settings = settingsStore.Load();
         settings.LastSelectedSystemName = "North Metro";
@@ -1761,7 +2150,7 @@ public sealed class ConfigurationStudioRenderTests
                 ChannelName = "Campus Dispatch"
             }
         ];
-        settingsStore.Save(settings);
+        await runtime.AdoptUserSettingsSnapshotAsync(settingsStore.CaptureSnapshot(settings));
 
         ConfigurationStudioWindow studio = mainWindow.CreateConfigurationStudioForCapture(
             ConfigurationStudioSection.Overview);

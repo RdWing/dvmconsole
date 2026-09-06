@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
@@ -60,6 +63,27 @@ public sealed class WindowsWasapiCaptureTests
 
         Assert.False(capture.IsRunning);
         Assert.Equal(1, recorder.StopCount);
+    }
+
+    [Fact]
+    public async Task OverlappingStopAndRestartWaitForTheOldNativeCompletion()
+    {
+        var recorder = new TestWasapiRecorder();
+        await using var capture = new WindowsWasapiCapture(recorder, PcmAudioFormat.Voice8KhzMono16Bit);
+        await capture.StartAsync();
+        Task firstStop = capture.StopAsync().AsTask();
+        Task secondStop = capture.StopAsync().AsTask();
+        Task restart = capture.StartAsync().AsTask();
+        Assert.False(firstStop.IsCompleted);
+        Assert.False(secondStop.IsCompleted);
+        Assert.False(restart.IsCompleted);
+        Assert.Equal(1, recorder.StartCount);
+        recorder.RaiseStopped();
+        await Task.WhenAll(firstStop, secondStop, restart).WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(2, recorder.StartCount);
+        Task finalStop = capture.StopAsync().AsTask();
+        recorder.RaiseStopped();
+        await finalStop;
     }
 
     [Fact]

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections.Concurrent;
 using DvmConsole.Audio;
 using DvmConsole.Media;
@@ -28,7 +31,8 @@ public sealed class TransmitFramePacerTests
             destinationId: 747,
             streamId: 3,
             new FakeVocoderSession(),
-            (payload, _, _) => packets.Enqueue(payload.ToArray()));
+            (payload, _, _) => packets.Enqueue(payload.ToArray()),
+            TestPacketCadence.NoDelayAsync);
         var cadence = new ManualCadence();
         int processedFrames = 0;
         var pacer = new TransmitFramePacer(
@@ -58,7 +62,7 @@ public sealed class TransmitFramePacerTests
 
         pacer.Complete();
         await pacer.Completion;
-        await call.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
+        await call.EndAsync();
 
         Assert.Equal(4, packets.Count);
         Assert.Null(pacer.Failure);
@@ -135,6 +139,40 @@ public sealed class TransmitFramePacerTests
         await stop;
 
         Assert.Equal(["start", "process:160", "process:160", "end"], call.Events);
+        Assert.Empty(faults);
+    }
+
+    [Fact]
+    public async Task DigitalCaptureStopDrainsAcceptedFramesIntoProtocolPacerWithoutFurtherCaptureWaits()
+    {
+        var capture = new FakeCapture();
+        var call = new RecordingCall();
+        var cadence = new ManualCadence();
+        var faults = new ConcurrentQueue<Exception>();
+        await using var lifecycle = new TransmitCaptureLifecycle(
+            capture,
+            call,
+            "The test capture session has faulted.",
+            faults.Enqueue,
+            cadence.WaitAsync,
+            drainAcceptedFramesWithoutDelayOnStop: true);
+
+        await lifecycle.StartAsync();
+        lifecycle.Activate();
+        capture.Emit(new short[480]);
+
+        await WaitUntilAsync(() => call.Events.Count == 2);
+        await WaitUntilAsync(() => cadence.WaitCount == 1);
+        Task stop = lifecycle.StopAsync();
+        Assert.False(stop.IsCompleted);
+
+        cadence.Release();
+        await stop;
+
+        Assert.Equal(
+            ["start", "process:160", "process:160", "process:160", "end"],
+            call.Events);
+        Assert.Equal(1, cadence.WaitCount);
         Assert.Empty(faults);
     }
 

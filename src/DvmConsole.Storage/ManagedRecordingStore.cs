@@ -1,5 +1,8 @@
-using System.Text.Json;
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
+using DvmConsole.Core.Settings;
 
 namespace DvmConsole.Storage;
 
@@ -8,16 +11,23 @@ public sealed class ManagedRecordingStore : IRecordingStore
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly string root;
     private readonly string catalogPath;
+    private readonly string lockPath;
 
     public ManagedRecordingStore(string rootPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         root = Path.GetFullPath(rootPath);
         catalogPath = Path.Combine(root, "catalog.json");
-        Directory.CreateDirectory(Path.Combine(root, "active"));
-        Directory.CreateDirectory(Path.Combine(root, "content"));
-        if (!File.Exists(catalogPath))
-            WriteCatalog([]);
+        lockPath = Path.Combine(root, ".store.lock");
+        AppDataFileProtection.EnsureDirectory(root, repairExistingTree: true);
+        AppDataFileProtection.EnsureDirectory(Path.Combine(root, "active"));
+        AppDataFileProtection.EnsureDirectory(Path.Combine(root, "content"));
+        using (CrossProcessStoreLock.Acquire(lockPath))
+        {
+            AtomicJsonFile.Recover(catalogPath, StorageJsonContext.Default.ListRecordingDescriptor);
+            if (!File.Exists(catalogPath))
+                WriteCatalog([]);
+        }
     }
 
     public async ValueTask<IRecordingWriteHandle> CreateAsync(
@@ -40,6 +50,7 @@ public sealed class ManagedRecordingStore : IRecordingStore
                 FileShare.Read,
                 64 * 1024,
                 FileOptions.Asynchronous);
+            AppDataFileProtection.EnsureFile(activePath);
             return new WriteHandle(this, id, callId, channelId, startedAt, mediaType.Trim(), activePath, stream);
         }
         finally
@@ -55,6 +66,7 @@ public sealed class ManagedRecordingStore : IRecordingStore
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            using IDisposable processLock = CrossProcessStoreLock.Acquire(lockPath);
             RecordingDescriptor descriptor = ReadCatalog().FirstOrDefault(recording => recording.Id == id)
                 ?? throw new KeyNotFoundException($"Recording '{id.Value:N}' is not in the managed store.");
             if (!descriptor.IsFinalized)
@@ -80,6 +92,7 @@ public sealed class ManagedRecordingStore : IRecordingStore
         RecordingDescriptor[] snapshot;
         try
         {
+            using IDisposable processLock = CrossProcessStoreLock.Acquire(lockPath);
             snapshot = ReadCatalog().OrderByDescending(recording => recording.StartedAt).ToArray();
         }
         finally
@@ -100,11 +113,16 @@ public sealed class ManagedRecordingStore : IRecordingStore
         CancellationToken cancellationToken)
     {
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        string? finalPath = null;
+        bool moved = false;
         try
         {
             await handle.CloseStreamAsync(cancellationToken).ConfigureAwait(false);
-            string finalPath = ContentPath(handle.Id);
+            using IDisposable processLock = CrossProcessStoreLock.Acquire(lockPath);
+            finalPath = ContentPath(handle.Id);
             File.Move(handle.ActivePath, finalPath);
+            moved = true;
+            AppDataFileProtection.EnsureFile(finalPath);
             var descriptor = new RecordingDescriptor(
                 handle.Id,
                 handle.CallId,
@@ -119,6 +137,12 @@ public sealed class ManagedRecordingStore : IRecordingStore
             catalog.Add(descriptor);
             WriteCatalog(catalog);
         }
+        catch
+        {
+            if (moved && finalPath is not null && File.Exists(finalPath))
+                File.Delete(finalPath);
+            throw;
+        }
         finally
         {
             gate.Release();
@@ -129,7 +153,7 @@ public sealed class ManagedRecordingStore : IRecordingStore
     private string ContentPath(RecordingId id) => Path.Combine(root, "content", id.Value.ToString("N") + ".media");
 
     private List<RecordingDescriptor> ReadCatalog()
-        => JsonSerializer.Deserialize(File.ReadAllText(catalogPath), StorageJsonContext.Default.ListRecordingDescriptor) ?? [];
+        => AtomicJsonFile.Read(catalogPath, StorageJsonContext.Default.ListRecordingDescriptor);
 
     private void WriteCatalog(List<RecordingDescriptor> catalog)
         => AtomicJsonFile.Write(catalogPath, catalog, StorageJsonContext.Default.ListRecordingDescriptor);

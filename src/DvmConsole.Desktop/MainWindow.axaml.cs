@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -14,55 +17,109 @@ using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using DvmConsole.Ptt;
 using DvmConsole.Presentation;
-using System.Collections.Specialized;
 using System.Reflection;
 
 namespace DvmConsole.Desktop;
 
-public sealed partial class MainWindow : Window
+public sealed partial class MainWindow : Window, IOperatorCommandSurface
 {
     private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(10);
     private readonly MainWindowSessionHost sessionHost;
+    private readonly SettingsTransferCoordinator settingsTransfer;
     private readonly WindowPttKeyRouter pttKeyRouter;
-    private readonly OperatorCommandCatalog operatorCommandCatalog;
+    private readonly OperatorCommandController operatorCommands;
     private readonly UserSettingsStore sessionUserSettingsStore;
     private readonly ManagedConfigurationLibrary configurationLibrary;
+    private readonly ManagedConfigurationCommandController configurationCommands;
     private readonly DesktopConfigurationMaterializer configurationMaterializer;
     private readonly OperatorViewStore operatorViewStore;
     private readonly LatestOperatorViewWriter operatorViewWriter;
     private readonly OperatorViewSettings operatorViewSettings;
     private readonly EngineeringHealthViewModel engineeringHealthViewModel;
+    private readonly ShutdownTimingRecorder shutdownTiming;
+    private readonly ShutdownBackgroundWorkRegistry abandonedShutdownWork = new(
+        (phase, exception) => DesktopCrashLog.Write(
+            $"Abandoned shutdown work ({phase})",
+            exception));
     private readonly ChannelCardsRenderer cardsRenderer;
+    private readonly ChannelCardInteractionController channelCardInteractions;
     private readonly ChannelListView listRenderer;
+    private readonly ChannelRendererController channelRenderer;
+    private readonly ResponsiveStatusController responsiveStatus;
     private readonly DesktopApplicationLifecycle applicationLifecycle;
     private readonly ChannelPttLifecycleBinding pttLifecycleBinding;
     private readonly bool demoMode;
     private MainWindowViewModel viewModel => sessionHost.ViewModel;
     private ChannelPttController channelPtt => sessionHost.ChannelPtt;
-    private OperatorToolsWindow? operatorToolsWindow;
-    private ConfigurationStudioWindow? configurationStudioWindow;
-    private ConfigurationLibraryWindow? configurationLibraryWindow;
-    private DebugLogWindow? debugLogWindow;
-    private DocumentationWindow? documentationWindow;
-    private AboutWindow? aboutWindow;
+    private readonly ModelessWindowController modelessWindows = new();
     private readonly List<DispatcherTimer> scrollBarTimers = [];
-    private readonly HashSet<ScrollViewer> configuredScrollViewers = [];
-    private readonly ScrollViewportAnchor<CallHistoryEntry> activityViewportAnchor;
+    private readonly Dictionary<ScrollViewer, ScrollBar[]> configuredScrollViewers = [];
+    private readonly ActivityHistoryViewportController activityHistoryViewport;
     private readonly MainWindowPlacementController mainWindowPlacement;
-    private Control? draggedChannelCard;
-    private ChannelViewModel? draggedChannel;
-    private Point dragPointerOrigin;
-    private double dragWidgetXOrigin;
-    private double dragWidgetYOrigin;
-    private bool draggedChannelMoved;
-    private bool toggleReceiveAfterChannelClick;
+    private readonly PttHoldTracker<IPointer> heldPttPointers = new();
     private ConfigurationReference? activeConfiguration;
+    private IConfigurationMaterializationLease? activeMaterializationLease;
+    private ConfigurationReference? pendingStartupActiveConfiguration;
     private string? pendingStartupConfigurationImportPath;
-    private ConsoleRendererPreference effectiveRenderer;
     private int shutdownStarted;
     private bool shutdownComplete;
+    private const string OperatorToolsWindowKey = "operator-tools";
+    private const string ConfigurationStudioWindowKey = "configuration-studio";
+    private const string ConfigurationLibraryWindowKey = "configuration-library";
+    private const string DebugLogWindowKey = "debug-logs";
+    private const string DocumentationWindowKey = "documentation";
+    private const string AboutWindowKey = "about";
+    private OperatorToolsWindow? operatorToolsWindow
+    {
+        get => modelessWindows.Get<OperatorToolsWindow>(OperatorToolsWindowKey);
+        set => TrackModeless(OperatorToolsWindowKey, value, sessionBound: true, static window => window.Close());
+    }
+    private ConfigurationStudioWindow? configurationStudioWindow
+    {
+        get => modelessWindows.Get<ConfigurationStudioWindow>(ConfigurationStudioWindowKey);
+        set => TrackModeless(
+            ConfigurationStudioWindowKey,
+            value,
+            sessionBound: true,
+            static window => window.CloseForSessionReplacement());
+    }
+    private ConfigurationLibraryWindow? configurationLibraryWindow
+    {
+        get => modelessWindows.Get<ConfigurationLibraryWindow>(ConfigurationLibraryWindowKey);
+        set => TrackModeless(ConfigurationLibraryWindowKey, value, sessionBound: false, static window => window.Close());
+    }
+    private DebugLogWindow? debugLogWindow
+    {
+        get => modelessWindows.Get<DebugLogWindow>(DebugLogWindowKey);
+        set => TrackModeless(DebugLogWindowKey, value, sessionBound: true, static window => window.Close());
+    }
+    private DocumentationWindow? documentationWindow
+    {
+        get => modelessWindows.Get<DocumentationWindow>(DocumentationWindowKey);
+        set => TrackModeless(DocumentationWindowKey, value, sessionBound: false, static window => window.Close());
+    }
+    private AboutWindow? aboutWindow
+    {
+        get => modelessWindows.Get<AboutWindow>(AboutWindowKey);
+        set => TrackModeless(AboutWindowKey, value, sessionBound: false, static window => window.Close());
+    }
     internal ConfigurationStudioWindow? OpenConfigurationStudioWindow => configurationStudioWindow;
     internal ManagedConfigurationLibrary ConfigurationLibrary => configurationLibrary;
+
+    private void TrackModeless<TWindow>(
+        string key,
+        TWindow? window,
+        bool sessionBound,
+        Action<TWindow> close)
+        where TWindow : class
+    {
+        if (window is null)
+        {
+            modelessWindows.Forget<TWindow>(key);
+            return;
+        }
+        modelessWindows.Track(key, window, sessionBound, close);
+    }
 
     public MainWindow() : this(null)
     {
@@ -82,6 +139,16 @@ public sealed partial class MainWindow : Window
         UserSettingsStore sessionUserSettingsStore,
         OperatorViewStore operatorViewStore,
         bool demoMode)
+        : this(configurationPath, sessionUserSettingsStore, operatorViewStore, demoMode, null)
+    {
+    }
+
+    private MainWindow(
+        string? configurationPath,
+        UserSettingsStore sessionUserSettingsStore,
+        OperatorViewStore operatorViewStore,
+        bool demoMode,
+        DesktopConfigurationStoreContext? configurationStores)
     {
         this.sessionUserSettingsStore = sessionUserSettingsStore ??
             throw new ArgumentNullException(nameof(sessionUserSettingsStore));
@@ -89,11 +156,12 @@ public sealed partial class MainWindow : Window
             throw new ArgumentNullException(nameof(operatorViewStore));
         this.demoMode = demoMode;
         string appDataRoot = Path.GetDirectoryName(this.sessionUserSettingsStore.Path) ?? AppContext.BaseDirectory;
-        configurationLibrary = new ManagedConfigurationLibrary(Path.Combine(appDataRoot, "ConfigurationLibrary"));
-        RegisterLegacyConfigurationCandidates();
-        configurationMaterializer = new DesktopConfigurationMaterializer(
-            configurationLibrary,
-            Path.Combine(appDataRoot, "ConfigurationRuntime"));
+        shutdownTiming = new ShutdownTimingRecorder(appDataRoot);
+        DesktopConfigurationStoreContext stores = configurationStores ??
+            DesktopConfigurationStoreContext.Create(appDataRoot);
+        configurationLibrary = stores.Library;
+        configurationCommands = stores.Commands;
+        configurationMaterializer = stores.Materializer;
         bool migrateLegacyConfigurationOperatorState;
         (configurationPath, activeConfiguration, migrateLegacyConfigurationOperatorState) =
             ResolveInitialConfiguration(configurationPath);
@@ -122,6 +190,13 @@ public sealed partial class MainWindow : Window
             ?? throw new InvalidOperationException("The Engineering Health splitter was not initialized.");
         engineeringHealthPane ??= this.FindControl<EngineeringHealthPane>("engineeringHealthPane")
             ?? throw new InvalidOperationException("The Engineering Health pane was not initialized.");
+        fullStatusBar ??= this.FindControl<Grid>("fullStatusBar")
+            ?? throw new InvalidOperationException("The full status bar was not initialized.");
+        compactStatusBar ??= this.FindControl<Button>("compactStatusBar")
+            ?? throw new InvalidOperationException("The compact status bar was not initialized.");
+        responsiveStatus = new ResponsiveStatusController(
+            fullStatusBar,
+            compactStatusBar);
         channelRendererHost ??= this.FindControl<ContentControl>("channelRendererHost")
             ?? throw new InvalidOperationException("The channel renderer host was not initialized.");
         cardsRendererMenuItem ??= this.FindControl<MenuItem>("cardsRendererMenuItem")
@@ -143,31 +218,43 @@ public sealed partial class MainWindow : Window
         engineeringHealthPane.DataContext = engineeringHealthViewModel;
         mainWindowPlacement = new MainWindowPlacementController(this, initialViewModel.MainWindowPlacement);
         mainWindowPlacement.PrepareSize();
-        activityViewportAnchor = new ScrollViewportAnchor<CallHistoryEntry>(
+        var activityViewportAnchor = new ScrollViewportAnchor<CallHistoryEntry>(
             () => activityScrollViewer,
             () => activityCallHistoryList.GetVisualDescendants()
                 .OfType<Border>()
                 .Where(border => border.Classes.Contains("activity-call-card")),
             control => control.DataContext as CallHistoryEntry);
+        activityHistoryViewport = new ActivityHistoryViewportController(
+            activityCallHistoryList,
+            activityViewportAnchor);
+        channelCardInteractions = new ChannelCardInteractionController(this, () => viewModel);
         cardsRenderer = CreateCardsRenderer(initialViewModel);
         sessionHost = new MainWindowSessionHost(
             initialViewModel,
-            HandleActivityHistoryCollectionChanging,
+            activityHistoryViewport.HandleCollectionChanging,
             replacement => AvaloniaStorageThreading.Invoke(() => ApplySessionDataContext(replacement)),
             () => AvaloniaStorageThreading.Invoke(CloseModelessViewModelWindows),
             () => AvaloniaStorageThreading.Invoke(CloseAllModelessWindows));
+        settingsTransfer = new SettingsTransferCoordinator(CaptureSettingsTransferSession);
+        sessionHost.ReplacementFollowUpFailed += HandleSessionReplacementFollowUpFailed;
         listRenderer = new ChannelListView();
         listRenderer.Attach(sessionHost.ApplicationSession, channelPtt, () => viewModel.TogglePttMode);
+        channelRenderer = new ChannelRendererController(
+            operatorViewSettings,
+            channelRendererHost,
+            cardsRenderer,
+            listRenderer,
+            cardsRendererMenuItem,
+            listRendererMenuItem);
         applicationLifecycle = new DesktopApplicationLifecycle(this);
         pttLifecycleBinding = new ChannelPttLifecycleBinding(
             applicationLifecycle,
-            cancellationToken => channelPtt.ReleaseAllAsync(cancellationToken),
+            ReleaseAllChannelPttAsync,
             exception => DesktopCrashLog.Write("Lifecycle PTT release", exception));
-        ApplyChannelRenderer(Width, releasePtt: false);
+        channelRenderer.Apply(Width);
         pttKeyRouter = new WindowPttKeyRouter(() => viewModel);
-        operatorCommandCatalog = CreateOperatorCommandCatalog();
+        operatorCommands = new OperatorCommandController(this);
         ApplyEngineeringHealthVisibility();
-        activityCallHistoryList.LayoutUpdated += HandleActivityHistoryLayoutUpdated;
         AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
         AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
         AddHandler(InputElement.GotFocusEvent, HandlePttFocusChanged, RoutingStrategies.Bubble, true);
@@ -186,29 +273,21 @@ public sealed partial class MainWindow : Window
             RefreshResponsiveToolbarVisibility(Bounds.Width);
             mainWindowPlacement.RestorePosition();
             mainWindowPlacement.StartTracking();
-            ConfigureTransientChannelScrollBars();
             ConfigureTransientScrollBars(activityScrollViewer);
             await sessionHost.StartAsync();
-            if (activeConfiguration is not null)
+            await RegisterLegacyConfigurationCandidatesAsync();
+            if (pendingStartupActiveConfiguration is { } pendingActive)
             {
-                try
-                {
-                    await configurationLibrary.ActivateAsync(activeConfiguration);
-                }
-                catch (Exception exception) when (
-                    exception is IOException or UnauthorizedAccessException or InvalidDataException)
-                {
-                    DesktopCrashLog.Write("Managed configuration recent timestamp", exception);
-                }
+                pendingStartupActiveConfiguration = null;
+                await ActivateManagedConfigurationAsync(pendingActive);
             }
-            await RefreshRecentManagedConfigurationMenuAsync();
-            if (pendingStartupConfigurationImportPath is { } pendingImport)
+            else if (pendingStartupConfigurationImportPath is { } pendingImport)
             {
                 pendingStartupConfigurationImportPath = null;
                 await OpenCodeplugAsync(pendingImport);
             }
+            await RefreshRecentManagedConfigurationMenuAsync();
         };
-        LayoutUpdated += (_, _) => ConfigureTransientChannelScrollBars();
         Closing += HandleClosing;
         Activated += (_, _) => UpdatePttFocusSuppression();
         Deactivated += async (_, _) =>
@@ -235,6 +314,28 @@ public sealed partial class MainWindow : Window
         };
     }
 
+    internal static async Task<MainWindow> CreateAsync(
+        string? configurationPath,
+        UserSettingsStore sessionUserSettingsStore,
+        OperatorViewStore operatorViewStore,
+        bool demoMode,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sessionUserSettingsStore);
+        ArgumentNullException.ThrowIfNull(operatorViewStore);
+        string appDataRoot = Path.GetDirectoryName(sessionUserSettingsStore.Path) ?? AppContext.BaseDirectory;
+        DesktopConfigurationStoreContext stores = await DesktopConfigurationStoreContext.CreateAsync(
+            appDataRoot,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return await Dispatcher.UIThread.InvokeAsync(() => new MainWindow(
+                configurationPath,
+                sessionUserSettingsStore,
+                operatorViewStore,
+                demoMode,
+                stores));
+    }
+
     private MainWindowViewModel LoadSessionViewModel(
         string? configurationPath,
         ConfigurationReference? configurationReference = null,
@@ -246,7 +347,8 @@ public sealed partial class MainWindow : Window
             networkDisabledDemo: demoMode,
             configurationReference: configurationReference,
             useLegacyPathFallback: false,
-            migrateLegacyConfigurationOperatorState: migrateLegacyConfigurationOperatorState);
+            migrateLegacyConfigurationOperatorState: migrateLegacyConfigurationOperatorState,
+            serviceDisposalObserved: shutdownTiming.ObserveService);
         if (demoMode)
             loaded.InitializeDemoScenario();
         return loaded;
@@ -265,10 +367,8 @@ public sealed partial class MainWindow : Window
             ConfigurationReference? active = configurationLibrary.Active;
             if (active is not null)
             {
-                string materialized = configurationMaterializer
-                    .MaterializeAsync(active)
-                    .AsTask().GetAwaiter().GetResult();
-                return (materialized, active, true);
+                pendingStartupActiveConfiguration = active;
+                return (null, null, false);
             }
             requestedPath = startupSettings.LastCodeplugPath;
         }
@@ -277,35 +377,39 @@ public sealed partial class MainWindow : Window
             return (null, null, false);
 
         string legacyPath = Path.GetFullPath(requestedPath);
+        if (demoMode)
+            return ResolveImmediateDemoConfiguration(legacyPath, persistedStartup);
+
+        pendingStartupConfigurationImportPath = legacyPath;
+        return (legacyPath, null, false);
+    }
+
+    private (string Path, ConfigurationReference? Reference, bool MigrateLegacyOperatorState)
+        ResolveImmediateDemoConfiguration(string legacyPath, bool persistedStartup)
+    {
         try
         {
+            // The deterministic demo is an explicit offline/test mode whose
+            // Show() contract requires a complete managed identity. Normal
+            // operator startup takes the asynchronous Opened path above.
             ConfigurationImportResult imported = configurationLibrary.ImportAsync(
                     new DesktopConfigurationDocumentSet(legacyPath),
                     new ConfigurationImportOptions())
                 .AsTask().GetAwaiter().GetResult();
             configurationLibrary.ActivateAsync(imported.Reference)
                 .AsTask().GetAwaiter().GetResult();
-            string materialized = configurationMaterializer.MaterializeAsync(imported.Reference)
+            IConfigurationMaterializationLease materialization = configurationMaterializer
+                .MaterializeAsync(imported.Reference)
                 .AsTask().GetAwaiter().GetResult();
-            MigrateLegacyOperatorState(legacyPath, materialized);
-            return (materialized, imported.Reference, persistedStartup);
+            MigrateLegacyOperatorState(legacyPath, materialization.Path);
+            activeMaterializationLease = materialization;
+            return (materialization.Path, imported.Reference, persistedStartup);
         }
-        catch (ConfigurationExternalCompanionsConfirmationRequiredException exception)
+        catch (Exception exception) when (
+            exception is IOException or InvalidDataException or UnauthorizedAccessException or
+            ConfigurationImportConflictException or ConfigurationExternalCompanionsConfirmationRequiredException)
         {
-            // An owner window is required before desktop can ask the operator
-            // to approve/select out-of-tree companions. Start with the legacy
-            // document, then complete the managed import from the Opened flow.
-            pendingStartupConfigurationImportPath = legacyPath;
-            DesktopCrashLog.Write("Configuration library import awaiting external companions", exception);
-            return (legacyPath, null, false);
-        }
-        catch (Exception exception) when (exception is IOException or InvalidDataException or
-            UnauthorizedAccessException or ConfigurationImportConflictException)
-        {
-            // Invalid legacy YAML still opens in the existing diagnostics path.
-            // Configuration Studio will commit any subsequent edit into the
-            // managed library rather than writing this source file.
-            DesktopCrashLog.Write("Configuration library import", exception);
+            DesktopCrashLog.Write("Demo configuration library import", exception);
             return (legacyPath, null, false);
         }
     }
@@ -323,19 +427,24 @@ public sealed partial class MainWindow : Window
         sessionUserSettingsStore.Save(settings);
     }
 
-    private void RegisterLegacyConfigurationCandidates()
+    private async Task RegisterLegacyConfigurationCandidatesAsync()
     {
-        UserSettings settings = sessionUserSettingsStore.Load();
-        LegacyConfigurationCandidate[] candidates = (settings.RecentCodeplugPaths ?? [])
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Select(path => Path.GetFullPath(path))
-            .Distinct(FileSystemPathIdentity.Comparer)
-            .Select(path => new LegacyConfigurationCandidate(Path.GetFileName(path), path))
-            .ToArray();
-        configurationLibrary.RegisterLegacyCandidatesAsync(candidates)
-            .AsTask()
-            .GetAwaiter()
-            .GetResult();
+        try
+        {
+            UserSettings settings = sessionUserSettingsStore.Load();
+            LegacyConfigurationCandidate[] candidates = (settings.RecentCodeplugPaths ?? [])
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => Path.GetFullPath(path))
+                .Distinct(FileSystemPathIdentity.Comparer)
+                .Select(path => new LegacyConfigurationCandidate(Path.GetFileName(path), path))
+                .ToArray();
+            await configurationLibrary.RegisterLegacyCandidatesAsync(candidates);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException)
+        {
+            DesktopCrashLog.Write("Legacy configuration discovery", exception);
+        }
     }
 
     private OperatorViewSettings LoadOperatorViewSettings()
@@ -361,10 +470,10 @@ public sealed partial class MainWindow : Window
     private ChannelCardsRenderer CreateCardsRenderer(MainWindowViewModel dataContext)
     {
         var renderer = new ChannelCardsRenderer { DataContext = dataContext };
-        renderer.ChannelPointerPressed += HandleChannelPointerPressed;
-        renderer.ChannelPointerMoved += HandleChannelPointerMoved;
-        renderer.ChannelPointerReleased += HandleChannelPointerReleased;
-        renderer.ChannelPointerCaptureLost += HandleChannelPointerCaptureLost;
+        renderer.ChannelPointerPressed += channelCardInteractions.HandlePointerPressed;
+        renderer.ChannelPointerMoved += channelCardInteractions.HandlePointerMoved;
+        renderer.ChannelPointerReleased += channelCardInteractions.HandlePointerReleased;
+        renderer.ChannelPointerCaptureLost += channelCardInteractions.HandlePointerCaptureLost;
         renderer.TransmitSelectionClick += HandleTransmitSelectionClick;
         renderer.PageSelectionClick += HandlePageSelectionClick;
         renderer.AlertSelectionClick += HandleAlertSelectionClick;
@@ -433,73 +542,6 @@ public sealed partial class MainWindow : Window
     private void ScheduleOperatorViewSave()
         => operatorViewWriter.Schedule(operatorViewSettings.Snapshot());
 
-    private OperatorCommandCatalog CreateOperatorCommandCatalog()
-    {
-        static Task Run(Action action)
-        {
-            action();
-            return Task.CompletedTask;
-        }
-
-        OperatorCommandDefinition OpenSection(OperatorToolSectionDefinition definition)
-            => new(definition.CommandId, () => Run(() => OpenOperatorTools(definition.Section)));
-
-        return new OperatorCommandCatalog(
-        [
-            new(
-                OperatorCommandIds.Connect,
-                () => Run(() => viewModel.ConnectCommand.Execute(null)),
-                () => viewModel.ConnectCommand.CanExecute(null)),
-            new(
-                OperatorCommandIds.Disconnect,
-                () => Run(() => viewModel.DisconnectCommand.Execute(null)),
-                () => viewModel.DisconnectCommand.CanExecute(null)),
-            new(
-                OperatorCommandIds.EnableAllReceive,
-                viewModel.EnableAllReceiveAsync),
-            new(
-                OperatorCommandIds.DisableAllReceive,
-                viewModel.DisableAllReceiveAsync),
-            new(
-                OperatorCommandIds.EnableZoneReceive,
-                viewModel.EnableSelectedZoneReceiveAsync,
-                () => viewModel.HasSelectedZone),
-            new(
-                OperatorCommandIds.DisableZoneReceive,
-                viewModel.DisableSelectedZoneReceiveAsync,
-                () => viewModel.HasSelectedZone),
-            new(
-                OperatorCommandIds.ToggleAllTransmit,
-                () => Run(viewModel.ToggleAllTransmitSelection)),
-            new(
-                OperatorCommandIds.SubscriberPage,
-                () => OpenSubscriberCommandAsync(P25SubscriberCommand.CallAlert)),
-            new(
-                OperatorCommandIds.SubscriberRadioCheck,
-                () => OpenSubscriberCommandAsync(P25SubscriberCommand.RadioCheck)),
-            new(
-                OperatorCommandIds.SubscriberInhibit,
-                () => OpenSubscriberCommandAsync(P25SubscriberCommand.Inhibit)),
-            new(
-                OperatorCommandIds.SubscriberUninhibit,
-                () => OpenSubscriberCommandAsync(P25SubscriberCommand.Uninhibit)),
-            .. OperatorToolSectionCatalog.All.Select(OpenSection),
-            new(
-                OperatorCommandIds.DebugLogs,
-                () => Run(ShowDebugLogs)),
-            new(
-                OperatorCommandIds.ToggleEngineeringHealth,
-                () => Run(() => SetEngineeringHealthVisible(
-                    !operatorViewSettings.EngineeringHealthVisible))),
-            new(
-                OperatorCommandIds.Documentation,
-                () => Run(ShowDocumentation)),
-            new(
-                OperatorCommandIds.About,
-                () => Run(ShowAbout))
-        ]);
-    }
-
     private async void HandleClosing(object? sender, WindowClosingEventArgs e)
     {
         if (shutdownComplete)
@@ -514,6 +556,7 @@ public sealed partial class MainWindow : Window
 
         WindowPlacementSetting closingPlacement = mainWindowPlacement.GetPlacementForPersistence();
         mainWindowPlacement.Dispose();
+        shutdownTiming.Begin();
 
         // Remove the console from view immediately while the bounded cleanup
         // finishes releasing PTT, recordings, audio, and network ownership.
@@ -522,16 +565,7 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            await viewModel.SaveMainWindowPlacementAsync(closingPlacement);
-        }
-        catch (Exception exception)
-        {
-            DesktopCrashLog.Write("Main window placement persistence", exception);
-        }
-
-        try
-        {
-            await ShutdownAsync();
+            await ShutdownAsync(closingPlacement);
         }
         catch (Exception exception)
         {
@@ -539,136 +573,114 @@ public sealed partial class MainWindow : Window
         }
         finally
         {
+            shutdownTiming.Complete();
             shutdownComplete = true;
             Dispatcher.UIThread.Post(Close);
         }
     }
 
-    private Task ShutdownAsync()
-        => BoundedShutdown.RunAsync(ShutdownCoreAsync, ShutdownTimeout);
+    private async Task ShutdownAsync(WindowPlacementSetting closingPlacement)
+    {
+        viewModel.SuppressSessionInputForTransition();
+        await BoundedShutdown.RunAsync(
+            [
+                new ShutdownPhase(
+                    "ptt-release",
+                    TimeSpan.FromMilliseconds(1_500),
+                    cancellationToken => shutdownTiming.MeasureAsync(
+                        "ptt-release",
+                        async () =>
+                        {
+                            var cleanup = new AsyncCleanup();
+                            await cleanup.RunTaskAsync(
+                                () => ReleaseAllChannelPttAsync(cancellationToken).AsTask());
+                            await cleanup.RunTaskAsync(
+                                () => viewModel.ReleaseAllPttForShutdownAsync(cancellationToken));
+                            cleanup.ThrowIfFailed();
+                        })),
+                new ShutdownPhase(
+                    "network-quiesce",
+                    TimeSpan.FromMilliseconds(1_500),
+                    cancellationToken => shutdownTiming.MeasureAsync(
+                        "network-quiesce",
+                        () => viewModel.QuiesceFneSessionAsync(cancellationToken))),
+                new ShutdownPhase(
+                    "accepted-recording-drain",
+                    TimeSpan.FromMilliseconds(1_500),
+                    cancellationToken => shutdownTiming.MeasureAsync(
+                        "accepted-recording-drain",
+                        () => viewModel.DrainAcceptedRecordingWorkAsync(cancellationToken))),
+                new ShutdownPhase(
+                    "settings-persistence",
+                    TimeSpan.FromSeconds(1),
+                    cancellationToken => shutdownTiming.MeasureAsync(
+                        "settings-persistence",
+                        () => PersistForShutdownAsync(closingPlacement, cancellationToken))),
+                new ShutdownPhase(
+                    "ui-detachment",
+                    TimeSpan.FromSeconds(1),
+                    _ => shutdownTiming.MeasureAsync(
+                        "ui-detachment",
+                        DetachUiForShutdownAsync)),
+                new ShutdownPhase(
+                    "session-disposal",
+                    TimeSpan.FromSeconds(5),
+                    _ => shutdownTiming.MeasureAsync(
+                        "session-disposal",
+                        () => sessionHost.DisposeAsync().AsTask())),
+                new ShutdownPhase(
+                    "materialization-release",
+                    TimeSpan.FromSeconds(1),
+                    _ => shutdownTiming.MeasureAsync(
+                        "materialization-release",
+                        ReleaseMaterializationForShutdownAsync))
+            ],
+            ShutdownTimeout,
+            () =>
+            {
+                viewModel.ApplyFinalShutdownSafetyFence();
+            },
+            abandonedShutdownWork.Register);
+    }
 
-    private async Task ShutdownCoreAsync()
+    private async Task PersistForShutdownAsync(
+        WindowPlacementSetting closingPlacement,
+        CancellationToken cancellationToken)
     {
         var cleanup = new AsyncCleanup();
-        cleanup.Run(() =>
-        {
-            foreach (DispatcherTimer timer in scrollBarTimers)
-                timer.Stop();
-        });
-        cleanup.Run(() =>
-            activityCallHistoryList.LayoutUpdated -= HandleActivityHistoryLayoutUpdated);
-        cleanup.Run(activityViewportAnchor.Reset);
-        cleanup.Run(CaptureEngineeringHealthHeight);
-        await cleanup.RunTaskAsync(() => engineeringHealthViewModel.DisposeAsync().AsTask());
+        await cleanup.RunTaskAsync(
+            () => sessionHost.FlushSettingsIfActiveAsync(cancellationToken));
+        await cleanup.RunTaskAsync(
+            () => viewModel.SaveMainWindowPlacementAsync(closingPlacement));
+        cleanup.Run(() => AvaloniaStorageThreading.Invoke(CaptureEngineeringHealthHeight));
         await cleanup.RunTaskAsync(() => operatorViewWriter.DisposeAsync().AsTask());
-        await cleanup.RunTaskAsync(() => pttLifecycleBinding.DisposeAsync().AsTask());
-        cleanup.Run(applicationLifecycle.Dispose);
-        await cleanup.RunTaskAsync(() => listRenderer.DetachAsync().AsTask());
-        await cleanup.RunTaskAsync(() => sessionHost.DisposeAsync().AsTask());
         cleanup.ThrowIfFailed();
     }
 
-    private void HandleActivityHistoryCollectionChanging(
-        object? sender,
-        NotifyCollectionChangedEventArgs e)
-    {
-        if (e.Action == NotifyCollectionChangedAction.Reset)
-            activityViewportAnchor.Reset();
-        if (e.Action == NotifyCollectionChangedAction.Add && e.NewStartingIndex == 0)
-            activityViewportAnchor.Capture();
-    }
-
-    private void HandleActivityHistoryLayoutUpdated(object? sender, EventArgs e)
-        => activityViewportAnchor.Restore();
-
-    private async void HandleChannelPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (sender is not Control control ||
-            ChannelCardInput.IsInteractiveSource(e.Source, control))
-            return;
-
-        if (control.DataContext is ChannelViewModel channel &&
-            DataContext is MainWindowViewModel viewModel)
+    private Task DetachUiForShutdownAsync()
+        => AvaloniaStorageThreading.InvokeAsync(async () =>
         {
-            PointerPointProperties properties = e.GetCurrentPoint(control).Properties;
-            if ((properties.IsLeftButtonPressed || properties.IsRightButtonPressed) && !viewModel.LockWidgets)
-            {
-                draggedChannelCard = control;
-                draggedChannel = channel;
-                dragPointerOrigin = e.GetPosition(this);
-                dragWidgetXOrigin = channel.WidgetX;
-                dragWidgetYOrigin = channel.WidgetY;
-                draggedChannelMoved = false;
-                toggleReceiveAfterChannelClick = properties.IsLeftButtonPressed;
-                e.Pointer.Capture(control);
-                e.Handled = true;
-                control.Focus();
-                return;
-            }
+            var cleanup = new AsyncCleanup();
+            foreach (DispatcherTimer timer in scrollBarTimers)
+                timer.Stop();
+            cleanup.Run(activityHistoryViewport.Dispose);
+            cleanup.Run(CloseAllModelessWindows);
+            await cleanup.RunTaskAsync(() => engineeringHealthViewModel.DisposeAsync().AsTask());
+            await cleanup.RunTaskAsync(() => pttLifecycleBinding.DisposeAsync().AsTask());
+            cleanup.Run(applicationLifecycle.Dispose);
+            await cleanup.RunTaskAsync(() => listRenderer.DetachAsync().AsTask());
+            cleanup.ThrowIfFailed();
+        });
 
-            if (!properties.IsLeftButtonPressed)
-                return;
-
-            await viewModel.ToggleChannelReceiveAsync(channel);
-            control.Focus();
-        }
-    }
-
-    private void HandleChannelPointerMoved(object? sender, PointerEventArgs e)
+    private async Task ReleaseMaterializationForShutdownAsync()
     {
-        if (draggedChannelCard is null || draggedChannel is null ||
-            !ReferenceEquals(sender, draggedChannelCard) ||
-            DataContext is not MainWindowViewModel viewModel)
+        IConfigurationMaterializationLease? lease = Interlocked.Exchange(
+            ref activeMaterializationLease,
+            null);
+        if (lease is not null)
         {
-            return;
+            await lease.DisposeAsync();
         }
-
-        Point current = e.GetPosition(this);
-        double deltaX = current.X - dragPointerOrigin.X;
-        double deltaY = current.Y - dragPointerOrigin.Y;
-        if (!draggedChannelMoved && Math.Abs(deltaX) < 4 && Math.Abs(deltaY) < 4)
-            return;
-
-        draggedChannelMoved = true;
-        const double gridSize = 10;
-        double x = Math.Max(0, Math.Round((dragWidgetXOrigin + deltaX) / gridSize) * gridSize);
-        double y = Math.Max(0, Math.Round((dragWidgetYOrigin + deltaY) / gridSize) * gridSize);
-        viewModel.MoveChannelWidget(draggedChannel, x, y, persist: false);
-        e.Handled = true;
-    }
-
-    private async void HandleChannelPointerReleased(object? sender, PointerReleasedEventArgs e)
-    {
-        if (draggedChannelCard is null || draggedChannel is null || !ReferenceEquals(sender, draggedChannelCard))
-            return;
-
-        ChannelViewModel channel = draggedChannel;
-        bool moved = draggedChannelMoved;
-        bool toggleReceive = toggleReceiveAfterChannelClick;
-        if (DataContext is MainWindowViewModel viewModel)
-        {
-            if (moved)
-                viewModel.MoveChannelWidget(channel, channel.WidgetX, channel.WidgetY, persist: true);
-            else if (toggleReceive)
-                await viewModel.ToggleChannelReceiveAsync(channel);
-        }
-        e.Pointer.Capture(null);
-        ClearChannelDrag();
-        e.Handled = true;
-    }
-
-    private void HandleChannelPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
-    {
-        if (draggedChannelCard is not null && ReferenceEquals(sender, draggedChannelCard))
-            ClearChannelDrag();
-    }
-
-    private void ClearChannelDrag()
-    {
-        draggedChannelCard = null;
-        draggedChannel = null;
-        draggedChannelMoved = false;
-        toggleReceiveAfterChannelClick = false;
     }
 
     private async void HandlePttPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -685,33 +697,66 @@ public sealed partial class MainWindow : Window
         {
             ChannelId channelId = new(channel.SessionId);
             if (channel.IsTransmitting)
-                await channelPtt.UnkeyAsync(channelId);
+                await RunPointerPttActionAsync(() => channelPtt.UnkeyAsync(channelId));
             else
-                await channelPtt.ToggleAsync(channelId);
+                await RunPointerPttActionAsync(() => channelPtt.ToggleAsync(channelId));
         }
         else
         {
+            heldPttPointers.Track(e.Pointer, new ChannelId(channel.SessionId));
             e.Pointer.Capture(button);
-            await channelPtt.PressAsync(new ChannelId(channel.SessionId));
+            await RunPointerPttActionAsync(
+                () => channelPtt.PressAsync(new ChannelId(channel.SessionId)));
         }
     }
 
     private async void HandlePttPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
         Button? button = e.Pointer.Captured as Button ?? FindPttButton(e.Source);
-        if (button?.DataContext is not ChannelViewModel channel || !button.Classes.Contains("ptt"))
+        ChannelId? heldChannel = heldPttPointers.Take(e.Pointer);
+        ChannelId? channelId = heldChannel ??
+            (button?.DataContext is ChannelViewModel channel && button.Classes.Contains("ptt")
+                ? new ChannelId(channel.SessionId)
+                : null);
+        if (channelId is null)
             return;
 
         e.Handled = true;
         e.Pointer.Capture(null);
-        await channelPtt.ReleaseAsync(new ChannelId(channel.SessionId));
+        await RunPointerPttActionAsync(() => channelPtt.ReleaseAsync(channelId.Value));
     }
 
     private async void HandlePttPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
     {
+        ChannelId? heldChannel = heldPttPointers.Take(e.Pointer);
         Button? button = FindPttButton(e.Source);
-        if (button?.DataContext is ChannelViewModel channel)
-            await channelPtt.ReleaseAsync(new ChannelId(channel.SessionId));
+        ChannelId? channelId = heldChannel ??
+            (button?.DataContext is ChannelViewModel channel
+                ? new ChannelId(channel.SessionId)
+                : null);
+        if (channelId is not null)
+            await RunPointerPttActionAsync(() => channelPtt.ReleaseAsync(channelId.Value));
+    }
+
+    private static async Task RunPointerPttActionAsync(Func<ValueTask> action)
+    {
+        try
+        {
+            await action();
+        }
+        catch (Exception exception)
+        {
+            // The view model keeps unresolved ownership visible and provides
+            // the operator-facing status. Never let an async-void pointer
+            // callback turn a recoverable PTT failure into a process crash.
+            DesktopCrashLog.Write("Channel PTT pointer action", exception);
+        }
+    }
+
+    private async ValueTask ReleaseAllChannelPttAsync(CancellationToken cancellationToken = default)
+    {
+        heldPttPointers.Clear();
+        await channelPtt.ReleaseAllAsync(cancellationToken);
     }
 
     internal async Task HandleAccessibleChannelPttKeyDownAsync(ChannelViewModel channel)
@@ -824,23 +869,29 @@ public sealed partial class MainWindow : Window
         configurationStudioWindow = null;
 
         MainWindowViewModel replacement;
+        IConfigurationMaterializationLease? materialization = null;
         ConfigurationImportResult imported;
         try
         {
             await sessionHost.PrepareForReplacementAsync();
             imported = await ImportLegacyConfigurationAsync(source);
-            string managedPath = await configurationMaterializer.MaterializeAsync(imported.Reference);
+            materialization = await configurationMaterializer.MaterializeAsync(imported.Reference);
+            string managedPath = materialization.Path;
             if (!string.IsNullOrWhiteSpace(legacyPath))
                 MigrateLegacyOperatorState(legacyPath, managedPath);
             replacement = LoadSessionViewModel(managedPath, imported.Reference);
         }
         catch (OperationCanceledException)
         {
+            if (materialization is not null)
+                await materialization.DisposeAsync();
             return;
         }
         catch (Exception exception) when (
             exception is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException)
         {
+            if (materialization is not null)
+                await materialization.DisposeAsync();
             DesktopCrashLog.Write("Open codeplug import", exception);
             await ShowCodeplugErrorAsync(
                 $"The configuration could not be imported into the managed library.\n\n{exception.Message}");
@@ -851,12 +902,13 @@ public sealed partial class MainWindow : Window
         {
             string error = replacement.StatusText;
             await replacement.DisposeAsync();
+            await materialization.DisposeAsync();
             await ShowCodeplugErrorAsync(error);
             return;
         }
         try
         {
-            await PublishManagedReplacementAsync(imported.Reference, replacement);
+            await PublishManagedReplacementAsync(imported.Reference, replacement, materialization);
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
@@ -870,66 +922,16 @@ public sealed partial class MainWindow : Window
     private async ValueTask<ConfigurationImportResult> ImportLegacyConfigurationAsync(
         IImportDocumentSet source)
     {
-        var options = new ConfigurationImportOptions();
-        while (true)
-        {
-            try
-            {
-                return await configurationLibrary.ImportAsync(source, options);
-            }
-            catch (ConfigurationExternalCompanionsConfirmationRequiredException confirmation)
-            {
-                if (options.ConfirmExternalCompanions)
-                    throw;
-                string references = string.Join(
-                    Environment.NewLine,
-                    confirmation.References.Select(reference => $"• {reference}"));
-                bool approved = await ConfirmAsync(
-                    "Import external companion files?",
-                    "This configuration refers to key or alias files outside its folder. " +
-                    "DVM Console will copy the selected files into the managed revision; the originals will remain unchanged.\n\n" +
-                    references,
-                    source is AvaloniaStorageConfigurationImportDocumentSet
-                        ? "Select files"
-                        : "Import companions");
-                if (!approved)
-                    throw new OperationCanceledException();
-                if (source is AvaloniaStorageConfigurationImportDocumentSet pickerSource &&
-                    !await SelectExternalCompanionsAsync(pickerSource, confirmation.References))
-                {
-                    throw new OperationCanceledException();
-                }
-                options = options with { ConfirmExternalCompanions = true };
-            }
-            catch (ConfigurationImportConflictException conflict)
-            {
-                if (await ConfirmAsync(
-                        "Configuration changed in two places",
-                        "Both the imported YAML bundle and its managed configuration changed since the last import. Replace the managed entry with a recoverable new revision?",
-                        "Replace existing"))
-                {
-                    options = options with
-                    {
-                        ConflictResolution = ConfigurationConflictResolution.ReplaceExisting,
-                        ReplaceConfigurationId = conflict.ExistingConfigurationId
-                    };
-                    continue;
-                }
-                if (await ConfirmAsync(
-                        "Import as a new configuration?",
-                        "Keep the existing managed configuration and import this YAML bundle under a new configuration ID?",
-                        "Import as new"))
-                {
-                    options = options with
-                    {
-                        ConflictResolution = ConfigurationConflictResolution.ImportAsNew,
-                        ReplaceConfigurationId = null
-                    };
-                    continue;
-                }
-                throw new OperationCanceledException();
-            }
-        }
+        bool usesDocumentPicker = source is AvaloniaStorageConfigurationImportDocumentSet;
+        return await configurationCommands.ImportAsync(
+            source,
+            usesDocumentPicker,
+            ConfirmAsync,
+            references => usesDocumentPicker
+                ? SelectExternalCompanionsAsync(
+                    (AvaloniaStorageConfigurationImportDocumentSet)source,
+                    references)
+                : Task.FromResult(true));
     }
 
     private async Task<bool> SelectExternalCompanionsAsync(
@@ -960,11 +962,13 @@ public sealed partial class MainWindow : Window
     {
         if (configurationLibraryWindow is null)
         {
-            configurationLibraryWindow = new ConfigurationLibraryWindow(configurationLibrary);
-            configurationLibraryWindow.ActivateRequested += ActivateManagedConfigurationFromLibraryAsync;
-            configurationLibraryWindow.Closed += (_, _) => configurationLibraryWindow = null;
-            AttachPttInputSafety(configurationLibraryWindow);
-            configurationLibraryWindow.Show(this);
+            var libraryWindow = new ConfigurationLibraryWindow(configurationLibrary);
+            configurationLibraryWindow = libraryWindow;
+            libraryWindow.ActivateRequested += ActivateManagedConfigurationFromLibraryAsync;
+            libraryWindow.Closed += (_, _) =>
+                modelessWindows.Forget(ConfigurationLibraryWindowKey, libraryWindow);
+            AttachPttInputSafety(libraryWindow);
+            libraryWindow.Show(this);
             return;
         }
         configurationLibraryWindow.Activate();
@@ -1035,40 +1039,38 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        configurationStudioWindow = new ConfigurationStudioWindow(
-            document,
-            viewModel,
-            sessionUserSettingsStore,
-            configurationLibrary,
-            configurationMaterializer,
-            studioConfigurationId,
-            section);
-        AttachPttInputSafety(configurationStudioWindow);
-        configurationStudioWindow.ReloadRequested += ReloadManagedConfigurationAsync;
-        configurationStudioWindow.Closed += (_, _) => configurationStudioWindow = null;
-        configurationStudioWindow.FitInitialBoundsToDisplay(
-            Screens.ScreenFromWindow(this) ?? Screens.Primary);
-        configurationStudioWindow.Show();
+        try
+        {
+            var studioWindow = new ConfigurationStudioWindow(
+                document,
+                viewModel,
+                sessionUserSettingsStore,
+                configurationLibrary,
+                configurationMaterializer,
+                studioConfigurationId,
+                section);
+            configurationStudioWindow = studioWindow;
+            AttachPttInputSafety(studioWindow);
+            studioWindow.ReloadRequested += ReloadManagedConfigurationAsync;
+            studioWindow.Closed += (_, _) =>
+                modelessWindows.Forget(ConfigurationStudioWindowKey, studioWindow);
+            studioWindow.FitInitialBoundsToDisplay(
+                Screens.ScreenFromWindow(this) ?? Screens.Primary);
+            studioWindow.Show();
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidDataException or
+            InvalidOperationException or ArgumentException or NotSupportedException or
+            System.Security.SecurityException or YamlDotNet.Core.YamlException)
+        {
+            configurationStudioWindow = null;
+            DesktopCrashLog.Write("Configuration Studio initialization", exception);
+            await ShowInformationAsync("Unable to open Configuration Studio", exception.Message);
+        }
     }
 
     private async ValueTask<ConfigurationDraft> CreateNewManagedStudioDraftAsync()
-    {
-        try
-        {
-            return await configurationLibrary.CreateDraftAsync("Untitled Configuration");
-        }
-        catch (ConfigurationDraftConflictException conflict)
-        {
-            bool discard = await ConfirmAsync(
-                "Unfinished configuration draft",
-                "Configuration Studio found an unfinished managed draft from an earlier session. Discard it and start a new configuration?",
-                "Discard and start new");
-            if (!discard)
-                throw new OperationCanceledException();
-            await configurationLibrary.DiscardDraftAsync(conflict.ExistingDraft.Id);
-            return await configurationLibrary.CreateDraftAsync("Untitled Configuration");
-        }
-    }
+        => await configurationCommands.CreateDraftAsync(ConfirmAsync);
 
     internal ConfigurationStudioWindow CreateConfigurationStudioForCapture(
         ConfigurationStudioSection section)
@@ -1142,23 +1144,27 @@ public sealed partial class MainWindow : Window
     private async Task ReplaceWithManagedConfigurationAsync(ConfigurationReference configuration)
     {
         await sessionHost.PrepareForReplacementAsync();
-        string path = await configurationMaterializer.MaterializeAsync(configuration);
-        MainWindowViewModel replacement = LoadSessionViewModel(path, configuration);
+        IConfigurationMaterializationLease materialization =
+            await configurationMaterializer.MaterializeAsync(configuration);
+        MainWindowViewModel replacement = LoadSessionViewModel(materialization.Path, configuration);
         if (!replacement.IsCodeplugLoaded)
         {
             string error = replacement.StatusText;
             await replacement.DisposeAsync();
+            await materialization.DisposeAsync();
             throw new InvalidDataException(error);
         }
 
-        await PublishManagedReplacementAsync(configuration, replacement);
+        await PublishManagedReplacementAsync(configuration, replacement, materialization);
     }
 
     private async Task PublishManagedReplacementAsync(
         ConfigurationReference configuration,
-        MainWindowViewModel replacement)
+        MainWindowViewModel replacement,
+        IConfigurationMaterializationLease materialization)
     {
         var transition = new ActiveConfigurationTransition(configurationLibrary);
+        IConfigurationMaterializationLease? previousMaterialization = activeMaterializationLease;
         try
         {
             await transition.PublishAsync(
@@ -1166,15 +1172,43 @@ public sealed partial class MainWindow : Window
                 _ => new ValueTask(ReplaceViewModelAsync(replacement)),
                 () => ReferenceEquals(sessionHost.ViewModel, replacement));
             activeConfiguration = configuration;
+            activeMaterializationLease = materialization;
+            if (previousMaterialization is not null)
+                await previousMaterialization.DisposeAsync();
         }
         catch
         {
             if (ReferenceEquals(sessionHost.ViewModel, replacement))
+            {
                 activeConfiguration = configuration;
+                activeMaterializationLease = materialization;
+                if (previousMaterialization is not null)
+                    await previousMaterialization.DisposeAsync();
+            }
             else
+            {
                 await replacement.DisposeAsync();
+                await materialization.DisposeAsync();
+            }
             throw;
         }
+    }
+
+    private static void HandleSessionReplacementFollowUpFailed(
+        object? sender,
+        SessionReplacementFollowUpFailure failure)
+    {
+        string operation = failure.Phase switch
+        {
+            SessionReplacementFollowUpPhase.RetiredSessionCleanup =>
+                "Retired configuration session cleanup",
+            SessionReplacementFollowUpPhase.SelectedWebStreamRestore =>
+                "Selected web-stream restore",
+            _ => "Configuration replacement follow-up"
+        };
+        DesktopCrashLog.Write(operation, failure.Exception);
+        AvaloniaStorageThreading.Invoke(() =>
+            failure.ActiveViewModel.ReportSessionReplacementFollowUpFailure(failure.Phase));
     }
 
     private async Task RefreshRecentManagedConfigurationMenuAsync()
@@ -1251,8 +1285,19 @@ public sealed partial class MainWindow : Window
     private void HandleClearBackgroundClick(object? sender, RoutedEventArgs e)
         => viewModel.ClearUserBackground();
 
-    private void HandleResetLayoutClick(object? sender, RoutedEventArgs e)
-        => viewModel.ResetLayout();
+    private async void HandleResetLayoutClick(object? sender, RoutedEventArgs e)
+    {
+        if (await ConfirmAsync(
+                "Reset widget layout",
+                "Reset all channel widget positions and lock the layout? You can undo this for eight seconds.",
+                "Reset"))
+        {
+            viewModel.ResetLayout();
+        }
+    }
+
+    private async void HandleUndoLastOperatorActionClick(object? sender, RoutedEventArgs e)
+        => await viewModel.UndoLastOperatorActionAsync();
 
     private async void HandleImportSettingsClick(object? sender, RoutedEventArgs e)
     {
@@ -1273,15 +1318,25 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            string? activeCodeplugPath = viewModel.CurrentCodeplugPath;
-            await sessionHost.PrepareForReplacementAsync();
             using IStorageFile file = files[0];
             await using Stream source = await file.OpenReadAsync();
-            viewModel.ImportSettings(source);
-            await ReplaceViewModelAsync(LoadSessionViewModel(activeCodeplugPath, activeConfiguration));
+            SettingsImportStage stage = viewModel.StageSettingsImport(source, file.Name);
+            if (!await ConfirmAsync(
+                    "Import settings",
+                    stage.Preview.SummaryText + "\n\nApply these settings to the current console?",
+                    "Continue"))
+            {
+                return;
+            }
+
+            bool acceptRecordingPolicy = await ConfirmImportedRecordingPolicyAsync(stage.Preview);
+            if (stage.Preview.RecordingPolicyWillChange && !acceptRecordingPolicy)
+                return;
+
+            await settingsTransfer.ImportAsync(stage, acceptRecordingPolicy: acceptRecordingPolicy);
             await ShowInformationAsync("Settings imported", "The imported profile has been applied to the current console.");
         }
-        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException or NotSupportedException)
         {
             await ShowInformationAsync("Unable to import settings", exception.Message);
         }
@@ -1313,10 +1368,10 @@ public sealed partial class MainWindow : Window
         if (sender is not MenuItem { Tag: string profileName })
             return;
 
-        SettingsImportPreview preview;
+        SettingsImportStage stage;
         try
         {
-            preview = viewModel.PreviewNamedSettingsProfile(profileName);
+            stage = viewModel.StageNamedSettingsProfile(profileName);
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException)
         {
@@ -1327,18 +1382,20 @@ public sealed partial class MainWindow : Window
 
         if (!await ConfirmAsync(
                 "Load settings profile",
-                $"{preview.SummaryText}\n\nApply operator settings from '{profileName}'? The active codeplug and current channel selection will remain unchanged.",
-                "Apply"))
+                $"{stage.Preview.SummaryText}\n\nApply operator settings from '{profileName}'? The active codeplug and current channel selection will remain unchanged.",
+                "Continue"))
         {
             return;
         }
 
-        string? activeCodeplugPath = viewModel.CurrentCodeplugPath;
+        bool acceptRecordingPolicy = await ConfirmImportedRecordingPolicyAsync(stage.Preview);
+        if (stage.Preview.RecordingPolicyWillChange && !acceptRecordingPolicy)
+            return;
+
         try
         {
-            await sessionHost.PrepareForReplacementAsync();
-            viewModel.ImportNamedSettingsProfile(profileName, SettingsImportScope.OperatorState);
-            await ReplaceViewModelAsync(LoadSessionViewModel(activeCodeplugPath, activeConfiguration));
+            await settingsTransfer.ImportAsync(
+                stage, SettingsImportScope.OperatorState, acceptRecordingPolicy, profileName);
             await ShowInformationAsync("Settings profile loaded", $"Applied operator settings from '{profileName}'.");
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException)
@@ -1367,6 +1424,30 @@ public sealed partial class MainWindow : Window
         catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
         {
             await ShowInformationAsync("Unable to delete settings profile", exception.Message);
+        }
+    }
+
+    private async Task<bool> ConfirmImportedRecordingPolicyAsync(SettingsImportPreview preview)
+    {
+        if (!preview.RecordingPolicyWillChange)
+            return false;
+
+        try
+        {
+            RecordingPolicyImpact impact = await viewModel.PreviewRecordingPolicyAsync(
+                preview.RecordingRootPath,
+                preview.RecordingRetentionDays);
+            return await ConfirmAsync(
+                "Confirm imported recording policy",
+                impact.SummaryText +
+                "\n\nThe imported recording location or retention differs from the current policy. " +
+                "Apply it and prune the listed recordings?",
+                impact.CandidateCount == 0 ? "Apply policy" : $"Apply and delete {impact.CandidateCount:N0}");
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            await ShowInformationAsync("Unable to preview imported recording policy", exception.Message);
+            return false;
         }
     }
 
@@ -1413,12 +1494,9 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        string? activeCodeplugPath = viewModel.CurrentCodeplugPath;
         try
         {
-            await sessionHost.PrepareForReplacementAsync();
-            viewModel.ResetSettings();
-            await ReplaceViewModelAsync(LoadSessionViewModel(activeCodeplugPath, activeConfiguration));
+            await settingsTransfer.ResetAsync();
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -1426,52 +1504,51 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private ISettingsTransferSession CaptureSettingsTransferSession()
+    {
+        MainWindowViewModel owner = viewModel;
+        string? path = owner.CurrentCodeplugPath;
+        ConfigurationReference? configuration = activeConfiguration;
+        return new DesktopSettingsTransferSession(
+            owner, sessionHost,
+            () => LoadSessionViewModel(path, configuration),
+            ReplaceViewModelAsync);
+    }
+
     internal async Task ReplaceViewModelAsync(MainWindowViewModel replacement)
     {
-        await channelPtt.ReleaseAllAsync();
+        await ReleaseAllChannelPttAsync();
         await AvaloniaStorageThreading.InvokeAsync(() => listRenderer.DetachAsync().AsTask());
-        await sessionHost.ReplaceAsync(replacement);
+        try
+        {
+            await sessionHost.ReplaceAsync(replacement);
+        }
+        catch
+        {
+            AvaloniaStorageThreading.Invoke(() =>
+            {
+                listRenderer.Attach(
+                    sessionHost.ApplicationSession,
+                    channelPtt,
+                    () => viewModel.TogglePttMode);
+                channelRenderer.Apply(Bounds.Width);
+            });
+            throw;
+        }
         AvaloniaStorageThreading.Invoke(() =>
         {
             listRenderer.Attach(sessionHost.ApplicationSession, channelPtt, () => viewModel.TogglePttMode);
-            ApplyChannelRenderer(Bounds.Width, releasePtt: false);
+            channelRenderer.Apply(Bounds.Width);
             RefreshNamedSettingsProfileMenus();
         });
         await RefreshRecentManagedConfigurationMenuAsync();
     }
 
     private void CloseModelessViewModelWindows()
-    {
-        ConfigurationStudioWindow? studio = configurationStudioWindow;
-        configurationStudioWindow = null;
-        studio?.CloseForSessionReplacement();
-
-        OperatorToolsWindow? tools = operatorToolsWindow;
-        operatorToolsWindow = null;
-        tools?.Close();
-
-        DebugLogWindow? logs = debugLogWindow;
-        debugLogWindow = null;
-        logs?.Close();
-
-    }
+        => modelessWindows.CloseSessionBound();
 
     private void CloseAllModelessWindows()
-    {
-        CloseModelessViewModelWindows();
-
-        DocumentationWindow? documentation = documentationWindow;
-        documentationWindow = null;
-        documentation?.Close();
-
-        AboutWindow? about = aboutWindow;
-        aboutWindow = null;
-        about?.Close();
-
-        ConfigurationLibraryWindow? library = configurationLibraryWindow;
-        configurationLibraryWindow = null;
-        library?.Close();
-    }
+        => modelessWindows.CloseAll();
 
     private Task<bool> ConfirmAsync(string title, string message, string confirmLabel = "Reset")
         => AvaloniaStorageThreading.InvokeAsync(
@@ -1533,13 +1610,25 @@ public sealed partial class MainWindow : Window
         await window.ShowDialog(this);
     }
 
+    MainWindowViewModel IOperatorCommandSurface.Session => viewModel;
+    Task IOperatorCommandSurface.OpenSubscriberCommandAsync(P25SubscriberCommand command)
+        => OpenSubscriberCommandAsync(command);
+    void IOperatorCommandSurface.OpenTool(OperatorToolSection section) => OpenOperatorTools(section);
+    void IOperatorCommandSurface.ShowDebugLogs() => ShowDebugLogs();
+    void IOperatorCommandSurface.ToggleEngineeringHealth()
+        => SetEngineeringHealthVisible(!operatorViewSettings.EngineeringHealthVisible);
+    void IOperatorCommandSurface.ShowDocumentation() => ShowDocumentation();
+    void IOperatorCommandSurface.ShowAbout() => ShowAbout();
+
     private void ShowDebugLogs()
     {
         if (debugLogWindow is null)
         {
-            debugLogWindow = new DebugLogWindow(viewModel);
-            AttachPttInputSafety(debugLogWindow);
-            debugLogWindow.Closed += (_, _) => debugLogWindow = null;
+            var logsWindow = new DebugLogWindow(viewModel);
+            debugLogWindow = logsWindow;
+            AttachPttInputSafety(logsWindow);
+            logsWindow.Closed += (_, _) =>
+                modelessWindows.Forget(DebugLogWindowKey, logsWindow);
         }
 
         if (!debugLogWindow.IsVisible)
@@ -1604,9 +1693,11 @@ public sealed partial class MainWindow : Window
     {
         if (operatorToolsWindow is null)
         {
-            operatorToolsWindow = new OperatorToolsWindow(viewModel, section, pttKeyRouter);
-            operatorToolsWindow.Closed += (_, _) => operatorToolsWindow = null;
-            operatorToolsWindow.Show();
+            var toolsWindow = new OperatorToolsWindow(viewModel, section, pttKeyRouter);
+            operatorToolsWindow = toolsWindow;
+            toolsWindow.Closed += (_, _) =>
+                modelessWindows.Forget(OperatorToolsWindowKey, toolsWindow);
+            toolsWindow.Show();
             return;
         }
 
@@ -1618,9 +1709,11 @@ public sealed partial class MainWindow : Window
     {
         if (documentationWindow is null)
         {
-            documentationWindow = new DocumentationWindow();
-            AttachPttInputSafety(documentationWindow);
-            documentationWindow.Closed += (_, _) => documentationWindow = null;
+            var docsWindow = new DocumentationWindow();
+            documentationWindow = docsWindow;
+            AttachPttInputSafety(docsWindow);
+            docsWindow.Closed += (_, _) =>
+                modelessWindows.Forget(DocumentationWindowKey, docsWindow);
         }
 
         if (!documentationWindow.IsVisible)
@@ -1632,9 +1725,11 @@ public sealed partial class MainWindow : Window
     {
         if (aboutWindow is null)
         {
-            aboutWindow = new AboutWindow();
-            AttachPttInputSafety(aboutWindow);
-            aboutWindow.Closed += (_, _) => aboutWindow = null;
+            var informationWindow = new AboutWindow();
+            aboutWindow = informationWindow;
+            AttachPttInputSafety(informationWindow);
+            informationWindow.Closed += (_, _) =>
+                modelessWindows.Forget(AboutWindowKey, informationWindow);
         }
 
         if (!aboutWindow.IsVisible)
@@ -1728,6 +1823,41 @@ public sealed partial class MainWindow : Window
         viewModel.DismissCodeplugDiagnostics();
     }
 
+    private void HandleToolbarToneContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        if (sender is not Control { Tag: BuiltInAlertToneViewModel button } control)
+            return;
+        var reset = new MenuItem { Header = $"Restore ALERT {(int)button.Tone}" };
+        reset.Click += (_, _) => viewModel.AssignToolbarTone(button, null);
+        var alerts = CreateAssignmentMenu("Saved Alerts", viewModel.TonePresets.Select(preset =>
+            CreateChoice(preset.Name, false, () => viewModel.AssignToolbarTone(button, preset))));
+        var customAlerts = CreateAssignmentMenu("Custom Alerts", viewModel.AlertTones.Select(alert =>
+            CreateChoice(alert.Name, true, () => viewModel.AssignToolbarCustomAlert(button, alert))));
+        var menu = new ContextMenu { ItemsSource = new Control[] { alerts, customAlerts, new Separator(), reset } };
+        menu.Closed += (_, _) => control.ContextMenu = null;
+        control.ContextMenu = menu;
+        menu.Open(control);
+        e.Handled = true;
+
+        MenuItem CreateChoice(string name, bool isCustomAudio, Action assign)
+        {
+            var choice = new MenuItem
+            {
+                Header = name,
+                ToggleType = MenuItemToggleType.Radio,
+                IsChecked = button.AssignedPresetName == name && button.IsCustomAudio == isCustomAudio
+            };
+            choice.Click += (_, _) => assign();
+            return choice;
+        }
+
+        static MenuItem CreateAssignmentMenu(string heading, IEnumerable<MenuItem> items)
+        {
+            MenuItem[] choices = items.ToArray();
+            return new MenuItem { Header = heading, ItemsSource = choices, IsEnabled = choices.Length > 0 };
+        }
+    }
+
     private async void HandleToolbarAlertToneClick(object? sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: BuiltInAlertToneViewModel tone })
@@ -1739,7 +1869,7 @@ public sealed partial class MainWindow : Window
         if (sender is not Control { Tag: string commandId })
             return;
 
-        await operatorCommandCatalog.ExecuteAsync(commandId).ConfigureAwait(true);
+        await operatorCommands.ExecuteAsync(commandId).ConfigureAwait(true);
     }
 
     private async void HandlePlayCallHistoryRecordingClick(object? sender, RoutedEventArgs e)
@@ -1791,8 +1921,11 @@ public sealed partial class MainWindow : Window
 
     private void ConfigureTransientScrollBars(ScrollViewer? viewer)
     {
-        if (viewer is null || !configuredScrollViewers.Add(viewer))
+        if (viewer is null || configuredScrollViewers.ContainsKey(viewer))
             return;
+
+        configuredScrollViewers.Add(viewer, []);
+        viewer.TemplateApplied += (_, _) => CacheScrollBars(viewer);
 
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
         timer.Tick += (_, _) =>
@@ -1808,23 +1941,23 @@ public sealed partial class MainWindow : Window
         };
         scrollBarTimers.Add(timer);
         Dispatcher.UIThread.Post(
-            () => SetScrollBarOpacity(viewer, 0),
+            () => CacheScrollBars(viewer),
             DispatcherPriority.Loaded);
     }
 
-    private void ConfigureTransientChannelScrollBars()
+    private void CacheScrollBars(ScrollViewer viewer)
     {
-        foreach (ScrollViewer viewer in this.GetVisualDescendants()
-                     .OfType<ScrollViewer>()
-                     .Where(viewer => viewer.Name == "channelScrollViewer"))
-        {
-            ConfigureTransientScrollBars(viewer);
-        }
+        ScrollBar[] scrollBars = viewer.GetVisualDescendants().OfType<ScrollBar>().ToArray();
+        configuredScrollViewers[viewer] = scrollBars;
+        foreach (ScrollBar scrollBar in scrollBars)
+            scrollBar.Opacity = 0;
     }
 
-    private static void SetScrollBarOpacity(ScrollViewer viewer, double opacity)
+    private void SetScrollBarOpacity(ScrollViewer viewer, double opacity)
     {
-        foreach (ScrollBar scrollBar in viewer.GetVisualDescendants().OfType<ScrollBar>())
+        if (!configuredScrollViewers.TryGetValue(viewer, out ScrollBar[]? scrollBars))
+            return;
+        foreach (ScrollBar scrollBar in scrollBars)
             scrollBar.Opacity = opacity;
     }
 
@@ -1894,12 +2027,6 @@ public sealed partial class MainWindow : Window
         {
             await viewModel.PlayRecordingAsync(metadata);
         }
-    }
-
-    private async void HandleStopRecordingClick(object? sender, RoutedEventArgs e)
-    {
-        if (DataContext is MainWindowViewModel viewModel)
-            await viewModel.StopRecordingPlaybackAsync();
     }
 
     private void HandleSaveIgnoredSubscribersClick(object? sender, RoutedEventArgs e)

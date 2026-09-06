@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 using DvmConsole.Presentation;
@@ -78,7 +81,10 @@ internal sealed class DesktopConfigurationStudioSavePlanner(
         }
 
         UserSettings settings = settingsStore.Load();
-        viewModel.ApplyOperatorStateForSave(settings, fullDestination);
+        bool identityChanged = !FileSystemPathIdentity.AreEquivalent(
+            viewModel.DocumentIdentity,
+            fullDestination);
+        viewModel.ApplyOperatorStateForSave(settings, fullDestination, identityChanged);
         UserSettingsSnapshot settingsSnapshot = settingsStore.CaptureSnapshot(settings);
         files.Add(new ConfigurationFileChange(
             settingsStore.Path,

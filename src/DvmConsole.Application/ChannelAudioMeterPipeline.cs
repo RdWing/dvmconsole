@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Application;
 
 internal readonly record struct ChannelAudioMeterUpdate(
@@ -18,6 +21,7 @@ internal sealed class ChannelAudioMeterPipeline
     private const int VoiceSampleRate = 8_000;
     private const int SamplesPerRefresh = VoiceSampleRate * RefreshIntervalMilliseconds / 1_000;
     private const int MaximumBufferedSamples = VoiceSampleRate * 240 / 1_000;
+    private const int MaximumTransmitBufferedSamples = SamplesPerRefresh;
     private const double MinimumVisibleLevel = 0.25;
     private static readonly double ReleaseMultiplier = Math.Pow(
         0.1,
@@ -25,6 +29,8 @@ internal sealed class ChannelAudioMeterPipeline
 
     private readonly object sync = new();
     private readonly Dictionary<MeterKey, MeterState> states = [];
+    private readonly List<ChannelAudioMeterUpdate> updatesScratch = [];
+    private readonly List<MeterKey> completedScratch = [];
     private readonly TimeProvider timeProvider;
 
     public ChannelAudioMeterPipeline()
@@ -63,7 +69,9 @@ internal sealed class ChannelAudioMeterPipeline
                 sample,
                 samples.Length,
                 checked(timeProvider.GetTimestamp() + delayTicks));
-            state.TrimToMaximum(MaximumBufferedSamples);
+            state.TrimToMaximum(direction == ChannelAudioDirection.Transmit
+                ? MaximumTransmitBufferedSamples
+                : MaximumBufferedSamples);
             return wasIdle;
         }
     }
@@ -84,8 +92,8 @@ internal sealed class ChannelAudioMeterPipeline
             if (states.Count == 0)
                 return [];
 
-            var updates = new List<ChannelAudioMeterUpdate>(states.Count);
-            List<MeterKey>? completed = null;
+            updatesScratch.Clear();
+            completedScratch.Clear();
             long now = timeProvider.GetTimestamp();
             foreach (KeyValuePair<MeterKey, MeterState> pair in states)
             {
@@ -97,7 +105,7 @@ internal sealed class ChannelAudioMeterPipeline
                     out bool hadSamples);
                 state.Apply(target, now, timeProvider.TimestampFrequency);
 
-                updates.Add(new ChannelAudioMeterUpdate(
+                updatesScratch.Add(new ChannelAudioMeterUpdate(
                     key.ChannelId,
                     key.StreamId,
                     key.Direction,
@@ -109,17 +117,15 @@ internal sealed class ChannelAudioMeterPipeline
                     state.DisplayPeakLevel == 0 &&
                     state.BufferedSamples == 0)
                 {
-                    (completed ??= []).Add(pair.Key);
+                    completedScratch.Add(pair.Key);
                 }
             }
 
-            if (completed is not null)
-            {
-                foreach (MeterKey key in completed)
-                    states.Remove(key);
-            }
+            foreach (MeterKey key in completedScratch)
+                states.Remove(key);
 
-            return updates;
+            // The returned view remains valid until the next Advance call.
+            return updatesScratch;
         }
     }
 
@@ -140,6 +146,7 @@ internal sealed class ChannelAudioMeterPipeline
     private sealed class MeterState
     {
         private readonly Queue<MeterSegment> segments = [];
+        private int headConsumedSamples;
         private long peakHoldUntil;
 
         public int BufferedSamples { get; private set; }
@@ -157,13 +164,17 @@ internal sealed class ChannelAudioMeterPipeline
 
         public void TrimToMaximum(int maximumSamples)
         {
-            while (BufferedSamples > maximumSamples && segments.TryPeek(out MeterSegment? segment))
+            while (BufferedSamples > maximumSamples && segments.TryPeek(out MeterSegment segment))
             {
-                int count = Math.Min(BufferedSamples - maximumSamples, segment.RemainingSamples);
-                segment.RemainingSamples -= count;
+                int remaining = segment.SampleCount - headConsumedSamples;
+                int count = Math.Min(BufferedSamples - maximumSamples, remaining);
+                headConsumedSamples += count;
                 BufferedSamples -= count;
-                if (segment.RemainingSamples == 0)
+                if (headConsumedSamples == segment.SampleCount)
+                {
                     segments.Dequeue();
+                    headConsumedSamples = 0;
+                }
             }
         }
 
@@ -176,20 +187,25 @@ internal sealed class ChannelAudioMeterPipeline
             int consumedSamples = 0;
             double weightedMeanSquare = 0;
             double peakAmplitude = 0;
-            while (remainingBudget > 0 && segments.TryPeek(out MeterSegment? segment))
+            while (remainingBudget > 0 && segments.TryPeek(out MeterSegment segment))
             {
                 if (segment.AvailableAtTimestamp > now)
                     break;
 
-                int count = Math.Min(remainingBudget, segment.RemainingSamples);
+                int count = Math.Min(
+                    remainingBudget,
+                    segment.SampleCount - headConsumedSamples);
                 weightedMeanSquare += segment.Sample.MeanSquare * count;
                 peakAmplitude = Math.Max(peakAmplitude, segment.Sample.PeakAmplitude);
                 consumedSamples += count;
                 remainingBudget -= count;
                 BufferedSamples -= count;
-                segment.RemainingSamples -= count;
-                if (segment.RemainingSamples == 0)
+                headConsumedSamples += count;
+                if (headConsumedSamples == segment.SampleCount)
+                {
                     segments.Dequeue();
+                    headConsumedSamples = 0;
+                }
             }
 
             hadSamples = consumedSamples > 0;
@@ -217,13 +233,49 @@ internal sealed class ChannelAudioMeterPipeline
         }
     }
 
-    private sealed class MeterSegment(
+    private readonly record struct MeterSegment(
         ChannelAudioMeterSample sample,
         int sampleCount,
         long availableAtTimestamp)
     {
         public ChannelAudioMeterSample Sample { get; } = sample;
-        public int RemainingSamples { get; set; } = sampleCount;
+        public int SampleCount { get; } = sampleCount;
         public long AvailableAtTimestamp { get; } = availableAtTimestamp;
+    }
+}
+
+// Reuses its dictionary and output list across UI ticks. The returned view is
+// callback-scoped and remains valid only until the next CoalesceReceive call.
+internal sealed class ChannelAudioMeterUpdateCoalescer
+{
+    private readonly Dictionary<ChannelId, int> indices = [];
+    private readonly List<ChannelAudioMeterUpdate> coalesced = [];
+
+    public IReadOnlyList<ChannelAudioMeterUpdate> CoalesceReceive(
+        IReadOnlyList<ChannelAudioMeterUpdate> updates)
+    {
+        ArgumentNullException.ThrowIfNull(updates);
+        indices.Clear();
+        coalesced.Clear();
+        for (int updateIndex = 0; updateIndex < updates.Count; updateIndex++)
+        {
+            ChannelAudioMeterUpdate update = updates[updateIndex];
+            if (update.Direction != ChannelAudioDirection.Receive)
+                continue;
+            if (!indices.TryGetValue(update.ChannelId, out int index))
+            {
+                indices.Add(update.ChannelId, coalesced.Count);
+                coalesced.Add(update);
+                continue;
+            }
+
+            ChannelAudioMeterUpdate current = coalesced[index];
+            coalesced[index] = current with
+            {
+                Level = Math.Max(current.Level, update.Level),
+                PeakLevel = Math.Max(current.PeakLevel, update.PeakLevel)
+            };
+        }
+        return coalesced;
     }
 }

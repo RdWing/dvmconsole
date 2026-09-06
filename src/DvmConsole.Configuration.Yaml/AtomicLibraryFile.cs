@@ -1,5 +1,10 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
+using DvmConsole.Core.IO;
+using DvmConsole.Core.Settings;
 
 namespace DvmConsole.Configuration.Yaml;
 
@@ -7,6 +12,11 @@ internal static class AtomicLibraryFile
 {
     public static void Recover<T>(string path, JsonTypeInfo<T> typeInfo)
     {
+        if (File.Exists(path) && new FileInfo(path).Length > ManagedResourceLimits.ManagedMetadataBytes)
+        {
+            throw new InvalidDataException(
+                $"Managed configuration metadata exceeds the {ManagedResourceLimits.ManagedMetadataBytes / (1024 * 1024)} MiB safety limit.");
+        }
         string pending = PendingPath(path);
         string backup = BackupPath(path);
 
@@ -31,8 +41,11 @@ internal static class AtomicLibraryFile
 
     public static T Read<T>(string path, JsonTypeInfo<T> typeInfo)
     {
-        using FileStream stream = File.OpenRead(path);
-        return JsonSerializer.Deserialize(stream, typeInfo)
+        byte[] content = BoundedResourceReader.ReadFile(
+            path,
+            ManagedResourceLimits.ManagedMetadataBytes,
+            "Managed configuration metadata");
+        return JsonSerializer.Deserialize(content, typeInfo)
             ?? throw new InvalidDataException($"Managed configuration metadata '{path}' was empty.");
     }
 
@@ -41,7 +54,7 @@ internal static class AtomicLibraryFile
         string? parent = Path.GetDirectoryName(path);
         if (string.IsNullOrWhiteSpace(parent))
             throw new InvalidOperationException($"Cannot resolve metadata parent for '{path}'.");
-        Directory.CreateDirectory(parent);
+        AppDataFileProtection.EnsureDirectory(parent);
 
         string pending = PendingPath(path);
         string backup = BackupPath(path);
@@ -56,10 +69,12 @@ internal static class AtomicLibraryFile
             JsonSerializer.Serialize(stream, value, typeInfo);
             stream.Flush(flushToDisk: true);
         }
+        AppDataFileProtection.EnsureFile(pending);
 
         if (File.Exists(path))
             File.Copy(path, backup, overwrite: true);
         File.Move(pending, path, overwrite: true);
+        AppDataFileProtection.EnsureFile(path);
         DeleteIfExists(backup);
     }
 

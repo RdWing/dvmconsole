@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -9,6 +12,29 @@ namespace DvmConsole.Fne.Tests;
 
 public sealed class FneProtocolTests
 {
+    [Fact]
+    public void AotSafeMemsetFillsOnlyTheRequestedPrefix()
+    {
+        byte[] buffer = [1, 2, 3, 4, 5];
+
+        FneUtils.Memset(buffer, 0xA5, 3);
+
+        Assert.Equal(new byte[] { 0xA5, 0xA5, 0xA5, 4, 5 }, buffer);
+    }
+
+    [Fact]
+    public void AotSafePrimitiveConversionsPreservePinnedFneBehavior()
+    {
+        Assert.Equal((ushort)0x3412, FneUtils.DoReverseEndian((ushort)0x1234));
+        Assert.Equal(0x78563412U, FneUtils.DoReverseEndian(0x12345678U));
+        Assert.Equal(0xEFCDAB8967452301UL, FneUtils.DoReverseEndian(0x0123456789ABCDEFUL));
+        Assert.Equal(unchecked((int)0x78563412), FneUtils.DoReverseEndian(0x12345678));
+
+        byte[] text = Enumerable.Repeat((byte)0xFF, 6).ToArray();
+        FneUtils.StringToBytes("NEO", text, offset: 1, count: 5);
+        Assert.Equal([0xFF, (byte)'N', (byte)'E', (byte)'O', 0, 0], text);
+    }
+
     [Fact]
     public void LoginRetryObservationUsesTheOutboundProtocolTag()
     {
@@ -338,6 +364,48 @@ public sealed class FneProtocolTests
             CreateModifyKeyPayload(keyLength: byte.MaxValue))));
     }
 
+    [Fact]
+    public void EveryHandledOpcodeRejectsTruncationWithoutThrowing()
+    {
+        var handledFrames = new List<byte[]>
+        {
+            CreateFrame(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_DMR, new byte[16]),
+            CreateFrame(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_P25, new byte[23]),
+            CreateFrame(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_NXDN, new byte[16]),
+            CreateFrame(Constants.NET_FUNC_PROTOCOL, Constants.NET_PROTOCOL_SUBFUNC_ANALOG, new byte[16]),
+            CreateFrame(Constants.NET_FUNC_MASTER, Constants.NET_MASTER_SUBFUNC_ACTIVE_TGS, new byte[11]),
+            CreateFrame(Constants.NET_FUNC_MASTER, Constants.NET_MASTER_SUBFUNC_DEACTIVE_TGS, new byte[11]),
+            CreateFrame(Constants.NET_FUNC_MASTER, Constants.NET_MASTER_SUBFUNC_HA_PARAMS, new byte[10]),
+            CreateFrame(Constants.NET_FUNC_INCALL_CTRL, Constants.NET_PROTOCOL_SUBFUNC_DMR, new byte[15]),
+            CreateFrame(Constants.NET_FUNC_INCALL_CTRL, Constants.NET_PROTOCOL_SUBFUNC_P25, new byte[14]),
+            CreateFrame(Constants.NET_FUNC_INCALL_CTRL, Constants.NET_PROTOCOL_SUBFUNC_NXDN, new byte[14]),
+            CreateFrame(Constants.NET_FUNC_KEY_RSP, Constants.NET_SUBFUNC_NOP, new byte[12]),
+            CreateFrame(Constants.NET_FUNC_ACK, Constants.NET_SUBFUNC_NOP, new byte[10]),
+            CreateFrame(Constants.NET_FUNC_NAK, Constants.NET_SUBFUNC_NOP, new byte[12]),
+            CreateFrame(Constants.NET_FUNC_RADIO_ALIAS_SYNC, Constants.NET_SUBFUNC_NOP, new byte[16])
+        };
+
+        foreach (byte[] complete in handledFrames)
+        {
+            Assert.True(FneInboundFramePolicy.ShouldDeliverTraffic(complete));
+            for (int length = 0; length < complete.Length; length++)
+            {
+                byte[] truncated = complete.AsSpan(0, length).ToArray();
+                Exception? failure = Record.Exception(() =>
+                    FneInboundFramePolicy.ShouldDeliverTraffic(truncated));
+                Assert.Null(failure);
+                Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(truncated));
+            }
+
+            foreach (uint declaredLength in new[] { 0U, uint.MaxValue, (uint)complete.Length + 1U })
+            {
+                byte[] malformed = complete.ToArray();
+                FneUtils.WriteBytes(declaredLength, ref malformed, 28);
+                Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(malformed));
+            }
+        }
+    }
+
     private static byte[] CreateModifyKeyPayload(byte keyLength)
     {
         byte[] payload = new byte[34 + keyLength];
@@ -371,6 +439,13 @@ public sealed class FneProtocolTests
             Constants.NET_FUNC_MASTER,
             Constants.NET_MASTER_SUBFUNC_DEACTIVE_TGS,
             emptyAnnouncement)));
+        Assert.True(FneInboundFramePolicy.IsApplicationOwnedTalkgroupAnnouncement(
+            CreateFrame(
+                Constants.NET_FUNC_MASTER,
+                Constants.NET_MASTER_SUBFUNC_ACTIVE_TGS,
+                emptyAnnouncement)));
+        Assert.False(FneInboundFramePolicy.IsApplicationOwnedTalkgroupAnnouncement(
+            CreateFrame(Constants.NET_FUNC_ACK, Constants.NET_SUBFUNC_NOP, new byte[10])));
 
         byte[] truncatedAnnouncement = new byte[11];
         FneUtils.WriteBytes(1U, ref truncatedAnnouncement, 6);
@@ -378,6 +453,13 @@ public sealed class FneProtocolTests
             Constants.NET_FUNC_MASTER,
             Constants.NET_MASTER_SUBFUNC_ACTIVE_TGS,
             truncatedAnnouncement)));
+
+        byte[] excessiveAnnouncement = new byte[11 + (4097 * 5)];
+        FneUtils.WriteBytes(4097U, ref excessiveAnnouncement, 6);
+        Assert.False(FneInboundFramePolicy.ShouldDeliverTraffic(CreateFrame(
+            Constants.NET_FUNC_MASTER,
+            Constants.NET_MASTER_SUBFUNC_ACTIVE_TGS,
+            excessiveAnnouncement)));
 
         byte[] payload = new byte[21];
         FneUtils.WriteBytes(2U, ref payload, 6);

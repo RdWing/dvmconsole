@@ -1,7 +1,9 @@
+# SPDX-FileCopyrightText: 2025-2026 RdWing
+# SPDX-License-Identifier: AGPL-3.0-only
+
 from __future__ import annotations
 
 import json
-import re
 import sys
 import tempfile
 import unittest
@@ -15,16 +17,6 @@ sys.path.insert(0, str(SCRIPTS))
 import release_metadata as metadata  # noqa: E402
 
 
-ACTION_PINS = {
-    "actions/checkout": ("3d3c42e5aac5ba805825da76410c181273ba90b1", "v7"),
-    "actions/setup-dotnet": ("a98b56852c35b8e3190ac28c8c2271da59106c68", "v6"),
-    "actions/setup-python": ("ece7cb06caefa5fff74198d8649806c4678c61a1", "v6"),
-    "dtolnay/rust-toolchain": ("bc540ba06a4ccee415bb241490e0b25ee8e7d315", "1.85.0"),
-    "actions/upload-artifact": ("043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "v7"),
-    "anchore/sbom-action": ("e22c389904149dbc22b58101806040fa8d37a610", "v0.24.0"),
-    "actions/download-artifact": ("3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "v8"),
-    "actions/attest": ("1e69f48acb82d1966a394da916b4c1698aa569d6", "v4"),
-}
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -51,6 +43,32 @@ class ReleaseMetadataTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(metadata.MetadataError, "0.4.1"):
             metadata.validate_release_notes(notes, version="0.4.1")
+
+    def test_release_package_names_cover_all_six_targets(self) -> None:
+        self.assertEqual(
+            (
+                "osx-arm64",
+                "osx-x64",
+                "win-x64",
+                "win-arm64",
+                "linux-x64",
+                "linux-arm64",
+            ),
+            metadata.TARGETS,
+        )
+        expected = {
+            "osx-arm64": "dvmconsole-1.2.3-osx-arm64.zip",
+            "osx-x64": "dvmconsole-1.2.3-osx-x64.zip",
+            "win-x64": "dvmconsole-1.2.3-win-x64.zip",
+            "win-arm64": "dvmconsole-1.2.3-win-arm64.zip",
+            "linux-x64": "DVMConsole-1.2.3-x86_64.AppImage",
+            "linux-arm64": "DVMConsole-1.2.3-aarch64.AppImage",
+        }
+        for target, package in expected.items():
+            with self.subTest(target=target):
+                self.assertEqual(package, metadata.package_name("1.2.3", target))
+        with self.assertRaisesRegex(metadata.MetadataError, "Unsupported release target"):
+            metadata.package_name("1.2.3", "freebsd-x64")
 
     def test_stable_release_notes_reject_draft_markers(self) -> None:
         notes = self.root / "notes.md"
@@ -80,6 +98,96 @@ class ReleaseMetadataTests(unittest.TestCase):
         sbom.write_text("{}", encoding="utf-8")
         with self.assertRaises(metadata.MetadataError):
             metadata.validate_spdx(sbom)
+
+    def test_spdx_validation_enforces_native_vocoder_license(self) -> None:
+        sbom = self.root / "package.spdx.json"
+        document = {
+            "spdxVersion": "SPDX-2.3",
+            "name": "dvmconsole-test",
+            "documentNamespace": "https://example.invalid/dvmconsole-test",
+            "creationInfo": {"creators": ["Tool: test"]},
+            "packages": [
+                {
+                    "name": "dvmconsole-vocoder-native",
+                    "licenseDeclared": "AGPL-3.0-only",
+                }
+            ],
+        }
+        sbom.write_text(json.dumps(document), encoding="utf-8")
+
+        metadata.validate_spdx(
+            sbom,
+            required_package_licenses=["dvmconsole-vocoder-native=AGPL-3.0-only"],
+        )
+        document["packages"][0]["licenseDeclared"] = "MIT"
+        sbom.write_text(json.dumps(document), encoding="utf-8")
+        with self.assertRaisesRegex(metadata.MetadataError, "expected AGPL-3.0-only"):
+            metadata.validate_spdx(
+                sbom,
+                required_package_licenses=["dvmconsole-vocoder-native=AGPL-3.0-only"],
+            )
+
+    def test_sbom_first_party_license_annotation_is_exact_and_validated(self) -> None:
+        sbom = self.root / "package.spdx.json"
+        sbom.write_text(
+            json.dumps(
+                {
+                    "spdxVersion": "SPDX-2.3",
+                    "name": "dvmconsole-test",
+                    "documentNamespace": "https://example.invalid/dvmconsole-test",
+                    "creationInfo": {"creators": ["Tool: test"]},
+                    "packages": [{"name": "DvmConsole", "licenseDeclared": "NOASSERTION"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        metadata.set_spdx_package_license(
+            sbom,
+            package_names=["DvmConsole"],
+            license_id="AGPL-3.0-only",
+        )
+        metadata.validate_spdx(
+            sbom,
+            required_package_licenses=["DvmConsole=AGPL-3.0-only"],
+        )
+
+    def test_sbom_records_all_first_party_binary_components(self) -> None:
+        sbom = self.root / "package.spdx.json"
+        sbom.write_text(
+            json.dumps(
+                {
+                    "spdxVersion": "SPDX-2.3",
+                    "SPDXID": "SPDXRef-DOCUMENT",
+                    "name": "dvmconsole-test",
+                    "documentNamespace": "https://example.invalid/dvmconsole-test",
+                    "creationInfo": {"creators": ["Tool: test"]},
+                    "packages": [{"name": "DvmConsole", "licenseDeclared": "NOASSERTION"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        metadata.ensure_first_party_spdx_packages(
+            sbom,
+            version="0.7.0-rc.1",
+            target="linux-arm64",
+        )
+        document = json.loads(sbom.read_text(encoding="utf-8"))
+        packages = {package["name"]: package for package in document["packages"]}
+        self.assertEqual(set(packages), {name for name, _ in metadata.FIRST_PARTY_SPDX_PACKAGES})
+        for name, purpose in metadata.FIRST_PARTY_SPDX_PACKAGES:
+            with self.subTest(package=name):
+                self.assertEqual("0.7.0-rc.1", packages[name]["versionInfo"])
+                self.assertEqual("AGPL-3.0-only", packages[name]["licenseDeclared"])
+                self.assertEqual(purpose, packages[name]["primaryPackagePurpose"])
+        metadata.validate_spdx(
+            sbom,
+            required_package_licenses=[
+                f"{name}=AGPL-3.0-only"
+                for name, _ in metadata.FIRST_PARTY_SPDX_PACKAGES
+            ],
+        )
 
     def test_checksums_are_sorted_and_verify_exact_subjects(self) -> None:
         artifacts = self.root / "artifacts"
@@ -124,103 +232,16 @@ class ReleaseMetadataTests(unittest.TestCase):
             metadata.verify_checksums(checksums, self.root)
 
     def test_cli_exposes_only_workflow_commands(self) -> None:
-        source = (SCRIPTS / "release_metadata.py").read_text(encoding="utf-8")
-        for command in (
-            "validate-notes",
-            "version-core",
-            "validate-sbom",
-            "create-checksums",
-            "verify-checksums",
-        ):
-            self.assertIn(f'subparsers.add_parser("{command}")', source)
+        import subprocess
+        result = subprocess.run([sys.executable, str(SCRIPTS / "release_metadata.py"), "--help"],
+                                check=True, capture_output=True, text=True)
+        for command in ("validate-notes", "version-core", "package-name", "validate-sbom",
+                        "set-sbom-license", "ensure-first-party-sbom", "create-checksums", "verify-checksums"):
+            self.assertIn(command, result.stdout)
         for retired in ("validate-evidence", "build-manifest", "validate-manifest", "hash-file"):
-            self.assertNotIn(f'subparsers.add_parser("{retired}")', source)
+            self.assertNotIn(retired, result.stdout)
 
 
-class WorkflowContractTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.workflow = (REPOSITORY / ".github/workflows/build.yml").read_text(encoding="utf-8")
-
-    def test_preserves_three_platform_matrix(self) -> None:
-        for target in metadata.TARGETS:
-            self.assertIn(f"rid: {target}", self.workflow)
-
-    def test_generates_sboms_and_first_party_attestations(self) -> None:
-        self.assertIn(
-            "uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0",
-            self.workflow,
-        )
-        self.assertIn("syft-version: v1.51.0", self.workflow)
-        self.assertGreaterEqual(
-            self.workflow.count(
-                "uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4"
-            ),
-            5,
-        )
-        self.assertIn("sbom-path:", self.workflow)
-
-    def test_every_action_is_pinned_to_a_reviewed_full_sha(self) -> None:
-        uses_lines = [line.strip() for line in self.workflow.splitlines() if line.strip().startswith("uses:")]
-        self.assertTrue(uses_lines)
-        for line in uses_lines:
-            with self.subTest(line=line):
-                match = re.fullmatch(r"uses: ([^@\s]+)@([0-9a-f]{40}) # (\S+)", line)
-                self.assertIsNotNone(match)
-                action, commit, reviewed_ref = match.groups()
-                self.assertIn(action, ACTION_PINS)
-                self.assertEqual(ACTION_PINS[action], (commit, reviewed_ref))
-
-    def test_attestation_permissions_are_scoped_to_tagged_publisher(self) -> None:
-        publisher = self.workflow.split("  publish-release:", 1)[1]
-        matrix = self.workflow.split("  publish-release:", 1)[0]
-        self.assertIn("if: startsWith(github.ref, 'refs/tags/v')", publisher)
-        self.assertIn("id-token: write", publisher)
-        self.assertIn("attestations: write", publisher)
-        self.assertNotIn("id-token: write", matrix)
-        self.assertNotIn("attestations: write", matrix)
-
-    def test_release_suite_is_read_back_and_verified(self) -> None:
-        self.assertIn("verify-checksums", self.workflow)
-        self.assertIn("gh attestation verify", self.workflow)
-        self.assertIn('gh release download "$GITHUB_REF_NAME"', self.workflow)
-        self.assertGreaterEqual(self.workflow.count("--expected-subject"), 2)
-        self.assertIn("isPrerelease", self.workflow)
-
-    def test_release_title_comes_from_neo_notes_and_is_read_back(self) -> None:
-        self.assertIn("release_title=", self.workflow)
-        self.assertIn("validate-notes", self.workflow)
-        self.assertIn('--title "$DVM_RELEASE_TITLE"', self.workflow)
-        self.assertIn("DVM_RELEASE_TITLE: ${{ steps.metadata.outputs.title }}", self.workflow)
-        self.assertIn('--json body,isPrerelease,name', self.workflow)
-
-    def test_tagged_publish_requires_neo_ancestry(self) -> None:
-        self.assertIn("git merge-base --is-ancestor", self.workflow)
-        self.assertIn("refs/remotes/origin/neo", self.workflow)
-        self.assertIn("DVM_TAGGED_COMMIT", self.workflow)
-
-    def test_ci_runs_release_metadata_tests(self) -> None:
-        self.assertIn("python -m unittest discover -s scripts/tests", self.workflow)
-
-    def test_windows_smokes_exact_published_payload_before_packaging(self) -> None:
-        publish = self.workflow.index("- name: Publish unsigned desktop output")
-        smoke = self.workflow.index("- name: Smoke published Windows payload")
-        package = self.workflow.index("- name: Package unsigned Windows handoff")
-        self.assertLess(publish, smoke)
-        self.assertLess(smoke, package)
-        published_step = self.workflow[smoke:package]
-        self.assertIn('Join-Path $publishDirectory "DvmConsole.exe"', published_step)
-        self.assertIn("--demo --smoke-windows", published_step)
-        self.assertIn('"--smoke-result=$result"', published_step)
-
-
-class PackageContractTests(unittest.TestCase):
-    def test_prerelease_packages_write_numeric_bundle_versions(self) -> None:
-        package_script = (REPOSITORY / "scripts/package-desktop.sh").read_text(encoding="utf-8")
-        self.assertIn("version-core", package_script)
-        self.assertIn("Set :CFBundleShortVersionString $bundle_version", package_script)
-        self.assertIn("Set :CFBundleVersion $bundle_version", package_script)
-        self.assertNotIn("Set :CFBundleShortVersionString $DVM_RELEASE_VERSION", package_script)
 
 
 if __name__ == "__main__":

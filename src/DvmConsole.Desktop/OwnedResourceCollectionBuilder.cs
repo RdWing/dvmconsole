@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Desktop;
 
 // Constructs disposable resources as one ownership unit. If any later item

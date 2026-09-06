@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Security.Cryptography;
 using DvmConsole.Vocoder;
 
@@ -74,6 +77,7 @@ public sealed class NxdnPrivacyProcessor : IDisposable
     private ICryptoTransform? encryptor;
     private SymmetricAlgorithm? cipher;
     private byte[] register = [];
+    private byte[] nextRegister = [];
     private ushort ehrSeed;
     private ushort ehrState;
     private int codewordIndex;
@@ -107,10 +111,13 @@ public sealed class NxdnPrivacyProcessor : IDisposable
             CryptographicOperations.ZeroMemory(messageIndicator);
         if (register.Length > 0)
             CryptographicOperations.ZeroMemory(register);
+        if (nextRegister.Length > 0)
+            CryptographicOperations.ZeroMemory(nextRegister);
         if (stream.Length > 0)
             CryptographicOperations.ZeroMemory(stream);
         messageIndicator = nextMessageIndicator.ToArray();
         register = [];
+        nextRegister = [];
         stream = [];
         streamBit = 0;
         codewordIndex = 0;
@@ -187,6 +194,7 @@ public sealed class NxdnPrivacyProcessor : IDisposable
         CryptographicOperations.ZeroMemory(key);
         CryptographicOperations.ZeroMemory(messageIndicator);
         CryptographicOperations.ZeroMemory(register);
+        CryptographicOperations.ZeroMemory(nextRegister);
         CryptographicOperations.ZeroMemory(stream);
         disposed = true;
     }
@@ -225,6 +233,8 @@ public sealed class NxdnPrivacyProcessor : IDisposable
             register = NxdnInitializationVectorGenerator.CreateAesInitializationVector(
                 messageIndicator);
         }
+        nextRegister = new byte[register.Length];
+        stream = new byte[register.Length];
         encryptor = cipher.CreateEncryptor();
         // NXDN discards the first DES/AES OFB block.
         AdvanceRegister();
@@ -234,18 +244,15 @@ public sealed class NxdnPrivacyProcessor : IDisposable
     private void FillStreamBlock()
     {
         AdvanceRegister();
-        if (stream.Length > 0)
-            CryptographicOperations.ZeroMemory(stream);
-        stream = register.ToArray();
+        register.CopyTo(stream, 0);
         streamBit = 0;
     }
 
     private void AdvanceRegister()
     {
-        byte[] next = new byte[register.Length];
-        encryptor!.TransformBlock(register, 0, register.Length, next, 0);
+        encryptor!.TransformBlock(register, 0, register.Length, nextRegister, 0);
         CryptographicOperations.ZeroMemory(register);
-        register = next;
+        (register, nextRegister) = (nextRegister, register);
     }
 
 }

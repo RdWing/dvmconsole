@@ -1,7 +1,10 @@
-using System.Security.Cryptography;
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Text;
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
+using DvmConsole.Core.IO;
 
 namespace DvmConsole.Configuration.Yaml;
 
@@ -25,6 +28,29 @@ public static class ConfigurationBundleExporter
         ArgumentNullException.ThrowIfNull(companionSource);
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(options);
+
+        if (destination is ITransactionalExportDocumentSet transactional)
+        {
+            await using IExportDocumentTransaction transaction = await transactional
+                .BeginTransactionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            try
+            {
+                ConfigurationBundleExportResult result = await ExportAsync(
+                    yaml,
+                    companionSource,
+                    transaction,
+                    options,
+                    cancellationToken).ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return result;
+            }
+            catch
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
+        }
 
         ConfigurationDocument document = ParseAndValidate(yaml, destination.Primary.DisplayName);
         var companions = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
@@ -63,14 +89,17 @@ public static class ConfigurationBundleExporter
                 byte[] content;
                 try
                 {
-                    content = await ReadAllBytesAsync(companion, cancellationToken).ConfigureAwait(false);
+                    content = await ReadAllBytesAsync(
+                        companion,
+                        ManagedResourceLimits.ConfigurationCompanionBytes,
+                        cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
                 {
                     omittedCompanionReferences.Add(reference);
                     continue;
                 }
-                string name = AllocateCompanionName(reference, content, companions);
+                string name = PortableCompanionNameAllocator.Allocate(reference, content, companions);
                 companions[name] = content;
                 rewrites[reference] = "./" + name;
             }
@@ -90,7 +119,10 @@ public static class ConfigurationBundleExporter
             await WriteBytesAsync(target, content, cancellationToken).ConfigureAwait(false);
         }
 
-        byte[] exportedPrimary = await ReadAllBytesAsync(destination.Primary, cancellationToken)
+        byte[] exportedPrimary = await ReadAllBytesAsync(
+                destination.Primary,
+                ManagedResourceLimits.ConfigurationYamlBytes,
+                cancellationToken)
             .ConfigureAwait(false);
         string exportedYaml = DecodeYaml(exportedPrimary);
         if (!string.Equals(exportedYaml, exportYaml, StringComparison.Ordinal))
@@ -103,7 +135,10 @@ public static class ConfigurationBundleExporter
                 .ConfigureAwait(false);
             if (exported is null)
                 throw new IOException($"Exported companion '{name}' could not be read back.");
-            byte[] actualContent = await ReadAllBytesAsync(exported, cancellationToken).ConfigureAwait(false);
+            byte[] actualContent = await ReadAllBytesAsync(
+                exported,
+                ManagedResourceLimits.ConfigurationCompanionBytes,
+                cancellationToken).ConfigureAwait(false);
             if (!actualContent.AsSpan().SequenceEqual(expectedContent))
                 throw new IOException($"Exported companion '{name}' did not match the bytes written to the destination.");
         }
@@ -148,38 +183,17 @@ public static class ConfigurationBundleExporter
         }
     }
 
-    private static string AllocateCompanionName(
-        string reference,
-        byte[] content,
-        IReadOnlyDictionary<string, byte[]> existing)
-    {
-        string normalized = reference.Replace('\\', '/');
-        string candidate = SanitizeFileName(normalized[(normalized.LastIndexOf('/') + 1)..]);
-        if (candidate.Length == 0)
-            candidate = "companion";
-        if (!existing.ContainsKey(candidate))
-            return candidate;
-        string extension = Path.GetExtension(candidate);
-        string stem = Path.GetFileNameWithoutExtension(candidate);
-        string suffix = Convert.ToHexString(SHA256.HashData(content))[..8].ToLowerInvariant();
-        return $"{stem}-{suffix}{extension}";
-    }
-
-    private static string SanitizeFileName(string value)
-    {
-        char[] invalid = Path.GetInvalidFileNameChars();
-        return new string(value.Where(character =>
-            !invalid.Contains(character) && character is not '/' and not '\\').ToArray());
-    }
-
     private static async ValueTask<byte[]> ReadAllBytesAsync(
         IReadableDocument document,
+        int maximumBytes,
         CancellationToken cancellationToken)
     {
         await using Stream stream = await document.OpenReadAsync(cancellationToken).ConfigureAwait(false);
-        using var memory = new MemoryStream();
-        await stream.CopyToAsync(memory, cancellationToken).ConfigureAwait(false);
-        return memory.ToArray();
+        return await BoundedResourceReader.ReadBytesAsync(
+            stream,
+            maximumBytes,
+            document.DisplayName,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static async ValueTask WriteTextAsync(

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
 using Xunit;
@@ -145,6 +148,7 @@ public sealed class DmrPrivacyTests
             streamId: 3,
             vocoder: new FakeHalfRateSession(),
             send: (payload, _, _) => packets.Add(payload.ToArray()),
+            waitForNextPacket: TestPacketCadence.NoDelayAsync,
             privacy: options);
 
         call.Start();
@@ -175,6 +179,7 @@ public sealed class DmrPrivacyTests
             streamId: 3,
             vocoder: new FakeHalfRateSession(),
             send: (payload, _, _) => packets.Add(payload.ToArray()),
+            waitForNextPacket: TestPacketCadence.NoDelayAsync,
             privacy: options);
 
         call.Start();
@@ -203,6 +208,7 @@ public sealed class DmrPrivacyTests
             streamId: 3,
             vocoder: new FakeHalfRateSession(),
             send: (payload, _, _) => packets.Add(payload.ToArray()),
+            waitForNextPacket: TestPacketCadence.NoDelayAsync,
             privacy: options);
 
         call.Start();
@@ -244,6 +250,7 @@ public sealed class DmrPrivacyTests
             streamId: 3,
             vocoder: new FakeHalfRateSession(),
             send: (payload, _, _) => packets.Add(payload.ToArray()),
+            waitForNextPacket: TestPacketCadence.NoDelayAsync,
             privacy: options);
 
         call.Start();

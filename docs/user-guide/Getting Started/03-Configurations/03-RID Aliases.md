@@ -1,6 +1,6 @@
 # RID aliases
 
-RID aliases give radio IDs human-readable names in the console.
+RID aliases show names alongside radio IDs in the console.
 
 Aliases can appear in places such as:
 
@@ -37,8 +37,11 @@ edit. The list shows RIDs and aliases, not internal managed-storage paths.
   editing.
 - Select an existing row to edit it, or select **Delete** to remove it.
 
-Saving includes changed alias companions in the same review and backup
-transaction as the managed codeplug.
+When creating a configuration from scratch, add its FNE first, then use **Add**
+to enter aliases directly. No external alias file is required. Select the owner
+again before entering aliases for another FNE.
+
+Changed alias files are reviewed, backed up, and saved together with the codeplug.
 
 ![Managed RID alias editor](../../Assets/configuration-studio-files.png)
 

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Concentus.Oggfile": {
+        "type": "Direct",
+        "requested": "[1.0.7, )",
+        "resolved": "1.0.7",
+        "contentHash": "rKWtI5oiTWqK2ol1aWvIT1BRTPi07Uo1hAet0ysQoZQqFo/mxBRwr+ERw89fIdkL3tbMf3ncoW7b3HDGx8Sk4g==",
+        "dependencies": {
+          "Concentus": "2.2.2"
+        }
+      },
+      "Microsoft.NET.ILLink.Tasks": {
+        "type": "Direct",
+        "requested": "[10.0.11, )",
+        "resolved": "10.0.11",
+        "contentHash": "IBf7lbovvjGWVWXZX5cJ/cO0WXbId0Zq4BuSeT94mGZuOAP66oMeH9PTBZ9Jpp3Jb6jtK0qm/NyUbPRo1gC/wQ=="
+      },
+      "NLayer": {
+        "type": "Direct",
+        "requested": "[3.0.0, )",
+        "resolved": "3.0.0",
+        "contentHash": "aQrCT93NjIrJNXA7wiTSHMp9OUhGNb8YTJAwnsx2FtaNdAe74vwfguFExf6QFNU72XhNPb/bLAcdMbxvaNZgWg=="
+      },
+      "Concentus": {
+        "type": "Transitive",
+        "resolved": "2.2.2",
+        "contentHash": "2B9YmHPKO+k7YpAAnqmiXwiMJnfjfj1C868RszOll2iZWLnGTAiC1q21L/d7CvTan7T+hyqU8dR0Dcy3cpjVfQ=="
+      },
+      "dvmconsole.audio.abstractions": {
+        "type": "Project"
+      }
+    },
+    "net10.0/win-x64": {}
+  }
+}

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Runtime.ExceptionServices;
 
 namespace DvmConsole.Desktop;
@@ -8,6 +11,8 @@ namespace DvmConsole.Desktop;
 internal sealed class AsyncCleanup
 {
     private readonly List<Exception> failures = [];
+
+    public bool HasFailures => failures.Count != 0;
 
     public void Run(Action cleanup)
     {

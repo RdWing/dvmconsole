@@ -10,4 +10,8 @@
     <ProjectReference Include="../DvmConsole.Application/DvmConsole.Application.csproj" />
     <ProjectReference Include="../DvmConsole.Core/DvmConsole.Core.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DvmConsole.Configuration.Yaml.Tests" />
+  </ItemGroup>
 </Project>

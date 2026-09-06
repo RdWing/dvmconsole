@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DVM Console NEO
+Comment=Operator console for DVM radio systems
+Exec=DvmConsole %F
+Icon=DvmConsole
+Terminal=false
+Categories=Network;
+StartupNotify=true
+StartupWMClass=DvmConsole

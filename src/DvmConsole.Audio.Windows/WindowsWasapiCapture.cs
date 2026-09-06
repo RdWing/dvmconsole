@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using System.Runtime.InteropServices;
@@ -6,7 +9,10 @@ using System.Runtime.Versioning;
 namespace DvmConsole.Audio;
 
 [SupportedOSPlatform("windows")]
-internal sealed class WindowsWasapiCapture : IAudioCapture
+internal sealed class WindowsWasapiCapture :
+    IAudioCapture,
+    IBorrowedAudioCapture,
+    IImmediateAudioStop
 {
     private const int BufferLengthMilliseconds = 20;
     private const string MmcssTaskName = "Audio";
@@ -70,6 +76,7 @@ internal sealed class WindowsWasapiCapture : IAudioCapture
     }
 
     public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
+    public event BorrowedPcmSamplesHandler? BorrowedSamplesAvailable;
 
     public PcmAudioFormat Format { get; }
 
@@ -89,6 +96,11 @@ internal sealed class WindowsWasapiCapture : IAudioCapture
         {
             ObjectDisposedException.ThrowIf(disposed || disposing, this);
             ThrowIfCaptureFailed();
+            Task? previousStop;
+            lock (stateSync)
+                previousStop = !running ? stopped?.Task : null;
+            if (previousStop is not null)
+                await previousStop.WaitAsync(cancellationToken).ConfigureAwait(false);
 
             lock (stateSync)
             {
@@ -170,19 +182,31 @@ internal sealed class WindowsWasapiCapture : IAudioCapture
         }
     }
 
+    public void StopImmediately()
+    {
+        if (!disposed && !disposing)
+            _ = RequestStop();
+    }
+
     private Task? RequestStop()
     {
         Task? completion;
         lock (stateSync)
         {
             if (!running)
-                return null;
+                return stopped?.Task;
 
             running = false;
             completion = stopped?.Task;
         }
 
-        recorder.StopRecording();
+        try { recorder.StopRecording(); }
+        catch (Exception exception)
+        {
+            lock (stateSync)
+                stopped?.TrySetException(exception);
+            throw;
+        }
         return completion;
     }
 
@@ -202,13 +226,18 @@ internal sealed class WindowsWasapiCapture : IAudioCapture
                 return;
         }
 
-        short[] samples = CopyPcm16Samples(buffer);
+        if (buffer.Length % sizeof(short) != 0)
+            throw new InvalidDataException("A PCM16 capture packet must contain complete samples.");
+        ReadOnlySpan<short> samples = MemoryMarshal.Cast<byte, short>(buffer);
         lock (stateSync)
         {
             if (!running || disposing || disposed)
                 return;
         }
-        SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(samples));
+        BorrowedSamplesAvailable?.Invoke(samples);
+        EventHandler<PcmSamplesEventArgs>? owned = SamplesAvailable;
+        if (owned is not null)
+            owned(this, new PcmSamplesEventArgs(samples.ToArray()));
     }
 
     internal static short[] CopyPcm16Samples(ReadOnlySpan<byte> buffer)

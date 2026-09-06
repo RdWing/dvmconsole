@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Diagnostics;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
@@ -134,15 +137,21 @@ internal sealed class DebugLogWorkspace : INotifyPropertyChanged, IDisposable
             bufferSize: 1_024,
             leaveOpen: true);
         writer.WriteLine("Timestamp\tSeverity\tSource\tMessage");
+        var sourceAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (DebugLogEntry entry in Entries.Reverse())
         {
             writer.Write(entry.Timestamp.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
             writer.Write('\t');
             writer.Write(entry.SeverityText);
             writer.Write('\t');
-            writer.Write(entry.Source);
+            if (!sourceAliases.TryGetValue(entry.Source, out string? sourceAlias))
+            {
+                sourceAlias = $"Source {sourceAliases.Count + 1}";
+                sourceAliases[entry.Source] = sourceAlias;
+            }
+            writer.Write(sourceAlias);
             writer.Write('\t');
-            writer.WriteLine(DebugLogRedactor.Redact(entry.Message).Replace("\r", " ").Replace("\n", " "));
+            writer.WriteLine(DebugLogRedactor.RedactForExport(entry.Message).Replace("\r", " ").Replace("\n", " ").Replace("\t", " "));
         }
         writer.Flush();
 

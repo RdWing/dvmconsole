@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Media;
 using DvmConsole.Audio;
 using DvmConsole.Core.Configuration;
@@ -207,6 +210,29 @@ public sealed partial class SystemViewModelTests
             Assert.False(persisted.RxJitterBuffersBySystem["Alpha"].P25Adaptive);
             Assert.Equal(RxJitterBufferSetting.DefaultP25Milliseconds, persisted.RxJitterBuffersBySystem["Beta"].P25Milliseconds);
             Assert.True(persisted.RxJitterBuffersBySystem["Beta"].P25Adaptive);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task PersistsConfiguredDmrReceiveKeyPolicyFromConnectionsSettings()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        var store = new UserSettingsStore(settingsPath);
+
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(codeplugPath, store);
+            Assert.False(viewModel.RequireConfiguredDmrReceiveKey);
+
+            viewModel.RequireConfiguredDmrReceiveKey = true;
+            await viewModel.FlushUserSettingsAsync();
+
+            Assert.True(store.Load().RequireConfiguredDmrReceiveKey);
         }
         finally
         {

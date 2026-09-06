@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Application;
 
 /// <summary>
@@ -10,6 +13,8 @@ public interface IConsoleSessionRuntimeAdapter : IAsyncDisposable
 {
     ConsoleTopologySnapshot CaptureTopology();
     ConsoleRuntimeSnapshot CaptureSnapshot();
+    ConsoleSnapshotUpdate CaptureUpdate(ConsoleRuntimeSnapshot previous)
+        => new(CaptureSnapshot(), null);
     IReadOnlyList<ConsoleCallHistoryRecord> History { get; }
     IConsoleCommands Commands { get; }
 
@@ -20,6 +25,9 @@ public interface IConsoleSessionRuntimeAdapter : IAsyncDisposable
     ValueTask QuiesceAsync(CancellationToken cancellationToken);
     ValueTask FlushSettingsAsync(CancellationToken cancellationToken);
 }
+
+/// <summary>Null identities request full comparison; an empty collection is a status-only update.</summary>
+public sealed record ConsoleSnapshotUpdate(ConsoleRuntimeSnapshot Snapshot, IReadOnlyCollection<ChannelId>? ChangedChannels);
 
 public interface IConsoleApplicationSession : IAsyncDisposable
 {

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -81,7 +84,6 @@ public sealed partial class OperatorToolsWindow : Window
         AddHandler(InputElement.PointerWheelChangedEvent, HandlePointerWheelChanged, RoutingStrategies.Tunnel);
         viewModel.FilteredCallHistoryChanging += HandleHistoryCollectionChanging;
         Opened += HandleOpened;
-        LayoutUpdated += HandleWindowLayoutUpdated;
         Closed += HandleClosed;
         Activated += (_, _) => UpdatePttFocusSuppression();
         Deactivated += (_, _) => pttKeyRouter.UpdateInputFocus(null, isWindowActive: false);
@@ -200,7 +202,7 @@ public sealed partial class OperatorToolsWindow : Window
 
     private void HandleOpened(object? sender, EventArgs e)
     {
-        ScheduleHistoryViewportHook();
+        TryAttachHistoryViewportHook();
         SchedulePendingSectionReveal();
     }
 
@@ -231,12 +233,6 @@ public sealed partial class OperatorToolsWindow : Window
             return false;
         pendingSectionAnchorName = null;
         return true;
-    }
-
-    private void HandleWindowLayoutUpdated(object? sender, EventArgs e)
-    {
-        TryAttachHistoryViewportHook();
-        TryRevealPendingSection();
     }
 
     private void HandleSectionNavigationChanged(object? sender, SelectionChangedEventArgs e)
@@ -281,11 +277,7 @@ public sealed partial class OperatorToolsWindow : Window
         if (closed || historyList is not null)
             return;
 
-        ListBox? list = historyView?.HistoryItems ??
-            this.FindControl<ListBox>("HistoryList") ??
-            this.GetVisualDescendants()
-                .OfType<ListBox>()
-                .FirstOrDefault(candidate => candidate.Name == "HistoryList");
+        ListBox? list = historyView?.HistoryItems;
         if (list is null)
             return;
 
@@ -296,19 +288,32 @@ public sealed partial class OperatorToolsWindow : Window
             control => control is ListBoxItem item
                 ? item.DataContext as CallHistoryEntry ?? item.Content as CallHistoryEntry
                 : null);
-        historyList.LayoutUpdated += HandleHistoryListLayoutUpdated;
     }
 
     private void HandleHistoryCollectionChanging(object? sender, NotifyCollectionChangedEventArgs e)
     {
         if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
             historyViewportAnchor?.Reset();
+            DetachHistoryRestoreHook();
+        }
         else
+        {
             historyViewportAnchor?.Capture();
+            if (historyViewportAnchor?.HasPendingRestore == true && historyList is not null)
+            {
+                historyList.LayoutUpdated -= HandleHistoryListLayoutUpdated;
+                historyList.LayoutUpdated += HandleHistoryListLayoutUpdated;
+            }
+        }
     }
 
     private void HandleHistoryListLayoutUpdated(object? sender, EventArgs e)
-        => historyViewportAnchor?.Restore();
+    {
+        historyViewportAnchor?.Restore();
+        if (historyViewportAnchor?.HasPendingRestore != true)
+            DetachHistoryRestoreHook();
+    }
 
     private ScrollViewer? GetHistoryScrollViewer()
         => historyList?.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
@@ -319,18 +324,22 @@ public sealed partial class OperatorToolsWindow : Window
         pendingSectionAnchorName = null;
         scrollBarHideTimer.Stop();
         Opened -= HandleOpened;
-        LayoutUpdated -= HandleWindowLayoutUpdated;
         DetachHistoryViewport();
         viewModel.FilteredCallHistoryChanging -= HandleHistoryCollectionChanging;
     }
 
     private void DetachHistoryViewport()
     {
-        if (historyList is not null)
-            historyList.LayoutUpdated -= HandleHistoryListLayoutUpdated;
+        DetachHistoryRestoreHook();
         historyList = null;
         historyViewportAnchor?.Reset();
         historyViewportAnchor = null;
+    }
+
+    private void DetachHistoryRestoreHook()
+    {
+        if (historyList is not null)
+            historyList.LayoutUpdated -= HandleHistoryListLayoutUpdated;
     }
 
     private void HandleKeyDown(object? sender, KeyEventArgs e)
@@ -481,8 +490,19 @@ public sealed partial class OperatorToolsWindow : Window
     private void HandleSharedSaveToolbarClocksRequested(object? sender, EventArgs e)
         => viewModel.SaveToolbarClocks();
 
-    private void HandleSharedResetLayoutRequested(object? sender, EventArgs e)
-        => viewModel.ResetLayout();
+    private async void HandleSharedResetLayoutRequested(object? sender, EventArgs e)
+    {
+        if (await ConfirmAsync(
+                "Reset widget layout",
+                "Reset all channel widget positions and lock the layout? You can undo this for eight seconds.",
+                "Reset"))
+        {
+            viewModel.ResetLayout();
+        }
+    }
+
+    private async void HandleUndoLastOperatorActionClick(object? sender, RoutedEventArgs e)
+        => await viewModel.UndoLastOperatorActionAsync();
 
     private void HandleSharedRefreshSerialPttDevicesRequested(object? sender, EventArgs e)
         => viewModel.RefreshSerialPttDevices();
@@ -565,8 +585,41 @@ public sealed partial class OperatorToolsWindow : Window
     private void HandleClearHistoryFiltersClick(object? sender, RoutedEventArgs e)
         => viewModel.ClearHistoryFilters();
 
-    private void HandleSharedApplyRecordingLocationRequested(object? sender, EventArgs e)
-        => viewModel.ApplyRecordingRoot();
+    private async void HandleSharedApplyRecordingLocationRequested(object? sender, EventArgs e)
+        => await ConfirmAndApplyRecordingLocationAsync();
+
+    private async void HandleSharedApplyRecordingRetentionRequested(object? sender, EventArgs e)
+    {
+        if (!MainWindowViewModel.TryParseRecordingRetentionDays(
+                viewModel.RecordingRetentionDaysText,
+                out int days))
+        {
+            await ShowInformationAsync(
+                "Invalid recording retention",
+                "Retention must be a whole number from 0 to 3650 days; 0 disables pruning.");
+            return;
+        }
+
+        try
+        {
+            RecordingPolicyImpact impact = await viewModel.PreviewRecordingPolicyAsync(
+                viewModel.RecordingRootPathText,
+                days);
+            if (!await ConfirmAsync(
+                    "Apply recording retention",
+                    impact.SummaryText + "\n\nApply this policy and prune the listed recordings?",
+                    impact.CandidateCount == 0 ? "Apply" : $"Apply and delete {impact.CandidateCount:N0}"))
+            {
+                return;
+            }
+
+            viewModel.ApplyRecordingRetention(days, acceptRecordingPolicy: true);
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            await ShowInformationAsync("Unable to preview recording retention", exception.Message);
+        }
+    }
 
     private async void HandleSharedChooseRecordingLocationRequested(object? sender, EventArgs e)
     {
@@ -587,7 +640,40 @@ public sealed partial class OperatorToolsWindow : Window
             return;
 
         viewModel.RecordingRootPathText = path;
-        viewModel.ApplyRecordingRoot();
+        await ConfirmAndApplyRecordingLocationAsync();
+    }
+
+    private async Task ConfirmAndApplyRecordingLocationAsync()
+    {
+        if (!MainWindowViewModel.TryParseRecordingRetentionDays(
+                viewModel.RecordingRetentionDaysText,
+                out int days))
+        {
+            await ShowInformationAsync(
+                "Invalid recording retention",
+                "Correct the retention value before changing the recording folder.");
+            return;
+        }
+
+        try
+        {
+            RecordingPolicyImpact impact = await viewModel.PreviewRecordingPolicyAsync(
+                viewModel.RecordingRootPathText,
+                days);
+            if (!await ConfirmAsync(
+                    "Change recording location",
+                    impact.SummaryText + "\n\nUse this folder and apply the current retention policy?",
+                    impact.CandidateCount == 0 ? "Use folder" : $"Use and delete {impact.CandidateCount:N0}"))
+            {
+                return;
+            }
+
+            viewModel.ApplyRecordingRoot(acceptRecordingPolicy: true);
+        }
+        catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            await ShowInformationAsync("Unable to preview recording location", exception.Message);
+        }
     }
 
     private void HandleOpenRecordingClick(object? sender, RoutedEventArgs e)
@@ -626,16 +712,13 @@ public sealed partial class OperatorToolsWindow : Window
     private void HandleSharedHistoryExportRequested(object? sender, EventArgs e)
         => HandleExportCallHistoryClick(sender, new RoutedEventArgs());
 
-    private async void HandleSharedHistoryPlayRequested(
+    private async void HandleSharedHistoryPlaybackToggleRequested(
         object? sender,
         CallHistoryItemEventArgs e)
     {
         if (e.Item is CallHistoryEntry entry)
-            await viewModel.PlayCallHistoryRecordingAsync(entry);
+            await viewModel.ToggleCallHistoryRecordingPlaybackAsync(entry);
     }
-
-    private async void HandleSharedHistoryStopRequested(object? sender, EventArgs e)
-        => await viewModel.StopRecordingPlaybackAsync();
 
     private void HandleSharedHistoryOpenRequested(
         object? sender,
@@ -676,6 +759,13 @@ public sealed partial class OperatorToolsWindow : Window
         };
         await parts.Window.ShowDialog(this);
         return confirmed;
+    }
+
+    private async Task ShowInformationAsync(string title, string message)
+    {
+        OperatorDialogParts parts = OperatorDialogFactory.CreateMessage(title, message, "OK");
+        parts.PrimaryButton.Click += (_, _) => parts.Window.Close();
+        await parts.Window.ShowDialog(this);
     }
 
     private void HandleSharedSavePatchGroupRequested(object? sender, PatchGroupEventArgs e)

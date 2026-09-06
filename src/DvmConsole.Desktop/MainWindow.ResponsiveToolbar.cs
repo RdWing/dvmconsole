@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
@@ -63,6 +66,7 @@ public sealed partial class MainWindow
             availableWidth,
             uiScale,
             enabledClockCount));
+        responsiveStatus?.Apply(availableWidth, uiScale);
     }
 
     private void ApplyResponsiveToolbarVisibility(ResponsiveToolbarVisibility visibility)
@@ -91,46 +95,22 @@ public sealed partial class MainWindow
 
     private async void HandleCardsRendererClick(object? sender, RoutedEventArgs e)
     {
-        operatorViewSettings.ChannelRenderer = ConsoleRendererPreference.Cards;
+        channelRenderer.Preference = ConsoleRendererPreference.Cards;
         ScheduleOperatorViewSave();
         await SwitchChannelRendererAsync(Bounds.Width);
     }
 
     private async void HandleListRendererClick(object? sender, RoutedEventArgs e)
     {
-        operatorViewSettings.ChannelRenderer = ConsoleRendererPreference.List;
+        channelRenderer.Preference = ConsoleRendererPreference.List;
         ScheduleOperatorViewSave();
         await SwitchChannelRendererAsync(Bounds.Width);
     }
 
     private async ValueTask SwitchChannelRendererAsync(double logicalWidth)
     {
-        ResponsivePresentation resolved = ResponsivePresentationPolicy.Resolve(
-            logicalWidth,
-            operatorViewSettings.ChannelRenderer);
-        if (resolved.EffectiveRenderer != effectiveRenderer)
-            await channelPtt.ReleaseAllAsync();
-        ApplyChannelRenderer(logicalWidth, releasePtt: false);
-    }
-
-    private void ApplyChannelRenderer(double logicalWidth, bool releasePtt)
-    {
-        ResponsivePresentation resolved = ResponsivePresentationPolicy.Resolve(
-            logicalWidth,
-            operatorViewSettings.ChannelRenderer);
-        if (releasePtt && resolved.EffectiveRenderer != effectiveRenderer)
-            TaskObservation.Observe(channelPtt.ReleaseAllAsync().AsTask());
-        effectiveRenderer = resolved.EffectiveRenderer;
-        channelRendererHost.Content = effectiveRenderer == ConsoleRendererPreference.Cards
-            ? cardsRenderer
-            : listRenderer;
-        cardsRendererMenuItem.IsEnabled =
-            effectiveRenderer != ConsoleRendererPreference.Cards && logicalWidth >= ResponsivePresentationPolicy.NarrowMinimum;
-        listRendererMenuItem.IsEnabled = effectiveRenderer != ConsoleRendererPreference.List;
-        cardsRendererMenuItem.IsChecked = effectiveRenderer == ConsoleRendererPreference.Cards;
-        listRendererMenuItem.IsChecked = effectiveRenderer == ConsoleRendererPreference.List;
-        ToolTip.SetTip(cardsRendererMenuItem, logicalWidth < ResponsivePresentationPolicy.NarrowMinimum
-            ? "List is required below 600 logical pixels; the saved desktop preference is unchanged."
-            : null);
+        if (channelRenderer.RequiresSwitch(logicalWidth))
+            await ReleaseAllChannelPttAsync();
+        channelRenderer.Apply(logicalWidth);
     }
 }

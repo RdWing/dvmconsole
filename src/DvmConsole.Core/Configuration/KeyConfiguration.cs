@@ -1,8 +1,9 @@
-using System.Diagnostics.CodeAnalysis;
-using YamlDotNet.Serialization;
-using YamlDotNet.Serialization.NamingConventions;
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
 
 namespace DvmConsole.Core.Configuration;
+
+using DvmConsole.Core.IO;
 
 public sealed class KeyContainer
 {
@@ -11,6 +12,9 @@ public sealed class KeyContainer
 
 public sealed class KeyEntry
 {
+    public string Name { get; set; } = string.Empty;
+    public string System { get; set; } = string.Empty;
+
     // Existing key files predate multi-protocol support and are P25 unless
     // they explicitly opt into another protocol.
     public string Protocol { get; set; } = "p25";
@@ -20,11 +24,19 @@ public sealed class KeyEntry
 
     public byte[] KeyBytes => ParseHex(Key);
     public string RequiredLength => KeyFileValidator.DescribeRequiredLength(Protocol, AlgId);
+    public string SystemDisplayName => string.IsNullOrWhiteSpace(System) ? "All (legacy)" : System;
     public string ProtocolDisplayName => ConfigurationProtocolCatalog.DisplayName(Protocol);
     public string AlgorithmDisplayName =>
         EncryptionAlgorithmCatalog.FindKeyOption(Protocol, AlgId)?.DisplayName ?? $"Unknown (0x{AlgId:X2})";
     public string AlgorithmIdText => $"0x{AlgId:X2}";
     public string KeyIdText => $"0x{KeyId:X}";
+
+    // A blank system preserves compatibility with legacy key files, whose
+    // entries were available to every configured FNE. New Studio entries are
+    // always assigned to one system.
+    public bool AppliesToSystem(string? systemName)
+        => string.IsNullOrWhiteSpace(System) ||
+           string.Equals(System.Trim(), systemName?.Trim(), StringComparison.OrdinalIgnoreCase);
 
     private static byte[] ParseHex(string value)
     {
@@ -53,6 +65,8 @@ public static class KeyFileValidator
         ArgumentNullException.ThrowIfNull(container);
         var issues = new List<ConfigurationValidationIssue>();
         var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var globalIdentities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var identitiesWithAnyScope = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         for (int index = 0; index < container.Keys.Count; index++)
         {
@@ -92,13 +106,21 @@ public static class KeyFileValidator
             int minimumBytes = algorithm.MinimumKeyBytes;
             int maximumBytes = algorithm.MaximumKeyBytes;
 
-            string identity = $"{protocol}\u001F{key.AlgId}\u001F{key.KeyId}";
-            if (!identities.Add(identity))
+            string scope = (key.System ?? string.Empty).Trim();
+            string baseIdentity = $"{protocol}\u001F{key.AlgId}\u001F{key.KeyId}";
+            string identity = $"{scope}\u001F{baseIdentity}";
+            bool duplicates = scope.Length == 0
+                ? identitiesWithAnyScope.Contains(baseIdentity)
+                : globalIdentities.Contains(baseIdentity) || !identities.Add(identity);
+            if (duplicates)
             {
                 issues.Add(Error(
                     path,
-                    $"{label} duplicates the {ConfigurationProtocolCatalog.DisplayName(protocol)} algorithm 0x{key.AlgId:X2}, key ID {key.KeyId} entry."));
+                    $"{label} duplicates the {ConfigurationProtocolCatalog.DisplayName(protocol)} algorithm 0x{key.AlgId:X2}, key ID {key.KeyId} entry in the same system scope."));
             }
+            else if (scope.Length == 0)
+                globalIdentities.Add(baseIdentity);
+            identitiesWithAnyScope.Add(baseIdentity);
 
             byte[] material;
             try
@@ -143,13 +165,6 @@ public static class KeyFileValidator
 
 public static class KeyFileLoader
 {
-    [UnconditionalSuppressMessage("AOT", "IL3050", Justification =
-        "Temporary Phase 2 YAML allowlist: migrate this builder to a generated StaticContext without changing key-file compatibility.")]
-    private static readonly ISerializer Serializer = new SerializerBuilder()
-        .WithNamingConvention(CamelCaseNamingConvention.Instance)
-        .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitEmptyCollections)
-        .Build();
-
     public static KeyContainer Load(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -158,20 +173,16 @@ public static class KeyFileLoader
         if (!File.Exists(fullPath))
             throw new FileNotFoundException("Key file not found.", fullPath);
 
-        return Parse(File.ReadAllText(fullPath));
+        return Parse(BoundedResourceReader.ReadUtf8File(
+            fullPath,
+            ManagedResourceLimits.ConfigurationCompanionBytes,
+            "Encryption-key file"));
     }
 
-    [UnconditionalSuppressMessage("AOT", "IL3050", Justification =
-        "Temporary Phase 2 YAML allowlist: migrate this builder to a generated StaticContext without changing key-file compatibility.")]
     public static KeyContainer Parse(string yaml)
     {
         ArgumentNullException.ThrowIfNull(yaml);
-        var deserializer = new DeserializerBuilder()
-            .WithNamingConvention(CamelCaseNamingConvention.Instance)
-            .IgnoreUnmatchedProperties()
-            .Build();
-        KeyContainer container = deserializer.Deserialize<KeyContainer>(yaml)
-            ?? throw new InvalidDataException("The key file did not contain a key container.");
+        KeyContainer container = DvmYamlCodec.ParseKeys(yaml);
         container.Keys ??= [];
         return container;
     }
@@ -180,6 +191,6 @@ public static class KeyFileLoader
     {
         ArgumentNullException.ThrowIfNull(container);
         container.Keys ??= [];
-        return Serializer.Serialize(container);
+        return DvmYamlCodec.SerializeKeys(container);
     }
 }

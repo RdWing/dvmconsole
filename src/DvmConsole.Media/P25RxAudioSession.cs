@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Vocoder;
@@ -10,12 +13,23 @@ namespace DvmConsole.Media;
 // ring; missing key material fails closed before audio is emitted.
 public sealed class P25RxAudioSession : IAsyncDisposable
 {
+    private const int MaximumConcealedPackets = 10;
+
     private readonly P25TrafficSelector selector;
     private readonly VoiceFrameDecoder decoder;
     private readonly IAudioPlayback playback;
     private readonly IP25KeyResolver? keyResolver;
     private readonly string systemName;
     private readonly VoicePacketSequenceTracker sequenceTracker = new();
+    private readonly byte[] imbe = new byte[P25DfsiFrameCodec.ImbeBytes];
+    private readonly bool[] available = new bool[P25DfsiFrameCodec.CodewordsPerLdu];
+    private readonly byte[] encryptionMessageIndicator = new byte[P25Defines.P25_MI_LENGTH];
+    private readonly byte[] codeword = new byte[P25DfsiFrameCodec.CodewordBytes];
+    private readonly short[] packetSamples = new short[
+        P25DfsiFrameCodec.CodewordsPerLdu * VocoderFrameSizes.PcmSamplesPerFrame];
+    private readonly short[] concealmentSamples = new short[
+        MaximumConcealedPackets * P25DfsiFrameCodec.CodewordsPerLdu *
+        VocoderFrameSizes.PcmSamplesPerFrame];
     private P25CryptoState? cryptoState;
     private uint activeStreamId;
     private bool encryptedStream;
@@ -65,9 +79,12 @@ public sealed class P25RxAudioSession : IAsyncDisposable
             MarkEncryptionDesynchronized();
         }
 
-        byte[] imbe = new byte[P25DfsiFrameCodec.ImbeBytes];
-        bool[] available = new bool[P25DfsiFrameCodec.CodewordsPerLdu];
-        if (!P25DfsiFrameCodec.TryExtractImbeFrames(traffic, imbe, available))
+        if (!P25DfsiFrameCodec.TryParseVoiceLdu(
+                traffic,
+                imbe,
+                available,
+                encryptionMessageIndicator,
+                out P25DfsiFrameCodec.P25ParsedLdu parsedLdu))
         {
             MalformedPackets++;
             MarkEncryptionDesynchronized();
@@ -77,16 +94,14 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         if (available.Contains(false))
             MalformedPackets++;
 
-        bool ldu1 = traffic.Subtype.Equals("LDU1", StringComparison.OrdinalIgnoreCase);
-        bool hasEncryptionMetadata = P25DfsiFrameCodec.TryExtractEncryptionMetadata(
-            traffic,
-            out P25DfsiFrameCodec.P25EncryptionMetadata encryptionMetadata);
+        bool ldu1 = parsedLdu.IsLdu1;
+        bool hasEncryptionMetadata = parsedLdu.HasEncryptionMetadata;
         if (cryptoState is not null && cryptoState.StreamId != traffic.StreamId)
             cryptoState = null;
 
         if (ldu1)
         {
-            PrepareForLdu1(traffic);
+            PrepareForLdu1(traffic.StreamId, parsedLdu);
             if (encryptedStream && cryptoState is null)
             {
                 // Sustained encrypted calls often omit HDU metadata after the
@@ -99,21 +114,26 @@ public sealed class P25RxAudioSession : IAsyncDisposable
             }
         }
         else if (hasEncryptionMetadata &&
-                 encryptionMetadata.AlgorithmId == P25Defines.P25_ALGO_UNENCRYPT)
+                 parsedLdu.AlgorithmId == P25Defines.P25_ALGO_UNENCRYPT)
         {
             cryptoState = null;
             encryptedStream = false;
         }
         else if (cryptoState is null &&
                  hasEncryptionMetadata &&
-                 encryptionMetadata.AlgorithmId != P25Defines.P25_ALGO_UNENCRYPT)
+                 parsedLdu.AlgorithmId != P25Defines.P25_ALGO_UNENCRYPT)
         {
             // The current LDU2 cannot be decrypted without the preceding
             // state, but its ESS describes the keystream for the following
             // LDU1. Prepare that next boundary, conceal this LDU, and recover
             // without ever sending ciphertext to the vocoder.
             encryptedStream = true;
-            TryCreateCryptoState(traffic.StreamId, encryptionMetadata, out cryptoState);
+            TryCreateCryptoState(
+                traffic.StreamId,
+                parsedLdu.AlgorithmId,
+                parsedLdu.KeyId,
+                encryptionMessageIndicator,
+                out cryptoState);
             MalformedPackets++;
             await ConcealCurrentLduAsync(cancellationToken).ConfigureAwait(false);
             return 0;
@@ -126,9 +146,6 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         }
 
         int errors = 0;
-        byte[] codeword = new byte[P25DfsiFrameCodec.CodewordBytes];
-        short[] packetSamples = new short[
-            P25DfsiFrameCodec.CodewordsPerLdu * VocoderFrameSizes.PcmSamplesPerFrame];
         for (int index = 0; index < P25DfsiFrameCodec.CodewordsPerLdu; index++)
         {
             P25DUID duid = ldu1 ? P25DUID.LDU1 : P25DUID.LDU2;
@@ -162,7 +179,7 @@ public sealed class P25RxAudioSession : IAsyncDisposable
             .ConfigureAwait(false);
 
         if (!ldu1 && cryptoState is not null)
-            AdvanceAfterLdu2(traffic, errors);
+            AdvanceAfterLdu2(traffic.StreamId, parsedLdu, errors);
 
         return errors;
     }
@@ -171,21 +188,20 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         long lostPackets,
         CancellationToken cancellationToken)
     {
-        const int maximumConcealedPackets = 10;
-        int frameCount = checked((int)Math.Min(lostPackets, maximumConcealedPackets)) *
+        int frameCount = checked((int)Math.Min(lostPackets, MaximumConcealedPackets)) *
             P25DfsiFrameCodec.CodewordsPerLdu;
-        var concealedSamples = new short[
-            checked(frameCount * VocoderFrameSizes.PcmSamplesPerFrame)];
+        int sampleCount = checked(frameCount * VocoderFrameSizes.PcmSamplesPerFrame);
+        Memory<short> concealedSamples = concealmentSamples.AsMemory(0, sampleCount);
         for (int index = 0; index < frameCount; index++)
         {
-            decoder.ProcessLost(concealedSamples.AsSpan(
+            decoder.ProcessLost(concealedSamples.Span.Slice(
                 index * VocoderFrameSizes.PcmSamplesPerFrame,
                 VocoderFrameSizes.PcmSamplesPerFrame));
             FramesDecoded++;
         }
         await ConcealmentAudioWriter.WriteAsync(playback, concealedSamples, cancellationToken)
             .ConfigureAwait(false);
-        if (lostPackets > maximumConcealedPackets)
+        if (lostPackets > MaximumConcealedPackets)
             decoder.Reset();
     }
 
@@ -232,33 +248,46 @@ public sealed class P25RxAudioSession : IAsyncDisposable
         disposed = true;
     }
 
-    private void PrepareForLdu1(IRadioMediaFrame traffic)
+    private void PrepareForLdu1(
+        uint streamId,
+        P25DfsiFrameCodec.P25ParsedLdu parsedLdu)
     {
         // dvmhost emits HDU encryption metadata only at call start. Later
         // LDU1 DATA_UNIT frames rely on the next MI carried by the preceding
         // LDU2, so retain that prepared state when no fresh HDU is present.
-        if (!P25DfsiFrameCodec.TryExtractEncryptionMetadata(
-                traffic,
-                out P25DfsiFrameCodec.P25EncryptionMetadata metadata))
+        if (!parsedLdu.HasEncryptionMetadata)
             return;
 
-        if (metadata.AlgorithmId == P25Defines.P25_ALGO_UNENCRYPT)
+        if (parsedLdu.AlgorithmId == P25Defines.P25_ALGO_UNENCRYPT)
         {
             cryptoState = null;
             encryptedStream = false;
             return;
         }
 
-        cryptoState = CreateCryptoState(traffic.StreamId, metadata);
+        cryptoState = CreateCryptoState(
+            streamId,
+            parsedLdu.AlgorithmId,
+            parsedLdu.KeyId,
+            encryptionMessageIndicator);
         encryptedStream = true;
     }
 
-    private P25CryptoState CreateCryptoState(uint streamId, P25DfsiFrameCodec.P25EncryptionMetadata metadata)
+    private P25CryptoState CreateCryptoState(
+        uint streamId,
+        byte algorithmId,
+        ushort keyId,
+        ReadOnlySpan<byte> messageIndicator)
     {
-        if (!TryCreateCryptoState(streamId, metadata, out P25CryptoState? state))
+        if (!TryCreateCryptoState(
+                streamId,
+                algorithmId,
+                keyId,
+                messageIndicator,
+                out P25CryptoState? state))
         {
             throw new NotSupportedException(
-                $"P25 encrypted receive requires key 0x{metadata.KeyId:X} for algorithm 0x{metadata.AlgorithmId:X2}.");
+                $"P25 encrypted receive requires key 0x{keyId:X} for algorithm 0x{algorithmId:X2}.");
         }
 
         return state!;
@@ -266,29 +295,33 @@ public sealed class P25RxAudioSession : IAsyncDisposable
 
     private bool TryCreateCryptoState(
         uint streamId,
-        P25DfsiFrameCodec.P25EncryptionMetadata metadata,
+        byte algorithmId,
+        ushort keyId,
+        ReadOnlySpan<byte> messageIndicator,
         out P25CryptoState? state)
     {
         state = null;
         if (keyResolver is null ||
-            !keyResolver.TryResolve(systemName, metadata.AlgorithmId, metadata.KeyId, out ReadOnlyMemory<byte> key))
+            !keyResolver.TryResolve(systemName, algorithmId, keyId, out ReadOnlyMemory<byte> key))
         {
             return false;
         }
 
         var crypto = new P25Crypto();
-        crypto.SetKey(metadata.KeyId, metadata.AlgorithmId, key.ToArray());
-        if (!crypto.Prepare(metadata.AlgorithmId, metadata.KeyId, metadata.MessageIndicator))
+        byte[] ownedKey = key.ToArray();
+        byte[] ownedMessageIndicator = messageIndicator.ToArray();
+        crypto.SetKey(keyId, algorithmId, ownedKey);
+        if (!crypto.Prepare(algorithmId, keyId, ownedMessageIndicator))
         {
             throw new NotSupportedException(
-                $"P25 algorithm 0x{metadata.AlgorithmId:X2} could not prepare the configured key stream.");
+                $"P25 algorithm 0x{algorithmId:X2} could not prepare the configured key stream.");
         }
 
         state = new P25CryptoState(
             streamId,
-            metadata.AlgorithmId,
-            metadata.KeyId,
-            metadata.MessageIndicator.ToArray(),
+            algorithmId,
+            keyId,
+            ownedMessageIndicator,
             crypto);
         return true;
     }
@@ -301,20 +334,21 @@ public sealed class P25RxAudioSession : IAsyncDisposable
             throw new NotSupportedException("P25 encrypted receive could not process the configured key stream.");
     }
 
-    private void AdvanceAfterLdu2(IRadioMediaFrame traffic, int errors)
+    private void AdvanceAfterLdu2(
+        uint streamId,
+        P25DfsiFrameCodec.P25ParsedLdu parsedLdu,
+        int errors)
     {
-        if (P25DfsiFrameCodec.TryExtractEncryptionMetadata(
-                traffic,
-                out P25DfsiFrameCodec.P25EncryptionMetadata metadata))
+        if (parsedLdu.HasEncryptionMetadata)
         {
-            if (metadata.AlgorithmId == P25Defines.P25_ALGO_UNENCRYPT)
+            if (parsedLdu.AlgorithmId == P25Defines.P25_ALGO_UNENCRYPT)
             {
                 cryptoState = null;
                 encryptedStream = false;
                 return;
             }
 
-            byte[] nextMessageIndicator = metadata.MessageIndicator.ToArray();
+            byte[] nextMessageIndicator = encryptionMessageIndicator.ToArray();
             if (errors > 0)
             {
                 nextMessageIndicator = cryptoState!.MessageIndicator.ToArray();
@@ -322,29 +356,29 @@ public sealed class P25RxAudioSession : IAsyncDisposable
             }
 
             P25Crypto nextCrypto = cryptoState!.Crypto;
-            if (metadata.AlgorithmId != cryptoState.AlgorithmId || metadata.KeyId != cryptoState.KeyId)
+            if (parsedLdu.AlgorithmId != cryptoState.AlgorithmId || parsedLdu.KeyId != cryptoState.KeyId)
             {
                 if (keyResolver is null ||
-                    !keyResolver.TryResolve(systemName, metadata.AlgorithmId, metadata.KeyId, out ReadOnlyMemory<byte> key))
+                    !keyResolver.TryResolve(systemName, parsedLdu.AlgorithmId, parsedLdu.KeyId, out ReadOnlyMemory<byte> key))
                 {
                     throw new NotSupportedException(
-                        $"P25 encrypted receive requires key 0x{metadata.KeyId:X} for algorithm 0x{metadata.AlgorithmId:X2}.");
+                        $"P25 encrypted receive requires key 0x{parsedLdu.KeyId:X} for algorithm 0x{parsedLdu.AlgorithmId:X2}.");
                 }
 
                 nextCrypto = new P25Crypto();
-                nextCrypto.SetKey(metadata.KeyId, metadata.AlgorithmId, key.ToArray());
+                nextCrypto.SetKey(parsedLdu.KeyId, parsedLdu.AlgorithmId, key.ToArray());
             }
 
-            if (!nextCrypto.Prepare(metadata.AlgorithmId, metadata.KeyId, nextMessageIndicator))
+            if (!nextCrypto.Prepare(parsedLdu.AlgorithmId, parsedLdu.KeyId, nextMessageIndicator))
             {
                 throw new NotSupportedException(
-                    $"P25 algorithm 0x{metadata.AlgorithmId:X2} could not prepare the next key stream.");
+                    $"P25 algorithm 0x{parsedLdu.AlgorithmId:X2} could not prepare the next key stream.");
             }
 
             cryptoState = new P25CryptoState(
-                traffic.StreamId,
-                metadata.AlgorithmId,
-                metadata.KeyId,
+                streamId,
+                parsedLdu.AlgorithmId,
+                parsedLdu.KeyId,
                 nextMessageIndicator,
                 nextCrypto);
             encryptedStream = true;

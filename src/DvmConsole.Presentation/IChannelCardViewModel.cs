@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Windows.Input;
 using Avalonia.Media;
 
@@ -16,35 +19,42 @@ public interface IChannelCardViewModel
     IBrush CardBorderBrush { get; }
     IBrush CardTextBrush { get; }
     double CardWidth { get; }
+    AudioMeterState AudioMeter { get; }
     double AudioMeterWidth { get; }
-    double AudioFillWidth { get; }
-    double AudioPeakMarkerX { get; }
-    IBrush AudioPeakMarkerBrush { get; }
-    bool IsAudioPeakVisible { get; }
     double VolumeSliderValue { get; set; }
+    string VolumeAutomationName { get; }
     string EncryptionButtonText { get; }
+    string EncryptionAutomationName { get; }
+    string EncryptionAutomationHelpText { get; }
     IBrush EncryptionSelectionBrush { get; }
     IBrush EncryptionSelectionBorderBrush { get; }
     IBrush EncryptionSelectionTextBrush { get; }
     ICommand EncryptionCommand { get; }
     bool CanToggleEncryption { get; }
     string PttButtonText { get; }
+    string PttAutomationName { get; }
+    string PttAutomationHelpText { get; }
     bool IsPttControlEnabled { get; }
     bool IsTransmitSelected { get; }
     string TransmitSelectionText { get; }
+    string TransmitSelectionAutomationName { get; }
     IBrush TransmitSelectionBrush { get; }
     IBrush TransmitSelectionBorderBrush { get; }
     bool CanTransmit { get; }
     bool IsPageSelected { get; }
     string PageSelectionText { get; }
+    string PageSelectionAutomationName { get; }
     IBrush PageSelectionBrush { get; }
     IBrush PageSelectionBorderBrush { get; }
     bool IsAlertSelected { get; }
     string AlertSelectionText { get; }
+    string AlertSelectionAutomationName { get; }
     IBrush AlertSelectionBrush { get; }
     IBrush AlertSelectionBorderBrush { get; }
     bool IsRecordingEnabled { get; }
     string RecordButtonText { get; }
+    string RecordingAutomationName { get; }
+    string RecordingAutomationHelpText { get; }
     IBrush RecordingSelectionBrush { get; }
     IBrush RecordingSelectionBorderBrush { get; }
     ICommand RecordingCommand { get; }

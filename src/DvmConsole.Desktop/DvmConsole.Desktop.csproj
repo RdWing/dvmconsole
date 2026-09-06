@@ -9,7 +9,6 @@
     <Company>RdWing</Company>
     <Product>DVM Console NEO</Product>
     <AssemblyTitle>DVM Console NEO</AssemblyTitle>
-    <Copyright>Copyright © 2025-2026 RdWing</Copyright>
     <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/RdWing/dvmconsole</RepositoryUrl>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
@@ -21,6 +20,10 @@
 
   <PropertyGroup Condition="'$(DvmConsoleTargetPlatform)' == 'windows'">
     <DefineConstants>$(DefineConstants);DVMCONSOLE_WINDOWS</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(DvmConsoleTargetPlatform)' == 'linux'">
+    <DefineConstants>$(DefineConstants);DVMCONSOLE_LINUX</DefineConstants>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(PublishTrimmed)' == 'true'">
@@ -40,10 +43,12 @@
     <PackageReference Include="Avalonia.Native" Version="11.3.18"
                       Condition="'$(DvmConsoleTargetPlatform)' == 'macos'" />
     <PackageReference Include="Avalonia.Win32" Version="11.3.18" Condition="'$(DvmConsoleTargetPlatform)' == 'windows'" />
+    <PackageReference Include="Avalonia.X11" Version="11.3.18" Condition="'$(DvmConsoleTargetPlatform)' == 'linux'" />
     <PackageReference Include="Avalonia.Skia" Version="11.3.18" Condition="'$(DvmConsoleTargetPlatform)' != ''" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.18" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3" Condition="'$(Configuration)' == 'Debug'" />
-    <PackageReference Include="Markdown.Avalonia" Version="11.0.3" />
+    <PackageReference Include="Markdown.Avalonia.Tight" Version="11.0.3" />
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" />
   </ItemGroup>
 
   <ItemGroup>
@@ -68,14 +73,8 @@
        Keep them intact during partial linking; application and framework code
        can still be reduced without risking Markdown, XAML, SVG, or YAML data. -->
   <ItemGroup Condition="'$(PublishTrimmed)' == 'true'">
-    <TrimmerRootAssembly Include="AvaloniaEdit" />
     <TrimmerRootAssembly Include="Avalonia.DesignerSupport" />
-    <TrimmerRootAssembly Include="ExCSS" />
-    <TrimmerRootAssembly Include="HtmlAgilityPack" />
     <TrimmerRootAssembly Include="Markdown.Avalonia" />
-    <TrimmerRootAssembly Include="Markdown.Avalonia.Html" />
-    <TrimmerRootAssembly Include="Markdown.Avalonia.SyntaxHigh" />
-    <TrimmerRootAssembly Include="Svg.Custom" />
     <TrimmerRootAssembly Include="YamlDotNet" />
   </ItemGroup>
 
@@ -84,6 +83,14 @@
     <None Include="../../LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="../../docs/user-guide/**/*.md"
           Link="Documentation/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="../../docs/user-guide/manifest.json"
+          Link="Documentation/manifest.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="../../docs/user-guide/Assets/*.png"
+          Link="Documentation/Assets/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
     <None Include="../../configs/codeplug.demo.yml"

@@ -1,7 +1,11 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.ComponentModel;
 using Avalonia.Threading;
 using DvmConsole.Application;
 using DvmConsole.Core.Diagnostics;
+using DvmConsole.Presentation;
 
 namespace DvmConsole.Desktop;
 
@@ -38,12 +42,31 @@ internal sealed class DesktopConsoleSessionRuntimeAdapter : IConsoleSessionRunti
         nameof(ChannelViewModel.CanTransmit)
     ];
 
+    private static readonly HashSet<string> OwnerProjectionProperties =
+    [
+        nameof(MainWindowViewModel.StatusText),
+        nameof(MainWindowViewModel.OutputMuted),
+        nameof(MainWindowViewModel.SelectedSystemOutputMuted),
+        nameof(MainWindowViewModel.SelectedZoneOutputMuted),
+        "recordingPlaybackChannelId"
+    ];
+
     private readonly MainWindowViewModel owner;
     private readonly IReadOnlyDictionary<ChannelId, ChannelViewModel> channels;
     private readonly ConsoleTopologySnapshot topology;
     private readonly Func<CancellationToken, ValueTask> quiesce;
     private readonly Func<CancellationToken, ValueTask> flushSettings;
     private readonly IClock clock;
+    private readonly object snapshotSync = new();
+    private readonly HashSet<ChannelId> dirtyChannels = [];
+    private IReadOnlyDictionary<ChannelId, IReadOnlyList<ChannelPatchMembership>> patchIndex =
+        new Dictionary<ChannelId, IReadOnlyList<ChannelPatchMembership>>();
+    private ConsoleRuntimeSnapshot? cachedSnapshot;
+    private ConsoleRuntimeSnapshot? previousSnapshot;
+    private IReadOnlyDictionary<ChannelId, ChannelControlSnapshot>? updateBaseChannels;
+    private ChannelId[]? updatedChannelIds;
+    private bool allChannelsDirty = true;
+    private bool patchIndexDirty = true;
     private int controlInvalidationScheduled;
     private int disposed;
 
@@ -68,9 +91,15 @@ internal sealed class DesktopConsoleSessionRuntimeAdapter : IConsoleSessionRunti
         Commands = new DesktopConsoleCommands(owner, channels);
 
         owner.PropertyChanged += HandleOwnerPropertyChanged;
+        owner.RecordingStateChanged += HandleRecordingStateChanged;
         owner.DebugLogPublished += HandleDebugLogPublished;
         foreach (ChannelViewModel channel in channels.Values)
             channel.PropertyChanged += HandleChannelPropertyChanged;
+        foreach (PatchGroupEditorViewModel group in owner.PatchGroups)
+        {
+            group.PropertyChanged += HandlePatchGroupPropertyChanged;
+            group.MembershipChanged += HandlePatchGroupMembershipChanged;
+        }
     }
 
     public IReadOnlyList<ConsoleCallHistoryRecord> History => owner.ApplicationHistory;
@@ -83,7 +112,44 @@ internal sealed class DesktopConsoleSessionRuntimeAdapter : IConsoleSessionRunti
 
     public ConsoleTopologySnapshot CaptureTopology() => topology;
     public ConsoleRuntimeSnapshot CaptureSnapshot()
-        => DesktopConsoleSnapshotProjector.BuildSnapshot(owner, channels, 0);
+    {
+        lock (snapshotSync)
+        {
+            if (cachedSnapshot is not null)
+                return cachedSnapshot;
+            if (patchIndexDirty)
+            {
+                patchIndex = DesktopConsoleSnapshotProjector.BuildPatchIndex(owner);
+                patchIndexDirty = false;
+            }
+
+            ChannelId[]? changed = allChannelsDirty ? null : dirtyChannels.ToArray();
+            updateBaseChannels = previousSnapshot?.Channels;
+            updatedChannelIds = changed;
+            cachedSnapshot = DesktopConsoleSnapshotProjector.BuildSnapshot(
+                owner,
+                channels,
+                0,
+                previousSnapshot,
+                changed,
+                patchIndex);
+            previousSnapshot = cachedSnapshot;
+            allChannelsDirty = false;
+            dirtyChannels.Clear();
+            return cachedSnapshot;
+        }
+    }
+
+    public ConsoleSnapshotUpdate CaptureUpdate(ConsoleRuntimeSnapshot previous)
+    {
+        lock (snapshotSync)
+        {
+            ConsoleRuntimeSnapshot current = CaptureSnapshot();
+            return new ConsoleSnapshotUpdate(current,
+                ReferenceEquals(previous.Channels, current.Channels) ? [] :
+                ReferenceEquals(previous.Channels, updateBaseChannels) ? updatedChannelIds : null);
+        }
+    }
 
     public ValueTask QuiesceAsync(CancellationToken cancellationToken)
         => quiesce(cancellationToken);
@@ -96,8 +162,34 @@ internal sealed class DesktopConsoleSessionRuntimeAdapter : IConsoleSessionRunti
 
     private void HandleOwnerPropertyChanged(object? sender, PropertyChangedEventArgs args)
     {
-        if (Volatile.Read(ref disposed) == 0)
-            RequestControlStateInvalidation();
+        if (Volatile.Read(ref disposed) == 0 &&
+            (args.PropertyName is null || OwnerProjectionProperties.Contains(args.PropertyName)))
+        {
+            bool statusOnly = args.PropertyName == nameof(MainWindowViewModel.StatusText);
+            RequestControlStateInvalidation(
+                invalidateAllChannels: !statusOnly && args.PropertyName is (
+                    null or
+                    nameof(MainWindowViewModel.OutputMuted) or
+                    nameof(MainWindowViewModel.SelectedSystemOutputMuted) or
+                    nameof(MainWindowViewModel.SelectedZoneOutputMuted)),
+                invalidateChannels: !statusOnly);
+        }
+    }
+
+    private void HandleRecordingStateChanged(ChannelId channelId)
+        => RequestControlStateInvalidation(channelId);
+
+    private void HandlePatchGroupPropertyChanged(object? sender, PropertyChangedEventArgs args)
+        => RequestPatchProjectionInvalidation();
+
+    private void HandlePatchGroupMembershipChanged(object? sender, EventArgs args)
+        => RequestPatchProjectionInvalidation();
+
+    private void RequestPatchProjectionInvalidation()
+    {
+        lock (snapshotSync)
+            patchIndexDirty = true;
+        RequestControlStateInvalidation(invalidateAllChannels: true);
     }
 
     private void HandleChannelPropertyChanged(object? sender, PropertyChangedEventArgs args)
@@ -108,20 +200,37 @@ internal sealed class DesktopConsoleSessionRuntimeAdapter : IConsoleSessionRunti
         switch (ClassifyChannelProperty(args.PropertyName))
         {
             case ChannelProjectionChangeKind.Meter:
+                AudioMeterState meter = channel.AudioMeter;
                 MeterSampled?.Invoke(this, new ChannelMeterSample(
                     new ChannelId(channel.SessionId),
-                    channel.AudioLevel,
-                    channel.AudioPeakLevel,
+                    meter.Level,
+                    meter.PeakLevel,
                     clock.UtcNow));
                 break;
             case ChannelProjectionChangeKind.Control:
-                RequestControlStateInvalidation();
+                RequestControlStateInvalidation(channel.Id);
                 break;
         }
     }
 
-    private void RequestControlStateInvalidation()
+    private void RequestControlStateInvalidation(
+        ChannelId? channelId = null,
+        bool invalidateAllChannels = false,
+        bool invalidateChannels = true)
     {
+        lock (snapshotSync)
+        {
+            cachedSnapshot = null;
+            if (!invalidateChannels)
+            {
+                // Owner-only fields such as StatusText do not require any
+                // channel projection work.
+            }
+            else if (invalidateAllChannels || channelId is null)
+                allChannelsDirty = true;
+            else if (!allChannelsDirty)
+                dirtyChannels.Add(channelId.Value);
+        }
         if (Volatile.Read(ref disposed) != 0 ||
             Interlocked.Exchange(ref controlInvalidationScheduled, 1) != 0)
         {
@@ -131,8 +240,22 @@ internal sealed class DesktopConsoleSessionRuntimeAdapter : IConsoleSessionRunti
         Dispatcher.UIThread.Post(() =>
         {
             Volatile.Write(ref controlInvalidationScheduled, 0);
-            if (Volatile.Read(ref disposed) == 0)
-                ControlStateInvalidated?.Invoke(this, EventArgs.Empty);
+            if (Volatile.Read(ref disposed) != 0)
+                return;
+
+            foreach (EventHandler observer in
+                     ControlStateInvalidated?.GetInvocationList().Cast<EventHandler>() ?? [])
+            {
+                try
+                {
+                    observer(this, EventArgs.Empty);
+                }
+                catch
+                {
+                    // A projection observer cannot block later subscribers or
+                    // interrupt runtime invalidation.
+                }
+            }
         });
     }
 
@@ -140,7 +263,7 @@ internal sealed class DesktopConsoleSessionRuntimeAdapter : IConsoleSessionRunti
     {
         if (propertyName is null)
             return ChannelProjectionChangeKind.Control;
-        if (propertyName is nameof(ChannelViewModel.AudioLevel) or nameof(ChannelViewModel.AudioPeakLevel))
+        if (propertyName == nameof(ChannelViewModel.AudioMeter))
             return ChannelProjectionChangeKind.Meter;
         return ControlProjectionProperties.Contains(propertyName)
             ? ChannelProjectionChangeKind.Control
@@ -149,13 +272,22 @@ internal sealed class DesktopConsoleSessionRuntimeAdapter : IConsoleSessionRunti
 
     private ValueTask DisposeProjectionAsync()
     {
-        if (Interlocked.Exchange(ref disposed, 1) != 0)
-            return ValueTask.CompletedTask;
+        lock (snapshotSync)
+        {
+            if (Interlocked.Exchange(ref disposed, 1) != 0)
+                return ValueTask.CompletedTask;
 
-        owner.PropertyChanged -= HandleOwnerPropertyChanged;
-        owner.DebugLogPublished -= HandleDebugLogPublished;
-        foreach (ChannelViewModel channel in channels.Values)
-            channel.PropertyChanged -= HandleChannelPropertyChanged;
+            owner.PropertyChanged -= HandleOwnerPropertyChanged;
+            owner.RecordingStateChanged -= HandleRecordingStateChanged;
+            owner.DebugLogPublished -= HandleDebugLogPublished;
+            foreach (ChannelViewModel channel in channels.Values)
+                channel.PropertyChanged -= HandleChannelPropertyChanged;
+            foreach (PatchGroupEditorViewModel group in owner.PatchGroups)
+            {
+                group.PropertyChanged -= HandlePatchGroupPropertyChanged;
+                group.MembershipChanged -= HandlePatchGroupMembershipChanged;
+            }
+        }
         return ValueTask.CompletedTask;
     }
 

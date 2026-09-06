@@ -11,12 +11,18 @@
     <DefineConstants>$(DefineConstants);DVMCONSOLE_WINDOWS</DefineConstants>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(DvmConsoleTargetPlatform)' == 'linux'">
+    <DefineConstants>$(DefineConstants);DVMCONSOLE_LINUX</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="../DvmConsole.Audio.Abstractions/DvmConsole.Audio.Abstractions.csproj" />
     <ProjectReference Include="../DvmConsole.Audio.Core/DvmConsole.Audio.Core.csproj" />
     <ProjectReference Include="../DvmConsole.Audio.MacOS/DvmConsole.Audio.MacOS.csproj"
-                      Condition="'$(DvmConsoleTargetPlatform)' != 'windows'" />
+                      Condition="'$(DvmConsoleTargetPlatform)' == '' or '$(DvmConsoleTargetPlatform)' == 'macos'" />
     <ProjectReference Include="../DvmConsole.Audio.Windows/DvmConsole.Audio.Windows.csproj"
-                      Condition="'$(DvmConsoleTargetPlatform)' != 'macos'" />
+                      Condition="'$(DvmConsoleTargetPlatform)' == '' or '$(DvmConsoleTargetPlatform)' == 'windows'" />
+    <ProjectReference Include="../DvmConsole.Audio.Linux/DvmConsole.Audio.Linux.csproj"
+                      Condition="'$(DvmConsoleTargetPlatform)' == '' or '$(DvmConsoleTargetPlatform)' == 'linux'" />
   </ItemGroup>
 </Project>

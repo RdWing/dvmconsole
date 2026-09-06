@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:presentation="using:DvmConsole.Presentation"
@@ -16,6 +19,17 @@
       <TextBlock Classes="caption"
                  Text="YAML stores group name and type. Membership, one-way source order, and enabled state remain codeplug-scoped operator settings."
                  TextWrapping="Wrap"/>
+      <Border Classes="panel">
+        <StackPanel Spacing="4">
+          <CheckBox Content="Preserve inbound source ID when forwarding patches"
+                    IsChecked="{Binding PatchSourceIdPassthrough, Mode=TwoWay}"
+                    IsEnabled="{Binding CanEdit}"
+                    AutomationProperties.Name="Preserve patch source IDs"/>
+          <TextBlock Classes="caption"
+                     Text="Codeplug-wide. When disabled, forwarded calls use the destination FNE system's configured console RID."
+                     TextWrapping="Wrap"/>
+        </StackPanel>
+      </Border>
       <Grid x:Name="GroupsBody" ColumnDefinitions="2*,3*" ColumnSpacing="10">
         <Border x:Name="GroupDefinitionsPanel" Classes="panel" IsEnabled="{Binding CanEdit}">
           <StackPanel Spacing="6">
@@ -41,7 +55,7 @@
               </ListBox.ItemTemplate>
             </ListBox>
             <TextBlock Classes="caption" Text="Name"/>
-            <TextBox Text="{Binding SelectedGroup.Name, Mode=TwoWay}"
+            <TextBox Text="{Binding SelectedGroup.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                      LostFocus="HandleDraftFieldEdit"
                      AutomationProperties.Name="Group name"/>
             <TextBlock Classes="caption" Text="Type"/>

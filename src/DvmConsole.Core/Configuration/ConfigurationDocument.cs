@@ -1,9 +1,10 @@
-using System.Diagnostics.CodeAnalysis;
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Security.Cryptography;
 using System.Text;
 using YamlDotNet.RepresentationModel;
-using YamlDotNet.Serialization;
-using YamlDotNet.Serialization.NamingConventions;
+using DvmConsole.Core.IO;
 
 namespace DvmConsole.Core.Configuration;
 
@@ -14,28 +15,6 @@ public sealed record UnknownConfigurationField(string Path, string Name)
 
 public sealed class ConfigurationDocument
 {
-    [UnconditionalSuppressMessage("AOT", "IL3050", Justification =
-        "Temporary Phase 2 YAML allowlist: migrate this builder to a generated StaticContext while preserving unknown-field and read-only behavior.")]
-    private static readonly IDeserializer Deserializer = new DeserializerBuilder()
-        .WithNamingConvention(CamelCaseNamingConvention.Instance)
-        .IgnoreUnmatchedProperties()
-        .Build();
-
-    [UnconditionalSuppressMessage("AOT", "IL3050", Justification =
-        "Temporary Phase 2 YAML allowlist: migrate this builder to a generated StaticContext while preserving unknown-field and read-only behavior.")]
-    private static readonly ISerializer Serializer = new SerializerBuilder()
-        .WithNamingConvention(CamelCaseNamingConvention.Instance)
-        .ConfigureDefaultValuesHandling(
-            DefaultValuesHandling.OmitNull |
-            DefaultValuesHandling.OmitEmptyCollections)
-        .Build();
-    [UnconditionalSuppressMessage("AOT", "IL3050", Justification =
-        "Temporary Phase 2 YAML allowlist: migrate this builder to a generated StaticContext while preserving unknown-field and read-only behavior.")]
-    private static readonly ISerializer SchemaSerializer = new SerializerBuilder()
-        .WithNamingConvention(CamelCaseNamingConvention.Instance)
-        .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
-        .Build();
-
     private readonly YamlStream sourceTree;
 
     private ConfigurationDocument(
@@ -71,32 +50,28 @@ public sealed class ConfigurationDocument
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         string fullPath = Path.GetFullPath(path);
-        string sourceText = File.ReadAllText(fullPath);
+        string sourceText = BoundedResourceReader.ReadUtf8File(
+            fullPath,
+            ManagedResourceLimits.ConfigurationYamlBytes,
+            "Configuration YAML");
         return Parse(sourceText, fullPath);
     }
 
     public static ConfigurationDocument Parse(string sourceText, string? sourcePath = null)
     {
         ArgumentNullException.ThrowIfNull(sourceText);
+        YamlResourceGuard.ValidateSource(sourceText, "configuration YAML");
         var tree = new YamlStream();
         try
         {
             using var reader = new StringReader(sourceText);
             tree.Load(reader);
+            YamlResourceGuard.ValidateTree(tree, "configuration YAML");
         }
         catch (YamlDotNet.Core.YamlException exception) when (
             exception.Message.Contains("Duplicate key", StringComparison.OrdinalIgnoreCase))
         {
-            ConsoleConfiguration duplicateConfiguration;
-            try
-            {
-                duplicateConfiguration = Deserializer.Deserialize<ConsoleConfiguration>(sourceText)
-                    ?? new ConsoleConfiguration();
-            }
-            catch (YamlDotNet.Core.YamlException)
-            {
-                duplicateConfiguration = new ConsoleConfiguration();
-            }
+            var duplicateConfiguration = new ConsoleConfiguration();
             SetSourcePathAndNormalize(duplicateConfiguration, sourcePath);
             YamlStream fallbackTree = CreateCanonicalTree(duplicateConfiguration);
             return new ConfigurationDocument(
@@ -113,10 +88,9 @@ public sealed class ConfigurationDocument
         ConsoleConfiguration configuration;
         try
         {
-            configuration = Deserializer.Deserialize<ConsoleConfiguration>(sourceText)
-                ?? throw new InvalidDataException("The codeplug file did not contain a configuration.");
+            configuration = DvmYamlCodec.ReadConfiguration(tree);
         }
-        catch (YamlDotNet.Core.YamlException) when (unsafeReason is not null)
+        catch (InvalidDataException) when (unsafeReason is not null)
         {
             configuration = new ConsoleConfiguration();
         }
@@ -142,12 +116,7 @@ public sealed class ConfigurationDocument
     }
 
     private static YamlStream CreateCanonicalTree(ConsoleConfiguration configuration)
-    {
-        var tree = new YamlStream();
-        using var reader = new StringReader(Serializer.Serialize(configuration));
-        tree.Load(reader);
-        return tree;
-    }
+        => DvmYamlCodec.CreateConfigurationTree(configuration);
 
     public static ConfigurationDocument CreateNew()
     {
@@ -202,10 +171,7 @@ public sealed class ConfigurationDocument
         if (IsReadOnly)
             throw new InvalidOperationException(ReadOnlyReason ?? "This YAML document cannot be safely rewritten.");
 
-        string canonicalText = Serializer.Serialize(Configuration);
-        var canonicalTree = new YamlStream();
-        using (var reader = new StringReader(canonicalText))
-            canonicalTree.Load(reader);
+        YamlStream canonicalTree = DvmYamlCodec.CreateConfigurationTree(Configuration);
 
         if (sourceTree.Documents.Count > 0 && canonicalTree.Documents.Count > 0)
             MergeUnknownNodes(sourceTree.Documents[0].RootNode, canonicalTree.Documents[0].RootNode);
@@ -219,37 +185,70 @@ public sealed class ConfigurationDocument
     {
         ConsoleConfiguration sanitized = Clone(Configuration);
         sanitized.KeyFile = null;
-        foreach (SystemConfiguration system in sanitized.Systems)
+        sanitized.PatchSourceIdPassthrough = false;
+        var systemNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (int index = 0; index < sanitized.Systems.Count; index++)
         {
+            SystemConfiguration system = sanitized.Systems[index];
+            string replacement = $"System {index + 1}";
+            systemNames[system.Name] = replacement;
+            system.Name = replacement;
             system.Address = "redacted.invalid";
-            system.Identity = string.Empty;
+            system.Port = 1;
+            system.Identity = $"console-{index + 1}";
             system.Password = null;
             system.PresharedKey = null;
             system.KmfPresharedKey = null;
             system.Encrypted = false;
-            system.PeerId = 0;
-            system.Rid = string.Empty;
+            system.TransportEncryptionMode = "auto";
+            system.PeerId = (uint)(index + 1);
+            system.Rid = (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
             system.AliasPath = string.Empty;
+            system.RidAlias = [];
         }
 
-        foreach (ZoneConfiguration zone in sanitized.Zones)
+        var identifiers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        int nextIdentifier = 10_001;
+        int nextChannel = 1;
+        int nextStream = 1;
+        for (int zoneIndex = 0; zoneIndex < sanitized.Zones.Count; zoneIndex++)
         {
+            ZoneConfiguration zone = sanitized.Zones[zoneIndex];
+            zone.Name = $"Zone {zoneIndex + 1}";
+            zone.TabColor = null;
+            zone.TabTextColor = null;
             foreach (ChannelConfiguration channel in zone.Channels)
             {
-                // Keep the support copy valid while removing the operational
-                // destination. Zero is rejected by the normal configuration
-                // contract, so use a harmless non-zero placeholder.
-                channel.Tgid = "1";
+                channel.Name = $"Channel {nextChannel++}";
+                if (systemNames.TryGetValue(channel.System, out string? systemName))
+                    channel.System = systemName;
+                if (!identifiers.TryGetValue(channel.Tgid, out string? identifier))
+                {
+                    identifier = nextIdentifier++.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    identifiers[channel.Tgid] = identifier;
+                }
+                channel.Tgid = identifier;
+                channel.Algo = "none";
+                channel.KeyId = null;
+                channel.SelectableEncryption = false;
+                channel.ResourceColor = null;
             }
             foreach (WebStreamConfiguration stream in zone.WebStreams)
             {
+                stream.Name = $"Stream {nextStream++}";
                 stream.Url = "https://redacted.invalid/";
                 stream.AuthUsername = null;
                 stream.AuthPassword = null;
+                stream.IdleColor = null;
             }
         }
 
-        return Serializer.Serialize(sanitized);
+        for (int index = 0; index < sanitized.Groups.Count; index++)
+            sanitized.Groups[index].Name = $"Group {index + 1}";
+        for (int index = 0; index < sanitized.LegacyPatchGroups.Count; index++)
+            sanitized.LegacyPatchGroups[index].Name = $"Legacy Group {index + 1}";
+
+        return DvmYamlCodec.SerializeConfiguration(sanitized);
     }
 
     public void AcceptSaved(string path, string serializedText)
@@ -262,15 +261,17 @@ public sealed class ConfigurationDocument
     }
 
     public static string ComputeFileHash(string path)
-        => ComputeHash(File.ReadAllText(path));
+        => ComputeHash(BoundedResourceReader.ReadUtf8File(
+            path,
+            ManagedResourceLimits.ConfigurationYamlBytes,
+            "Configuration YAML"));
 
     public static string ComputeHash(string text)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 
     private static ConsoleConfiguration Clone(ConsoleConfiguration configuration)
     {
-        ConsoleConfiguration clone = Deserializer.Deserialize<ConsoleConfiguration>(Serializer.Serialize(configuration))
-            ?? new ConsoleConfiguration();
+        ConsoleConfiguration clone = DvmYamlCodec.CloneConfiguration(configuration);
         ConfigurationNormalizer.Normalize(clone);
         return clone;
     }
@@ -338,10 +339,9 @@ public sealed class ConfigurationDocument
         YamlStream original,
         ConsoleConfiguration configuration)
     {
-        string canonical = SchemaSerializer.Serialize(configuration);
-        var canonicalTree = new YamlStream();
-        using (var reader = new StringReader(canonical))
-            canonicalTree.Load(reader);
+        YamlStream canonicalTree = DvmYamlCodec.CreateConfigurationTree(
+            configuration,
+            includeEmptyCollections: true);
         var unknown = new List<UnknownConfigurationField>();
         if (original.Documents.Count > 0 && canonicalTree.Documents.Count > 0)
             CollectUnknownNodes(original.Documents[0].RootNode, canonicalTree.Documents[0].RootNode, "$", unknown);
@@ -367,9 +367,10 @@ public sealed class ConfigurationDocument
         }
         else if (original is YamlSequenceNode originalSequence && canonical is YamlSequenceNode canonicalSequence)
         {
+            var identities = new SequenceIdentityIndex(originalSequence);
             for (int index = 0; index < canonicalSequence.Children.Count; index++)
             {
-                YamlNode? originalItem = FindCorrespondingSequenceItem(originalSequence, canonicalSequence.Children[index], index);
+                YamlNode? originalItem = identities.Find(canonicalSequence.Children[index], index);
                 if (originalItem is not null)
                     CollectUnknownNodes(originalItem, canonicalSequence.Children[index], $"{path}[{index}]", unknown);
             }
@@ -391,50 +392,64 @@ public sealed class ConfigurationDocument
         }
         else if (original is YamlSequenceNode originalSequence && canonical is YamlSequenceNode canonicalSequence)
         {
+            var identities = new SequenceIdentityIndex(originalSequence);
             for (int index = 0; index < canonicalSequence.Children.Count; index++)
             {
-                YamlNode? originalItem = FindCorrespondingSequenceItem(originalSequence, canonicalSequence.Children[index], index);
+                YamlNode? originalItem = identities.Find(canonicalSequence.Children[index], index);
                 if (originalItem is not null)
                     MergeUnknownNodes(originalItem, canonicalSequence.Children[index]);
             }
         }
     }
 
-    private static YamlNode? FindCorrespondingSequenceItem(
-        YamlSequenceNode originalSequence,
-        YamlNode canonicalItem,
-        int fallbackIndex)
+    // A sequence is matched repeatedly during serialization and unknown-field
+    // discovery. Build each identity lookup once, keeping ambiguous identities
+    // unresolved so the next, more specific discriminator can still be tried.
+    private sealed class SequenceIdentityIndex(YamlSequenceNode original)
     {
-        if (canonicalItem is YamlMappingNode canonicalMap)
+        private static readonly string[][] IdentityKeys =
+        [
+            ["system", "tgid", "mode"],
+            ["peerId", "rid"],
+            ["url"],
+            ["name"]
+        ];
+        private readonly Dictionary<string, YamlNode?>?[] indexes =
+            new Dictionary<string, YamlNode?>?[IdentityKeys.Length];
+
+        public YamlNode? Find(YamlNode canonicalItem, int fallbackIndex)
         {
-            bool hasIdentity = false;
-            string[][] identityKeys =
-            [
-                ["system", "tgid", "mode"],
-                ["peerId", "rid"],
-                ["url"],
-                ["name"]
-            ];
-            foreach (string[] keys in identityKeys)
+            if (canonicalItem is YamlMappingNode canonicalMap)
             {
-                if (!TryBuildMappingIdentity(canonicalMap, keys, out string? identity))
-                    continue;
-                hasIdentity = true;
-                List<YamlNode> matches = originalSequence.Children
-                    .Where(item => item is YamlMappingNode originalMap &&
-                        TryBuildMappingIdentity(originalMap, keys, out string? originalIdentity) &&
-                        string.Equals(identity, originalIdentity, StringComparison.Ordinal))
-                    .ToList();
-                if (matches.Count == 1)
-                    return matches[0];
+                bool hasIdentity = false;
+                for (int index = 0; index < IdentityKeys.Length; index++)
+                {
+                    if (!TryBuildMappingIdentity(canonicalMap, IdentityKeys[index], out string? identity))
+                        continue;
+                    hasIdentity = true;
+                    Dictionary<string, YamlNode?> lookup = indexes[index] ??= Build(IdentityKeys[index]);
+                    if (lookup.TryGetValue(identity!, out YamlNode? match) && match is not null)
+                        return match;
+                }
+                if (hasIdentity)
+                    return null;
             }
-            if (hasIdentity)
-                return null;
+            return fallbackIndex < original.Children.Count ? original.Children[fallbackIndex] : null;
         }
 
-        return fallbackIndex < originalSequence.Children.Count
-            ? originalSequence.Children[fallbackIndex]
-            : null;
+        private Dictionary<string, YamlNode?> Build(string[] keys)
+        {
+            var lookup = new Dictionary<string, YamlNode?>(StringComparer.Ordinal);
+            foreach (YamlNode item in original.Children)
+            {
+                if (item is not YamlMappingNode mapping ||
+                    !TryBuildMappingIdentity(mapping, keys, out string? identity))
+                    continue;
+                if (!lookup.TryAdd(identity!, item))
+                    lookup[identity!] = null;
+            }
+            return lookup;
+        }
     }
 
     private static bool TryBuildMappingIdentity(

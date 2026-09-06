@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Desktop;
 using Xunit;
 
@@ -11,21 +14,23 @@ public sealed class ConnectionSessionControllerTests
         var operations = new List<string>();
         var controller = new ConnectionSessionController(
             [],
-            _ =>
-            {
-                operations.Add("sync-patch");
-                return Task.CompletedTask;
-            },
-            _ =>
-            {
-                operations.Add("stop-patch-decode");
-                return Task.CompletedTask;
-            },
-            () => operations.Add("stop-patch-forwarding"),
-            value => operations.Add($"busy-{value}"),
-            value => operations.Add($"status-{value}"),
-            _ => throw new InvalidOperationException("No systems are configured."),
-            (_, _) => throw new InvalidOperationException("No systems are configured."));
+            new ConnectionPatchLifecyclePort(
+                _ =>
+                {
+                    operations.Add("sync-patch");
+                    return Task.CompletedTask;
+                },
+                _ =>
+                {
+                    operations.Add("stop-patch-decode");
+                    return Task.CompletedTask;
+                },
+                () => operations.Add("stop-patch-forwarding")),
+            new ConnectionPresentationPort(
+                value => operations.Add($"busy-{value}"),
+                value => operations.Add($"status-{value}"),
+                _ => throw new InvalidOperationException("No systems are configured."),
+                (_, _) => throw new InvalidOperationException("No systems are configured.")));
 
         await controller.ConnectAsync();
         await controller.DisconnectAsync();
@@ -55,22 +60,24 @@ public sealed class ConnectionSessionControllerTests
         var operations = new List<string>();
         var controller = new ConnectionSessionController(
             [],
-            async cancellationToken =>
-            {
-                operations.Add("sync-patch-start");
-                connectEntered.TrySetResult();
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            },
-            _ =>
-            {
-                operations.Add("stop-patch-decode");
-                return Task.CompletedTask;
-            },
-            () => operations.Add("stop-patch-forwarding"),
-            value => operations.Add($"busy-{value}"),
-            value => operations.Add($"status-{value}"),
-            _ => throw new InvalidOperationException("No systems are configured."),
-            (_, _) => throw new InvalidOperationException("No systems are configured."));
+            new ConnectionPatchLifecyclePort(
+                async cancellationToken =>
+                {
+                    operations.Add("sync-patch-start");
+                    connectEntered.TrySetResult();
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                },
+                _ =>
+                {
+                    operations.Add("stop-patch-decode");
+                    return Task.CompletedTask;
+                },
+                () => operations.Add("stop-patch-forwarding")),
+            new ConnectionPresentationPort(
+                value => operations.Add($"busy-{value}"),
+                value => operations.Add($"status-{value}"),
+                _ => throw new InvalidOperationException("No systems are configured."),
+                (_, _) => throw new InvalidOperationException("No systems are configured.")));
 
         Task connect = controller.ConnectAsync();
         await connectEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
@@ -91,17 +98,19 @@ public sealed class ConnectionSessionControllerTests
         int stopPatchDecodeCalls = 0;
         var controller = new ConnectionSessionController(
             [],
-            _ => Task.FromException(new IOException("synthetic patch synchronization failure")),
-            _ =>
-            {
-                Interlocked.Increment(ref stopPatchDecodeCalls);
-                return Task.CompletedTask;
-            },
-            () => { },
-            _ => { },
-            _ => { },
-            _ => throw new InvalidOperationException("No systems are configured."),
-            (_, _) => throw new InvalidOperationException("No systems are configured."));
+            new ConnectionPatchLifecyclePort(
+                _ => Task.FromException(new IOException("synthetic patch synchronization failure")),
+                _ =>
+                {
+                    Interlocked.Increment(ref stopPatchDecodeCalls);
+                    return Task.CompletedTask;
+                },
+                () => { }),
+            new ConnectionPresentationPort(
+                _ => { },
+                _ => { },
+                _ => throw new InvalidOperationException("No systems are configured."),
+                (_, _) => throw new InvalidOperationException("No systems are configured.")));
 
         await Assert.ThrowsAsync<IOException>(controller.ConnectAsync);
         await controller.DisconnectAsync().WaitAsync(TimeSpan.FromSeconds(1));

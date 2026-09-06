@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections.Concurrent;
 using DvmConsole.Audio;
 using DvmConsole.Application;
@@ -23,13 +26,45 @@ public sealed class ToneTransmitCoordinatorTests
         });
         var endpoint = new FakeEndpoint(channel);
         await using var coordinator = new ToneTransmitCoordinator();
+        var sendingStates = new List<bool>();
+        coordinator.SendingChanged += (_, args) => sendingStates.Add(args.IsSending);
 
         await coordinator.SendAsync(
-            channel,
+            channel.ToTransmitDescriptor(),
             endpoint,
             new short[VocoderFrameSizes.PcmSamplesPerFrame + 1]);
+        await coordinator.DrainNotificationsAsync();
 
         Assert.Equal([0, 1, ushort.MaxValue], endpoint.PacketSequences);
+        Assert.Equal([true, false], sendingStates);
+    }
+
+    [Fact]
+    public async Task ThrowingAndReentrantObserversCannotStrandTheToneGate()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Alert",
+            System = "Test",
+            Tgid = "100",
+            Mode = "analog"
+        });
+        var endpoint = new FakeEndpoint(channel);
+        await using var coordinator = new ToneTransmitCoordinator();
+        var observed = new List<bool>();
+        coordinator.SendingChanged += (_, _) => throw new InvalidOperationException("observer fault");
+        coordinator.SendingChanged += (_, args) =>
+        {
+            observed.Add(args.IsSending);
+            _ = coordinator.IsSending;
+        };
+
+        await coordinator.SendAsync(channel.ToTransmitDescriptor(), endpoint, new short[160]);
+        await coordinator.DrainNotificationsAsync();
+        await coordinator.SendAsync(channel.ToTransmitDescriptor(), endpoint, new short[160]);
+        await coordinator.DrainNotificationsAsync();
+
+        Assert.Equal([true, false, true, false], observed);
     }
 
     [Fact]
@@ -49,7 +84,7 @@ public sealed class ToneTransmitCoordinatorTests
         };
         await using var coordinator = new ToneTransmitCoordinator();
 
-        await coordinator.SendAsync(channel, endpoint, new short[160]);
+        await coordinator.SendAsync(channel.ToTransmitDescriptor(), endpoint, new short[160]);
 
         Assert.NotEmpty(endpoint.PacketSequences);
     }
@@ -66,7 +101,7 @@ public sealed class ToneTransmitCoordinatorTests
             1_000,
             TimeSpan.FromMilliseconds(180));
 
-        await coordinator.SendAsync(channel, endpoint, samples);
+        await coordinator.SendAsync(channel.ToTransmitDescriptor(), endpoint, samples);
 
         Assert.Equal(9, backend.Session.EncodeCalls);
         Assert.Equal(0, backend.Session.SingleToneCalls);
@@ -114,13 +149,48 @@ public sealed class ToneTransmitCoordinatorTests
         Assert.Equal(0, backend.Session.SingleToneCalls);
     }
 
+    [Theory]
+    [InlineData("dmr", VocoderMode.DmrAmbe)]
+    [InlineData("nxdn", VocoderMode.NxdnAmbe)]
+    public async Task DmrAndNxdnGeneratedTonesUseTheNominalTransmitLevel(
+        string mode,
+        VocoderMode vocoderMode)
+    {
+        ChannelViewModel channel = CreateDigitalChannel(mode);
+        var endpoint = new FakeEndpoint(channel);
+        var backend = new RecordingVocoderBackend(vocoderMode);
+        await using var coordinator = new ToneTransmitCoordinator(
+            createVocoderBackend: () => backend);
+        var sequence = new GeneratedToneSequence([
+            GeneratedToneStep.Tone(1_000, TimeSpan.FromMilliseconds(20))
+        ]);
+
+        await coordinator.SendAsync([
+            new TransmitTarget(channel.ToTransmitDescriptor(), endpoint)], sequence);
+
+        short[] frame = Assert.Single(backend.Session.EncodedFrames.Take(1));
+        double meanSquare = frame
+            .Select(sample => sample / (double)short.MaxValue)
+            .Select(sample => sample * sample)
+            .Average();
+        double rmsDbfs = 20 * Math.Log10(Math.Sqrt(meanSquare));
+        Assert.InRange(
+            rmsDbfs,
+            ToneTransmitCoordinator.DmrNxdnToneTargetDbfs - 0.1,
+            ToneTransmitCoordinator.DmrNxdnToneTargetDbfs + 0.1);
+    }
+
     private static ChannelViewModel CreateP25Channel()
+        => CreateDigitalChannel("p25");
+
+    private static ChannelViewModel CreateDigitalChannel(string mode)
         => new(new ChannelConfiguration
         {
             Name = "Alert",
             System = "Test",
             Tgid = "100",
-            Mode = "p25"
+            Mode = mode,
+            Slot = 1
         });
 
     private sealed class FakeEndpoint(ChannelViewModel channel) : IFneTrafficEndpoint
@@ -150,13 +220,14 @@ public sealed class ToneTransmitCoordinatorTests
 
         public void SendTraffic(
             FneTrafficProtocol protocol,
-            ReadOnlySpan<byte> payload,
+            ReadOnlyMemory<byte> payload,
             ushort packetSequence,
             uint outboundStreamId)
             => packetSequences.Enqueue(packetSequence);
     }
 
-    private sealed class RecordingVocoderBackend : IVocoderBackend
+    private sealed class RecordingVocoderBackend(
+        VocoderMode expectedMode = VocoderMode.P25Imbe) : IVocoderBackend
     {
         public string Name => "Recording P25 vocoder";
         public bool IsAvailable => true;
@@ -164,7 +235,7 @@ public sealed class ToneTransmitCoordinatorTests
 
         public IVocoderSession CreateSession(VocoderMode mode)
         {
-            Assert.Equal(VocoderMode.P25Imbe, mode);
+            Assert.Equal(expectedMode, mode);
             return Session;
         }
 

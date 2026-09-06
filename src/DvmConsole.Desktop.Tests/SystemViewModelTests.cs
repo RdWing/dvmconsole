@@ -1,4 +1,8 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
+using DvmConsole.Application;
 using Avalonia.Media;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
@@ -8,6 +12,8 @@ using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Presentation;
 using DvmConsole.Ptt;
+using DvmConsole.Storage;
+using DvmConsole.Vocoder;
 using System.Collections.Specialized;
 using System.Globalization;
 using fnecore.DMR;
@@ -35,6 +41,144 @@ public sealed partial class SystemViewModelTests
             Assert.Equal(
                 viewModel.Systems[0].Zones[1].Channels,
                 viewModel.GetReceiveScopeChannels(ReceiveSelectionScope.SelectedZone));
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task EnableAllReceivePreservesAllSelectionsDespiteOneRouteFailure()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        string root = Path.GetDirectoryName(settingsPath)!;
+        try
+        {
+            var store = new UserSettingsStore(settingsPath);
+            var audioFactory = new FailingFirstPlaybackFactory();
+            var dependencies = new DesktopRuntimeDependencies(
+                store,
+                () => [],
+                (_, _) => new TestPttSource(),
+                ImmediateUiDispatcher.Instance,
+                new ManagedAssetStore(Path.Combine(root, "assets")),
+                audioFactory,
+                new NativeVocoderFactory(),
+                NetworkDisabledDemo: true);
+            await using MainWindowViewModel viewModel = new ConsoleSessionFactory(dependencies).Create(
+                new ConsoleSessionLoader(store).Load(codeplugPath));
+
+            await viewModel.EnableAllReceiveAsync();
+
+            ChannelViewModel[] channels = viewModel.Systems.SelectMany(system => system.Channels).ToArray();
+            Assert.Equal(5, channels.Length);
+            Assert.All(channels, channel => Assert.True(channel.IsAudioEnabled));
+            Assert.Contains("channel(s) active", viewModel.AudioStatusText, StringComparison.Ordinal);
+            Assert.True(audioFactory.OpenAttempts >= 2);
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task SelectedZoneReceiveCommandsChangeOnlyTheCurrentZone()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        string root = Path.GetDirectoryName(settingsPath)!;
+        try
+        {
+            var store = new UserSettingsStore(settingsPath);
+            var dependencies = new DesktopRuntimeDependencies(
+                store,
+                () => [],
+                (_, _) => new TestPttSource(),
+                ImmediateUiDispatcher.Instance,
+                new ManagedAssetStore(Path.Combine(root, "assets")),
+                new FailingFirstPlaybackFactory(failFirst: false),
+                new NativeVocoderFactory(),
+                NetworkDisabledDemo: true);
+            await using MainWindowViewModel viewModel = new ConsoleSessionFactory(dependencies).Create(
+                new ConsoleSessionLoader(store).Load(codeplugPath));
+            viewModel.SelectedSystem = viewModel.Systems[0];
+            ZoneViewModel selectedZone = viewModel.Systems[0].Zones[1];
+            viewModel.Systems[0].SelectedZone = selectedZone;
+            ChannelViewModel[] outsideZone = viewModel.Systems
+                .SelectMany(system => system.Channels)
+                .Except(selectedZone.Channels)
+                .ToArray();
+
+            await viewModel.EnableSelectedZoneReceiveAsync();
+
+            Assert.All(selectedZone.Channels, channel => Assert.True(channel.IsAudioEnabled));
+            Assert.All(outsideZone, channel => Assert.False(channel.IsAudioEnabled));
+
+            await viewModel.DisableSelectedZoneReceiveAsync();
+
+            Assert.All(selectedZone.Channels, channel => Assert.False(channel.IsAudioEnabled));
+
+            await viewModel.EnableAllReceiveAsync();
+            Assert.All(
+                viewModel.Systems.SelectMany(system => system.Channels),
+                channel => Assert.True(channel.IsAudioEnabled));
+
+            await viewModel.DisableAllReceiveAsync();
+            Assert.All(
+                viewModel.Systems.SelectMany(system => system.Channels),
+                channel => Assert.False(channel.IsAudioEnabled));
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public async Task DisconnectedSystemClearsItsStaleTransmitPresentation()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        string root = Path.GetDirectoryName(settingsPath)!;
+        try
+        {
+            var store = new UserSettingsStore(settingsPath);
+            var dependencies = new DesktopRuntimeDependencies(
+                store,
+                () => [],
+                (_, _) => new TestPttSource(),
+                ImmediateUiDispatcher.Instance,
+                new ManagedAssetStore(Path.Combine(root, "assets")),
+                new FailingFirstPlaybackFactory(failFirst: false),
+                new NativeVocoderFactory(),
+                NetworkDisabledDemo: true);
+            await using MainWindowViewModel viewModel = new ConsoleSessionFactory(dependencies).Create(
+                new ConsoleSessionLoader(store).Load(codeplugPath));
+            SystemViewModel system = viewModel.Systems[0];
+            ChannelViewModel channel = system.Channels[0];
+            var stopped = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            channel.PropertyChanged += (_, args) =>
+            {
+                if (args.PropertyName == nameof(ChannelViewModel.IsTransmitting) &&
+                    !channel.IsTransmitting)
+                {
+                    stopped.TrySetResult();
+                }
+            };
+            channel.SetTransmitEnabled(true, streamId: 42);
+
+            viewModel.HandleSystemStatus(system, new FneConnectionStatus(
+                system.Name,
+                FneConnectionState.Disconnected,
+                "test disconnect",
+                DateTimeOffset.UtcNow));
+            await stopped.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+            Assert.False(channel.IsTransmitting);
         }
         finally
         {
@@ -92,9 +236,9 @@ public sealed partial class SystemViewModelTests
                 viewModel.BuiltInAlertTones.Select(tone => tone.Tone));
             Assert.Equal(
                 [
-                    "Generate 1 kHz for 3 sec",
-                    "Generate alternating 1.5 kHz / 800 Hz tones for 3.36 sec",
-                    "Generate eight 1 kHz pulses over 3.6 sec"
+                    "Generate 1 kHz for 3 sec. Right-click to assign a saved pattern.",
+                    "Generate alternating 1.5 kHz / 800 Hz tones for 3.36 sec. Right-click to assign a saved pattern.",
+                    "Generate eight 1 kHz pulses over 3.6 sec. Right-click to assign a saved pattern."
                 ],
                 viewModel.BuiltInAlertTones.Select(tone => tone.Description));
         }
@@ -914,6 +1058,63 @@ public sealed partial class SystemViewModelTests
         {
             DisposeCount++;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class ImmediateUiDispatcher : IUiDispatcher
+    {
+        public static ImmediateUiDispatcher Instance { get; } = new();
+
+        public bool CheckAccess() => true;
+        public void Post(Action action, bool background = false) => action();
+        public ValueTask InvokeAsync(Action action)
+        {
+            action();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class FailingFirstPlaybackFactory(bool failFirst = true) : IAudioBackendFactory
+    {
+        private int openAttempts;
+        private bool FailFirst { get; } = failFirst;
+        public int OpenAttempts => Volatile.Read(ref openAttempts);
+
+        public IAudioBackend Create(AudioBackendConfiguration configuration)
+            => new Backend(this);
+
+        private sealed class Backend(FailingFirstPlaybackFactory owner) : IAudioBackend
+        {
+            public string Name => "Receive-all regression backend";
+
+            public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
+                => direction == AudioDirection.Output
+                    ? [new AudioDeviceInfo("output", "Test output", direction, IsDefault: true)]
+                    : [];
+
+            public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
+                => throw new NotSupportedException();
+
+            public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
+            {
+                if (Interlocked.Increment(ref owner.openAttempts) == 1 && owner.FailFirst)
+                    throw new IOException("synthetic first-route failure");
+                return new Playback(format);
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
+        private sealed class Playback(PcmAudioFormat format) : IAudioPlayback
+        {
+            public PcmAudioFormat Format { get; } = format;
+            public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
+                => ValueTask.CompletedTask;
+            public ValueTask FlushAsync(CancellationToken cancellationToken = default)
+                => ValueTask.CompletedTask;
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
 

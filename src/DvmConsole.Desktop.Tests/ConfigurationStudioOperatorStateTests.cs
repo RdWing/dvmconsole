@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 using DvmConsole.Presentation;
@@ -7,6 +10,56 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class ConfigurationStudioOperatorStateTests
 {
+    [Fact]
+    public async Task PatchSourceIdPassthroughIsAnUndoableCodeplugSetting()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-studio-patch-source-id-tests",
+            Guid.NewGuid().ToString("N"));
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        var store = new UserSettingsStore(Path.Combine(directory, "UserSettings.json"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            await using MainWindowViewModel runtime = MainWindowViewModel.Load(codeplugPath, store);
+            var studio = new ConfigurationStudioViewModel(
+                ConfigurationDocument.Open(codeplugPath),
+                runtime.ConfigurationReference?.Id,
+                codeplugPath,
+                runtime,
+                new DesktopConfigurationStudioCompanionSource(),
+                new DesktopConfigurationStudioPreviewFactory(),
+                new ConfigurationStudioInitialState(
+                    new Dictionary<string, ConfigurationStudioPosition>(),
+                    new Dictionary<string, string>(),
+                    []),
+                ConfigurationStudioSection.Groups);
+
+            Assert.False(studio.PatchSourceIdPassthrough);
+
+            studio.PatchSourceIdPassthrough = true;
+
+            Assert.True(studio.Configuration.PatchSourceIdPassthrough);
+            Assert.True(studio.IsDirty);
+            Assert.Contains(
+                "patchSourceIdPassthrough: true",
+                studio.CaptureSaveState().Yaml,
+                StringComparison.Ordinal);
+
+            studio.Undo();
+            Assert.False(studio.PatchSourceIdPassthrough);
+            studio.Redo();
+            Assert.True(studio.PatchSourceIdPassthrough);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task PatchOperatorStateAppliesImmediatelyWithoutChangingTheYamlDraft()
     {

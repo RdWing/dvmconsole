@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 
@@ -8,6 +11,7 @@ public sealed partial class AudioSettingsView : UserControl
     public AudioSettingsView()
     {
         InitializeComponent();
+        ResponsiveSettingsDensity.Attach(this);
     }
 
     public event EventHandler? TestPermitToneRequested;

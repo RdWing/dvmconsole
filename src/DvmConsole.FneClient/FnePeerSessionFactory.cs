@@ -1,4 +1,8 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Net;
+using System.Runtime.CompilerServices;
 using fnecore;
 
 namespace DvmConsole.FneClient;
@@ -30,6 +34,7 @@ internal interface IFnePeerSession : IDisposable
     FnePeer Peer { get; }
     void Start();
     void Stop();
+    void Abort() => Dispose();
 }
 
 internal sealed class FnePeerSession : IFnePeerSession
@@ -60,7 +65,23 @@ internal sealed class FnePeerSession : IFnePeerSession
         try
         {
             if (Peer.IsStarted)
-                Peer.Stop();
+                PinnedFnePeerLifetime.Stop(Peer);
+        }
+        finally
+        {
+            transportLifetime.Dispose();
+        }
+    }
+
+    public void Abort()
+    {
+        if (Interlocked.Exchange(ref stopped, 1) != 0)
+            return;
+
+        transportLifetime.BeginStop();
+        try
+        {
+            PinnedFnePeerLifetime.Abort(Peer);
         }
         finally
         {
@@ -69,6 +90,50 @@ internal sealed class FnePeerSession : IFnePeerSession
     }
 
     public void Dispose() => Stop();
+}
+
+/// <summary>
+/// Adapts the pinned upstream peer's async-void listener lifetime to NEO's
+/// socket-owned cancellation. Cancelling the upstream token can throw an
+/// unhandled OperationCanceledException after its Task wrapper has completed;
+/// closing the compatible receivers and setting the loop flag lets every loop
+/// leave normally instead.
+/// </summary>
+internal static class PinnedFnePeerLifetime
+{
+    public static void Abort(FnePeer peer)
+    {
+        ArgumentNullException.ThrowIfNull(peer);
+        AbortListening(peer) = true;
+        IsStarted(peer) = false;
+    }
+
+    public static void Stop(FnePeer peer)
+    {
+        ArgumentNullException.ThrowIfNull(peer);
+        AbortListening(peer) = true;
+        try
+        {
+            peer.SendMasterTraffic(
+                FneBase.CreateOpcode(
+                    Constants.NET_FUNC_RPT_CLOSING,
+                    Constants.NET_SUBFUNC_NOP),
+                new byte[1],
+                1,
+                FneBase.CreateStreamID(),
+                forceZeroStream: true);
+        }
+        finally
+        {
+            IsStarted(peer) = false;
+        }
+    }
+
+    [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "abortListening")]
+    private static extern ref bool AbortListening(FnePeer peer);
+
+    [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "isStarted")]
+    private static extern ref bool IsStarted(FneBase peer);
 }
 
 internal sealed class FnePeerSessionFactory : IFnePeerSessionFactory

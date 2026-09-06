@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Audio;
 
 public enum AudioDirection
@@ -7,13 +10,10 @@ public enum AudioDirection
 }
 
 // Portable application-audio policy selected by the operator. Platform modes
-// are accepted only by their matching backend. Apple Voice Processing uses a
-// coordinated full-duplex route; DVM Console and Windows processing retain
-// their platform-specific capture behavior.
+// are accepted only by their matching backend.
 public enum AudioProcessingMode
 {
     DvmConsole,
-    AppleVoiceProcessing,
     WindowsCommunications
 }
 
@@ -53,6 +53,15 @@ public sealed class PcmSamplesEventArgs(ReadOnlyMemory<short> samples) : EventAr
     public ReadOnlyMemory<short> Samples { get; } = samples;
 }
 
+// The span is valid only for the synchronous duration of the callback. An
+// observer that needs to retain samples must copy them before returning.
+public delegate void BorrowedPcmSamplesHandler(ReadOnlySpan<short> samples);
+
+public interface IBorrowedAudioCapture
+{
+    event BorrowedPcmSamplesHandler? BorrowedSamplesAvailable;
+}
+
 public interface IAudioBackend : IDisposable
 {
     string Name { get; }
@@ -67,6 +76,15 @@ public interface IAudioBackend : IDisposable
 public interface IDefaultAudioDeviceIdentityProvider
 {
     string? GetDefaultDeviceIdentity(AudioDirection direction);
+}
+
+// Optional platform notification source for physical device arrival, removal,
+// and default-route changes. Consumers retain a polling fallback because an
+// audio service can restart independently of the application.
+public interface IAudioDeviceChangeSource : IDisposable
+{
+    event EventHandler? Changed;
+    void Start();
 }
 
 public interface IAudioCapture : IAsyncDisposable
@@ -89,6 +107,16 @@ public interface IAudioPlayback : IAsyncDisposable
     ValueTask FlushAsync(CancellationToken cancellationToken = default);
     ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
         => ValueTask.FromResult<int?>(null);
+}
+
+// Optional last-resort lifecycle fence. Implementations synchronously request
+// the native endpoint to stop producing or consuming samples, without waiting
+// for worker joins or normal draining. Ordinary cleanup still uses the async
+// capture/playback contracts; this is reserved for bounded shutdown after a
+// cooperative owner has exceeded its deadline.
+public interface IImmediateAudioStop
+{
+    void StopImmediately();
 }
 
 // Optional playback path for decoder-generated replacement audio. Consumers

@@ -1,5 +1,7 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.ComponentModel;
-using System.Diagnostics.CodeAnalysis;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 
@@ -16,9 +18,10 @@ public sealed class GlobalKeyboardPttSource : IPttSource
     private IGlobalKeyboardCapture? capture;
     private bool started;
     private bool disposed;
+    private Exception? captureFailure;
 
     public GlobalKeyboardPttSource(KeyboardPttKey activationKey = KeyboardPttKey.Space)
-        : this(activationKey, CreateCapture)
+        : this(activationKey, () => CreateCapture(activationKey))
     {
     }
 
@@ -33,9 +36,10 @@ public sealed class GlobalKeyboardPttSource : IPttSource
     }
 
     public static bool IsPlatformSupported
-        => OperatingSystem.IsWindows() || OperatingSystem.IsMacOS();
+        => OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() || OperatingSystem.IsLinux();
 
     public event EventHandler<bool>? StateChanged;
+    public event Action<Exception>? CaptureFailed;
     public bool IsPressed => stateSource.IsPressed;
     public KeyboardPttKey ActivationKey => stateSource.ActivationKey;
 
@@ -52,13 +56,24 @@ public sealed class GlobalKeyboardPttSource : IPttSource
         if (started)
             return;
 
+        captureFailure = null;
         await stateSource.StartAsync(cancellationToken).ConfigureAwait(false);
         IGlobalKeyboardCapture? nextCapture = null;
         try
         {
             nextCapture = captureFactory();
             nextCapture.KeyChanged += HandleKeyChanged;
-            nextCapture.Start();
+            nextCapture.Terminated += HandleCaptureTerminated;
+            // Platform captures use dedicated native event-loop threads, but
+            // their bounded readiness waits are intentionally synchronous.
+            // Run that boundary away from the UI caller while retaining the
+            // same completion, timeout, and cancellation contract.
+            await Task.Run(
+                    async () => await nextCapture.StartAsync(cancellationToken).ConfigureAwait(false),
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            if (Volatile.Read(ref captureFailure) is { } failure)
+                throw new InvalidOperationException("Global keyboard capture terminated during startup.", failure);
             capture = nextCapture;
             started = true;
         }
@@ -67,6 +82,7 @@ public sealed class GlobalKeyboardPttSource : IPttSource
             if (nextCapture is not null)
             {
                 nextCapture.KeyChanged -= HandleKeyChanged;
+                nextCapture.Terminated -= HandleCaptureTerminated;
                 nextCapture.Dispose();
             }
 
@@ -81,6 +97,9 @@ public sealed class GlobalKeyboardPttSource : IPttSource
         set => stateSource.InputSuppressed = value;
     }
 
+    public void ReleaseToggleLatch()
+        => stateSource.ReleaseToggleLatch();
+
     public async ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -94,18 +113,25 @@ public sealed class GlobalKeyboardPttSource : IPttSource
         if (currentCapture is not null)
         {
             currentCapture.KeyChanged -= HandleKeyChanged;
-            try
-            {
-                currentCapture.Stop();
-            }
-            catch (Exception exception)
-            {
-                stopException = exception;
-            }
-            finally
-            {
-                currentCapture.Dispose();
-            }
+            currentCapture.Terminated -= HandleCaptureTerminated;
+            await Task.Run(
+                    () =>
+                    {
+                        try
+                        {
+                            currentCapture.Stop();
+                        }
+                        catch (Exception exception)
+                        {
+                            stopException = exception;
+                        }
+                        finally
+                        {
+                            currentCapture.Dispose();
+                        }
+                    },
+                    CancellationToken.None)
+                .ConfigureAwait(false);
         }
 
         await stateSource.StopAsync(CancellationToken.None).ConfigureAwait(false);
@@ -130,18 +156,38 @@ public sealed class GlobalKeyboardPttSource : IPttSource
         }
     }
 
-    private static IGlobalKeyboardCapture CreateCapture()
+    private static IGlobalKeyboardCapture CreateCapture(KeyboardPttKey activationKey)
     {
         if (OperatingSystem.IsWindows())
             return new WindowsGlobalKeyboardCapture();
         if (OperatingSystem.IsMacOS())
             return new MacGlobalKeyboardCapture();
+        if (OperatingSystem.IsLinux())
+            return LinuxDesktopSession.IsWayland
+                ? new LinuxPortalGlobalKeyboardCapture(activationKey)
+                : new LinuxX11GlobalKeyboardCapture();
         throw new PlatformNotSupportedException(
-            "OS-global PTT capture is supported on Windows and macOS only.");
+            "OS-global PTT capture is supported on Windows, macOS, and Linux desktop hosts only.");
+    }
+
+    private void HandleCaptureTerminated(Exception failure)
+    {
+        if (Interlocked.CompareExchange(ref captureFailure, failure, null) is not null)
+            return;
+        // Stop clears both momentary state and toggle latch synchronously.
+        // New key events remain fenced until an explicit Stop/Start cycle.
+        stateSource.Stop();
+        foreach (Action<Exception> observer in CaptureFailed?.GetInvocationList().Cast<Action<Exception>>() ?? [])
+        {
+            try { observer(failure); }
+            catch (Exception exception) { System.Diagnostics.Trace.TraceError("Global PTT failure observer: {0}", exception); }
+        }
     }
 
     private void HandleKeyChanged(KeyboardPttKey key, bool isDown)
     {
+        if (Volatile.Read(ref captureFailure) is not null || disposed)
+            return;
         if (isDown)
             stateSource.HandleKeyDown(key);
         else
@@ -149,17 +195,24 @@ public sealed class GlobalKeyboardPttSource : IPttSource
     }
 
     private void HandleStateChanged(object? sender, bool pressed)
-        => StateChanged?.Invoke(this, pressed);
+    {
+        foreach (EventHandler<bool> observer in StateChanged?.GetInvocationList().Cast<EventHandler<bool>>() ?? [])
+        {
+            try { observer(this, pressed); }
+            catch (Exception exception) { System.Diagnostics.Trace.TraceError("Global PTT state observer: {0}", exception); }
+        }
+    }
 }
 
 internal interface IGlobalKeyboardCapture : IDisposable
 {
     event Action<KeyboardPttKey, bool>? KeyChanged;
-    void Start();
+    event Action<Exception>? Terminated;
+    ValueTask StartAsync(CancellationToken cancellationToken = default);
     void Stop();
 }
 
-internal sealed class WindowsGlobalKeyboardCapture : IGlobalKeyboardCapture
+internal sealed partial class WindowsGlobalKeyboardCapture : IGlobalKeyboardCapture
 {
     private const int WhKeyboardLl = 13;
     private const uint WmQuit = 0x0012;
@@ -171,7 +224,7 @@ internal sealed class WindowsGlobalKeyboardCapture : IGlobalKeyboardCapture
 
     private readonly object sync = new();
     private readonly HookProc hookProc;
-    private readonly ManualResetEventSlim ready = new(false);
+    private TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Thread? hookThread;
     private uint hookThreadId;
     private IntPtr hookHandle;
@@ -185,33 +238,39 @@ internal sealed class WindowsGlobalKeyboardCapture : IGlobalKeyboardCapture
     }
 
     public event Action<KeyboardPttKey, bool>? KeyChanged;
+    public event Action<Exception>? Terminated;
 
-    public void Start()
+    public ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The Windows global keyboard hook is unavailable here.");
 
         lock (sync)
         {
             if (started)
-                return;
+                return ValueTask.CompletedTask;
 
+            if (hookThread?.IsAlive == true)
+                throw new InvalidOperationException("The previous global keyboard capture is still stopping.");
+            ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
             startException = null;
             hookThread = new Thread(RunHookLoop)
             {
                 IsBackground = true,
                 Name = "DVM Console global PTT"
             };
+            started = true;
             hookThread.Start();
         }
 
-        if (!ready.Wait(TimeSpan.FromSeconds(5)))
+        if (!ready.Task.Wait(TimeSpan.FromSeconds(5), cancellationToken))
             throw new TimeoutException("The Windows global PTT hook did not start in time.");
         if (startException is not null)
             ExceptionDispatchInfo.Capture(startException).Throw();
 
-        started = true;
+        return ValueTask.CompletedTask;
     }
 
     public void Stop()
@@ -232,7 +291,7 @@ internal sealed class WindowsGlobalKeyboardCapture : IGlobalKeyboardCapture
         thread?.Join(TimeSpan.FromSeconds(2));
         lock (sync)
         {
-            if (ReferenceEquals(hookThread, thread))
+            if (ReferenceEquals(hookThread, thread) && thread?.IsAlive != true)
                 hookThread = null;
         }
     }
@@ -247,7 +306,6 @@ internal sealed class WindowsGlobalKeyboardCapture : IGlobalKeyboardCapture
         }
         finally
         {
-            ready.Dispose();
             disposed = true;
         }
     }
@@ -266,7 +324,9 @@ internal sealed class WindowsGlobalKeyboardCapture : IGlobalKeyboardCapture
             if (hookHandle == IntPtr.Zero)
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "SetWindowsHookEx failed.");
 
-            ready.Set();
+            ready.TrySetResult();
+            if (!Volatile.Read(ref started))
+                return;
             int result;
             while ((result = GetMessage(out _, IntPtr.Zero, 0, 0)) > 0)
             {
@@ -280,10 +340,12 @@ internal sealed class WindowsGlobalKeyboardCapture : IGlobalKeyboardCapture
         catch (Exception exception)
         {
             startException = exception;
-            ready.Set();
+            ready.TrySetResult();
         }
         finally
         {
+            if (started)
+                Terminated?.Invoke(startException ?? new IOException("The Windows global PTT event loop stopped."));
             if (hookHandle != IntPtr.Zero)
             {
                 UnhookWindowsHookEx(hookHandle);
@@ -321,49 +383,64 @@ internal sealed class WindowsGlobalKeyboardCapture : IGlobalKeyboardCapture
 
     private delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr SetWindowsHookEx(
+    [LibraryImport(
+        "user32.dll",
+        EntryPoint = "SetWindowsHookExW",
+        SetLastError = true)]
+    private static partial IntPtr SetWindowsHookEx(
         int hookType,
         HookProc callback,
         IntPtr moduleHandle,
         uint threadId);
 
-    [DllImport("user32.dll", SetLastError = true)]
+    [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool UnhookWindowsHookEx(IntPtr hookHandle);
+    private static partial bool UnhookWindowsHookEx(IntPtr hookHandle);
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr CallNextHookEx(
+    [LibraryImport("user32.dll")]
+    private static partial IntPtr CallNextHookEx(
         IntPtr hookHandle,
         int code,
         IntPtr wParam,
         IntPtr lParam);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr GetModuleHandle(string? moduleName);
+    [LibraryImport(
+        "kernel32.dll",
+        EntryPoint = "GetModuleHandleW",
+        StringMarshalling = StringMarshalling.Utf16)]
+    private static partial IntPtr GetModuleHandle(string? moduleName);
 
-    [DllImport("kernel32.dll")]
-    private static extern uint GetCurrentThreadId();
+    [LibraryImport("kernel32.dll")]
+    private static partial uint GetCurrentThreadId();
 
-    [DllImport("user32.dll", SetLastError = true)]
+    [LibraryImport(
+        "user32.dll",
+        EntryPoint = "PostThreadMessageW",
+        SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool PostThreadMessage(
+    private static partial bool PostThreadMessage(
         uint threadId,
         uint message,
         IntPtr wParam,
         IntPtr lParam);
 
-    [DllImport("user32.dll", SetLastError = true)]
+    [LibraryImport(
+        "user32.dll",
+        EntryPoint = "PeekMessageW",
+        SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool PeekMessage(
+    private static partial bool PeekMessage(
         out Message message,
         IntPtr windowHandle,
         uint minimumMessage,
         uint maximumMessage,
         uint removeMessage);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern int GetMessage(
+    [LibraryImport(
+        "user32.dll",
+        EntryPoint = "GetMessageW",
+        SetLastError = true)]
+    private static partial int GetMessage(
         out Message message,
         IntPtr windowHandle,
         uint minimumMessage,
@@ -388,21 +465,20 @@ internal sealed class WindowsGlobalKeyboardCapture : IGlobalKeyboardCapture
     }
 }
 
-internal sealed class MacGlobalKeyboardCapture : IGlobalKeyboardCapture
+internal sealed partial class MacGlobalKeyboardCapture : IGlobalKeyboardCapture
 {
     private const uint KeyDownEvent = 10;
     private const uint KeyUpEvent = 11;
     private const uint TapDisabledByTimeout = 0xFFFFFFFE;
     private const uint TapDisabledByUserInput = 0xFFFFFFFF;
     private const uint SessionEventTap = 1;
-    private const uint HeadInsertEventTap = 0;
     private const uint ListenOnlyEventTap = 1;
     private const uint KeyboardEventKeyCode = 9;
     private const uint Utf8Encoding = 0x08000100;
 
     private readonly object sync = new();
     private readonly EventTapCallback callback;
-    private readonly ManualResetEventSlim ready = new(false);
+    private TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Thread? eventThread;
     private IntPtr runLoop;
     private IntPtr eventTap;
@@ -417,32 +493,38 @@ internal sealed class MacGlobalKeyboardCapture : IGlobalKeyboardCapture
     }
 
     public event Action<KeyboardPttKey, bool>? KeyChanged;
+    public event Action<Exception>? Terminated;
 
-    public void Start()
+    public ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!OperatingSystem.IsMacOS())
             throw new PlatformNotSupportedException("The macOS global keyboard event tap is unavailable here.");
 
         lock (sync)
         {
             if (started)
-                return;
+                return ValueTask.CompletedTask;
+            if (eventThread?.IsAlive == true)
+                throw new InvalidOperationException("The previous global keyboard capture is still stopping.");
+            ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
             startException = null;
             eventThread = new Thread(RunEventLoop)
             {
                 IsBackground = true,
                 Name = "DVM Console global PTT"
             };
+            started = true;
             eventThread.Start();
         }
 
-        if (!ready.Wait(TimeSpan.FromSeconds(5)))
+        if (!ready.Task.Wait(TimeSpan.FromSeconds(5), cancellationToken))
             throw new TimeoutException("The macOS global PTT event tap did not start in time.");
         if (startException is not null)
             ExceptionDispatchInfo.Capture(startException).Throw();
 
-        started = true;
+        return ValueTask.CompletedTask;
     }
 
     public void Stop()
@@ -463,7 +545,7 @@ internal sealed class MacGlobalKeyboardCapture : IGlobalKeyboardCapture
         thread?.Join(TimeSpan.FromSeconds(2));
         lock (sync)
         {
-            if (ReferenceEquals(eventThread, thread))
+            if (ReferenceEquals(eventThread, thread) && thread?.IsAlive != true)
                 eventThread = null;
         }
     }
@@ -478,7 +560,6 @@ internal sealed class MacGlobalKeyboardCapture : IGlobalKeyboardCapture
         }
         finally
         {
-            ready.Dispose();
             disposed = true;
         }
     }
@@ -512,16 +593,19 @@ internal sealed class MacGlobalKeyboardCapture : IGlobalKeyboardCapture
                 throw new InvalidOperationException("Could not create the macOS event-loop mode.");
 
             CFRunLoopAddSource(runLoop, runLoopSource, mode);
-            ready.Set();
-            CFRunLoopRun();
+            ready.TrySetResult();
+            if (Volatile.Read(ref started))
+                CFRunLoopRun();
         }
         catch (Exception exception)
         {
             startException = exception;
-            ready.Set();
+            ready.TrySetResult();
         }
         finally
         {
+            if (started)
+                Terminated?.Invoke(startException ?? new IOException("The macOS global PTT event loop stopped."));
             if (mode != IntPtr.Zero)
                 CFRelease(mode);
             if (runLoopSource != IntPtr.Zero)
@@ -546,8 +630,7 @@ internal sealed class MacGlobalKeyboardCapture : IGlobalKeyboardCapture
     {
         if (eventType is TapDisabledByTimeout or TapDisabledByUserInput)
         {
-            if (proxy != IntPtr.Zero)
-                CGEventTapEnable(proxy, true);
+            Terminated?.Invoke(new IOException("macOS disabled global PTT capture. Reactivate the binding to resume."));
             return eventHandle;
         }
 
@@ -568,8 +651,8 @@ internal sealed class MacGlobalKeyboardCapture : IGlobalKeyboardCapture
         IntPtr eventHandle,
         IntPtr userInfo);
 
-    [DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")]
-    private static extern IntPtr CGEventTapCreate(
+    [LibraryImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")]
+    private static partial IntPtr CGEventTapCreate(
         IntPtr tap,
         uint place,
         uint options,
@@ -577,47 +660,40 @@ internal sealed class MacGlobalKeyboardCapture : IGlobalKeyboardCapture
         EventTapCallback callback,
         IntPtr userInfo);
 
-    [DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")]
-    private static extern void CGEventTapEnable(IntPtr tap, [MarshalAs(UnmanagedType.I1)] bool enable);
+    [LibraryImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")]
+    private static partial long CGEventGetIntegerValueField(IntPtr eventHandle, uint field);
 
-    [DllImport("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")]
-    private static extern long CGEventGetIntegerValueField(IntPtr eventHandle, uint field);
-
-    [DllImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
-    private static extern IntPtr CFMachPortCreateRunLoopSource(
+    [LibraryImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
+    private static partial IntPtr CFMachPortCreateRunLoopSource(
         IntPtr allocator,
         IntPtr port,
         IntPtr order);
 
-    [DllImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
-    private static extern IntPtr CFRunLoopGetCurrent();
+    [LibraryImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
+    private static partial IntPtr CFRunLoopGetCurrent();
 
-    [DllImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
-    private static extern void CFRunLoopAddSource(
+    [LibraryImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
+    private static partial void CFRunLoopAddSource(
         IntPtr runLoop,
         IntPtr source,
         IntPtr mode);
 
-    [DllImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
-    private static extern void CFRunLoopRun();
+    [LibraryImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
+    private static partial void CFRunLoopRun();
 
-    [DllImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
-    private static extern void CFRunLoopStop(IntPtr runLoop);
+    [LibraryImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
+    private static partial void CFRunLoopStop(IntPtr runLoop);
 
-    [DllImport(
+    [LibraryImport(
         "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
-        CharSet = CharSet.Ansi)]
-    [SuppressMessage(
-        "Interoperability",
-        "CA2101:Specify marshaling for P/Invoke string arguments",
-        Justification = "CoreFoundation consumes a narrow C string using the explicit UTF-8 encoding argument.")]
-    private static extern IntPtr CFStringCreateWithCString(
+        StringMarshalling = StringMarshalling.Utf8)]
+    private static partial IntPtr CFStringCreateWithCString(
         IntPtr allocator,
-        [MarshalAs(UnmanagedType.LPStr)] string value,
+        string value,
         uint encoding);
 
-    [DllImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
-    private static extern void CFRelease(IntPtr value);
+    [LibraryImport("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")]
+    private static partial void CFRelease(IntPtr value);
 }
 
 internal static class KeyboardPttKeyMapping
@@ -678,5 +754,25 @@ internal static class KeyboardPttKeyMapping
             _ => default
         };
         return keyCode is 49 or 122 or 120 or 99 or 118 or 96 or 97 or 98 or 100 or 101 or 109 or 103 or 111 or 105 or 107 or 113 or 106 or 64 or 79 or 80;
+    }
+
+    public static bool TryFromX11KeySym(nuint keySym, out KeyboardPttKey key)
+    {
+        if (keySym == 0x20)
+        {
+            key = KeyboardPttKey.Space;
+            return true;
+        }
+
+        const nuint f1 = 0xFFBE;
+        const nuint f19 = 0xFFD0;
+        if (keySym is >= f1 and <= f19)
+        {
+            key = (KeyboardPttKey)((int)(keySym - f1) + (int)KeyboardPttKey.F1);
+            return true;
+        }
+
+        key = default;
+        return false;
     }
 }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Diagnostics;
 using Xunit;
 
@@ -5,6 +8,23 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class DebugLogWorkspaceTests
 {
+    [Fact]
+    public void ExportRedactsIpv6AndKeepsMessagesInsideOneTsvField()
+    {
+        using var workspace = new DebugLogWorkspace(() => true, action => action(), () => false);
+        workspace.Add(DateTimeOffset.UtcNow, "Transport", DebugLogSeverity.Warning,
+            "Disconnected\t[2001:db8::12]:62031\r\nretry pending");
+        using var stream = new MemoryStream();
+        Assert.Equal(1, workspace.Export(stream));
+        stream.Position = 0;
+        using var reader = new StreamReader(stream);
+        string[] lines = reader.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        Assert.Equal(lines[0].Split('\t').Length, lines[1].Split('\t').Length);
+        Assert.DoesNotContain("2001:db8", lines[1], StringComparison.Ordinal);
+        Assert.Contains("retry pending", lines[1], StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task OwnsIngestionFilteringAndRedactedExport()
     {
@@ -18,14 +38,19 @@ public sealed class DebugLogWorkspaceTests
         workspace.EntryPublished += (_, entry) => published.Add(entry);
         DateTimeOffset timestamp = new(2026, 8, 27, 12, 0, 0, TimeSpan.Zero);
 
-        workspace.Add(timestamp, "FNE", DebugLogSeverity.Info, "Connection established");
+        workspace.Add(timestamp, "Local20 FNE", DebugLogSeverity.Info, "Connection established");
         workspace.Add(timestamp, "FNE", DebugLogSeverity.Warning, "password=secret");
+        workspace.Add(
+            timestamp,
+            "Skynet",
+            DebugLogSeverity.Info,
+            "(Skynet) peer 123 stream ID 42 via 192.0.2.1:62031");
 
-        Assert.Equal(2, workspace.Entries.Count);
-        Assert.Equal(2, published.Count);
+        Assert.Equal(3, workspace.Entries.Count);
+        Assert.Equal(3, published.Count);
         Assert.Equal("[sensitive diagnostic message redacted]", published[1].Message);
-        Assert.Single(workspace.FilteredEntries);
-        Assert.Equal("Connection established", workspace.FilteredEntries[0].Message);
+        Assert.Equal(2, workspace.FilteredEntries.Count);
+        Assert.Contains(workspace.FilteredEntries, entry => entry.Message == "Connection established");
         Assert.Contains(nameof(DebugLogWorkspace.RetentionText), changedProperties);
 
         workspace.SeverityFilter = "All";
@@ -41,14 +66,20 @@ public sealed class DebugLogWorkspaceTests
         string exportPath = Path.Combine(root, "debug.tsv");
         try
         {
-            Assert.Equal(2, workspace.Export(exportPath));
+            Assert.Equal(3, workspace.Export(exportPath));
             string exported = File.ReadAllText(exportPath);
             Assert.Contains("Connection established", exported, StringComparison.Ordinal);
             Assert.Contains("[sensitive diagnostic message redacted]", exported, StringComparison.Ordinal);
             Assert.DoesNotContain("password=secret", exported, StringComparison.Ordinal);
+            Assert.DoesNotContain("Local20 FNE", exported, StringComparison.Ordinal);
+            Assert.DoesNotContain("Skynet", exported, StringComparison.Ordinal);
+            Assert.DoesNotContain("192.0.2.1", exported, StringComparison.Ordinal);
+            Assert.DoesNotContain("stream ID 42", exported, StringComparison.Ordinal);
+            Assert.Contains("stream ID [redacted]", exported, StringComparison.Ordinal);
+            Assert.Contains("Source 1", exported, StringComparison.Ordinal);
 
             using var stream = new MemoryStream(new byte[8_192]);
-            Assert.Equal(2, workspace.Export(stream));
+            Assert.Equal(3, workspace.Export(stream));
             Assert.True(stream.Length < 8_192);
             stream.Position = 0;
             using var reader = new StreamReader(stream);

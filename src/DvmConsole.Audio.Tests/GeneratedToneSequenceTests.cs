@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using Xunit;
 
@@ -5,6 +8,24 @@ namespace DvmConsole.Audio.Tests;
 
 public sealed class GeneratedToneSequenceTests
 {
+    [Fact]
+    public void RenderedPcmIsDeterministicAndNeverClips()
+    {
+        var sequence = new GeneratedToneSequence(
+        [
+            GeneratedToneStep.Tone(1_000, TimeSpan.FromMilliseconds(100)),
+            GeneratedToneStep.Dtmf('8', TimeSpan.FromMilliseconds(240)),
+            GeneratedToneStep.Silence(TimeSpan.FromMilliseconds(60))
+        ]);
+
+        short[] first = sequence.RenderPcm();
+        short[] second = sequence.RenderPcm();
+
+        Assert.Equal(first, second);
+        Assert.DoesNotContain(short.MinValue, first);
+        Assert.DoesNotContain(short.MaxValue, first);
+    }
+
     [Theory]
     [InlineData(300)]
     [InlineData(2500)]
@@ -55,5 +76,32 @@ public sealed class GeneratedToneSequenceTests
             .Where(step => step.Kind == GeneratedToneStepKind.SingleTone)
             .Select(step => step.FrequencyHz));
         Assert.Equal([38, 50, 150, 38], sequence.Steps.Select(step => step.FrameCount));
+    }
+
+    [Theory]
+    [InlineData(GeneratedToneStepKind.SingleTone)]
+    [InlineData(GeneratedToneStepKind.Dtmf)]
+    public void RmsRenderingKeepsAudibleStepsAtTheRequestedLevel(
+        GeneratedToneStepKind kind)
+    {
+        GeneratedToneStep audible = kind == GeneratedToneStepKind.SingleTone
+            ? GeneratedToneStep.Tone(1_000, TimeSpan.FromSeconds(1))
+            : GeneratedToneStep.Dtmf('5', TimeSpan.FromSeconds(1));
+        var sequence = new GeneratedToneSequence([
+            GeneratedToneStep.Silence(TimeSpan.FromSeconds(1)),
+            audible
+        ]);
+
+        short[] samples = sequence.RenderPcmAtRms(-25);
+        ReadOnlySpan<short> audibleSamples = samples.AsSpan(8_000);
+        double meanSquare = 0;
+        foreach (short sample in audibleSamples)
+        {
+            double normalized = sample / (double)short.MaxValue;
+            meanSquare += normalized * normalized;
+        }
+        double rmsDbfs = 20 * Math.Log10(Math.Sqrt(meanSquare / audibleSamples.Length));
+
+        Assert.InRange(rmsDbfs, -25.1, -24.9);
     }
 }

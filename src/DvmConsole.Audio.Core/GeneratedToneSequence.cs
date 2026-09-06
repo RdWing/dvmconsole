@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Audio;
 
 public enum GeneratedToneStepKind
@@ -63,6 +66,7 @@ public readonly record struct GeneratedToneStep
 
 public sealed class GeneratedToneSequence
 {
+    private const double FullScaleAmplitude = 1.0;
     private readonly GeneratedToneStep[] steps;
 
     public GeneratedToneSequence(IEnumerable<GeneratedToneStep> steps)
@@ -78,6 +82,30 @@ public sealed class GeneratedToneSequence
     public TimeSpan Duration => TimeSpan.FromMilliseconds(FrameCount * 20d);
 
     public short[] RenderPcm(double amplitude = 0.35)
+        => RenderPcm(amplitude, amplitude);
+
+    // Renders every audible step at a comparable RMS level. Single and dual
+    // tones need different peak amplitudes because the DTMF generator mixes
+    // two equal components. Silence is deliberately excluded from the level
+    // calculation so lead-in and inter-step holds cannot amplify the tone.
+    public short[] RenderPcmAtRms(double targetDbfs)
+    {
+        if (!double.IsFinite(targetDbfs) || targetDbfs > 0)
+            throw new ArgumentOutOfRangeException(nameof(targetDbfs));
+
+        double targetRms = Math.Pow(10, targetDbfs / 20);
+        double singleToneAmplitude = Math.Min(
+            FullScaleAmplitude,
+            targetRms * Math.Sqrt(2));
+        double dualToneAmplitude = Math.Min(
+            FullScaleAmplitude,
+            targetRms * 2);
+        return RenderPcm(singleToneAmplitude, dualToneAmplitude);
+    }
+
+    private short[] RenderPcm(
+        double singleToneAmplitude,
+        double dualToneAmplitude)
     {
         var tones = new PcmToneGenerator();
         var dtmf = new DtmfToneGenerator();
@@ -86,8 +114,14 @@ public sealed class GeneratedToneSequence
         {
             samples.AddRange(step.Kind switch
             {
-                GeneratedToneStepKind.SingleTone => tones.GenerateTone(step.FrequencyHz, step.Duration, amplitude),
-                GeneratedToneStepKind.Dtmf => dtmf.GenerateDigit(step.Digit, step.Duration, amplitude),
+                GeneratedToneStepKind.SingleTone => tones.GenerateTone(
+                    step.FrequencyHz,
+                    step.Duration,
+                    singleToneAmplitude),
+                GeneratedToneStepKind.Dtmf => dtmf.GenerateDigit(
+                    step.Digit,
+                    step.Duration,
+                    dualToneAmplitude),
                 GeneratedToneStepKind.Silence => tones.GenerateSilence(step.Duration),
                 _ => throw new InvalidOperationException(
                     $"Generated tone step kind {step.Kind} is not supported.")

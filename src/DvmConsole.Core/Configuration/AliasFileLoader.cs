@@ -1,18 +1,12 @@
-using System.Diagnostics.CodeAnalysis;
-using YamlDotNet.Serialization;
-using YamlDotNet.Serialization.NamingConventions;
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
 
 namespace DvmConsole.Core.Configuration;
 
+using DvmConsole.Core.IO;
+
 public static class AliasFileLoader
 {
-    [UnconditionalSuppressMessage("AOT", "IL3050", Justification =
-        "Temporary Phase 2 YAML allowlist: migrate this builder to a generated StaticContext without changing the interoperable YAML schema.")]
-    private static readonly ISerializer Serializer = new SerializerBuilder()
-        .WithNamingConvention(CamelCaseNamingConvention.Instance)
-        .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitEmptyCollections)
-        .Build();
-
     public static List<RadioAlias> Load(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -21,20 +15,16 @@ public static class AliasFileLoader
         if (!File.Exists(fullPath))
             throw new FileNotFoundException("Alias file not found.", fullPath);
 
-        return Parse(File.ReadAllText(fullPath));
+        return Parse(BoundedResourceReader.ReadUtf8File(
+            fullPath,
+            ManagedResourceLimits.ConfigurationCompanionBytes,
+            "Alias file"));
     }
 
-    [UnconditionalSuppressMessage("AOT", "IL3050", Justification =
-        "Temporary Phase 2 YAML allowlist: migrate this builder to a generated StaticContext without changing the interoperable YAML schema.")]
     public static List<RadioAlias> Parse(string yaml)
     {
         ArgumentNullException.ThrowIfNull(yaml);
-        var deserializer = new DeserializerBuilder()
-            .WithNamingConvention(CamelCaseNamingConvention.Instance)
-            .IgnoreUnmatchedProperties()
-            .Build();
-
-        return deserializer.Deserialize<List<RadioAlias>>(yaml) ?? [];
+        return DvmYamlCodec.ParseAliases(yaml);
     }
 
     public static string FindAlias(IEnumerable<RadioAlias>? aliases, uint rid)
@@ -47,6 +37,6 @@ public static class AliasFileLoader
     public static string Serialize(IEnumerable<RadioAlias> aliases)
     {
         ArgumentNullException.ThrowIfNull(aliases);
-        return Serializer.Serialize(aliases.ToList());
+        return DvmYamlCodec.SerializeAliases(aliases);
     }
 }

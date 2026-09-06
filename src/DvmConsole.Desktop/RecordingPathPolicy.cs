@@ -1,4 +1,8 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Globalization;
+using DvmConsole.Core.IO;
 
 namespace DvmConsole.Desktop;
 
@@ -22,6 +26,9 @@ internal sealed class RecordingPathPolicy
             descriptor.RootPath,
             dateFolder,
             SanitizeSegment(descriptor.SystemName));
+        directory = Path.GetFullPath(directory);
+        if (!FileSystemPathIdentity.IsUnderRoot(descriptor.RootPath, directory))
+            throw new InvalidDataException("Recording directory must remain inside its root.");
         Directory.CreateDirectory(directory);
 
         string path = Path.Combine(directory, $"{filename}.opus");
@@ -44,13 +51,5 @@ internal sealed class RecordingPathPolicy
         return string.IsNullOrEmpty(algorithm) ? "SECURE" : $"SECURE_{algorithm}";
     }
 
-    private static string SanitizeSegment(string value)
-    {
-        char[] invalid = Path.GetInvalidFileNameChars();
-        string sanitized = new(value
-            .Select(character => invalid.Contains(character) ? '_' : character)
-            .ToArray());
-        sanitized = string.IsNullOrWhiteSpace(sanitized) ? "unknown" : sanitized.Trim();
-        return sanitized.Length <= 64 ? sanitized : sanitized[..64];
-    }
+    private static string SanitizeSegment(string value) => PortableFileName.Segment(value);
 }

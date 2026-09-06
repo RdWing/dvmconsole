@@ -1,4 +1,8 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.FneClient;
+using DvmConsole.Application;
 using DvmConsole.Operations;
 
 namespace DvmConsole.Desktop;
@@ -44,6 +48,15 @@ internal sealed class ReceiveAudioTrafficRouter
             ingressDecision,
             isTrackingStream);
     }
+
+    public ReceiveDispatchTargets ResolveDispatchTargetsById(
+        IReadOnlyList<ChannelId> decodeChannels,
+        bool includeRecordingChannels,
+        FneTrafficFrame traffic,
+        ReceiveIngressRoutingDecision ingressDecision,
+        Func<ChannelViewModel, uint, bool> isTrackingStream)
+        => adapter.ResolveDispatchTargetsById(decodeChannels, includeRecordingChannels,
+            traffic, ingressDecision, isTrackingStream);
 
     public ReceiveIngressRoutingDecision ObserveIngress(
         FneTrafficFrame traffic,

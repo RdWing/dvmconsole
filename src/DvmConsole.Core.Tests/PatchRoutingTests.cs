@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Runtime;
 using Xunit;
 
@@ -5,6 +8,40 @@ namespace DvmConsole.Core.Tests;
 
 public sealed class PatchRoutingTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OverloadSkipsRemainderOfSourceCallWithoutKeepingTargetActive(bool afterStarting)
+    {
+        PatchMemberAddress source = new("Alpha", 100);
+        PatchMemberAddress target = new("Beta", 200);
+        int starts = 0;
+        int forwarded = 0;
+        var router = PatchRoutingTable.WithAdmission(
+            (_, _) => ++starts == 1 && !afterStarting ? PatchCallStartResult.Skipped : new PatchCallStartResult(500),
+            (_, _, _) => { }, (_, _, _, _) => forwarded++, _ => 1000);
+        router.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [source, target]
+        });
+        router.HandleCallStart(source, 77, 42);
+        if (afterStarting)
+            Assert.True(router.ReportTargetFailure(target, 500, skipSourceCall: true));
+        for (int index = 0; index < 10; index++)
+            router.HandleAudio(source, 77, 42, new short[] { 1 });
+        Assert.Equal(1, starts);
+        Assert.Equal(0, forwarded);
+        Assert.False(router.IsForwardTargetActive(target));
+        if (!afterStarting)
+            Assert.False(router.IsPatchedTransmitStream(target, 500));
+        router.HandleCallEnd(source, 77);
+        router.HandleCallStart(source, 78, 42);
+        router.HandleAudio(source, 78, 42, new short[] { 1 });
+        Assert.Equal(2, starts);
+        Assert.Equal(1, forwarded);
+        Assert.True(router.IsForwardTargetActive(target));
+    }
+
     [Fact]
     public void ForwardsCallsToOtherMembersAndSuppressesOutboundEcho()
     {
@@ -358,6 +395,31 @@ public sealed class PatchRoutingTests
         Assert.True(router.IsForwardTargetActive(sharedTarget));
     }
 
+    [Fact]
+    public void WarmedAudioForwardingDoesNotAllocatePerFrame()
+    {
+        PatchMemberAddress source = new("Alpha", 100);
+        PatchMemberAddress target = new("Beta", 200);
+        var sink = new AllocationFreePatchSink();
+        var router = new PatchRoutingTable(sink, new ManualTimeProvider(DateTimeOffset.UnixEpoch));
+        router.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Dispatch"] = [source, target]
+        });
+        router.HandleCallStart(source, streamId: 10, sourceId: 42);
+        ReadOnlyMemory<short> samples = new short[160];
+        for (int index = 0; index < 100; index++)
+            router.HandleAudio(source, streamId: 10, sourceId: 42, samples);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int index = 0; index < 10_000; index++)
+            router.HandleAudio(source, streamId: 10, sourceId: 42, samples);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(0, allocated);
+        Assert.Equal(10_100, sink.FramesSent);
+    }
+
     private sealed class RecordingPatchSink : IPatchForwardingSink
     {
         public uint StreamId { get; } = 500;
@@ -365,6 +427,20 @@ public sealed class PatchRoutingTests
         public uint BeginCall(PatchMemberAddress member, uint sourceId) => StreamId;
         public void EndCall(PatchMemberAddress member, uint streamId, uint sourceId) { }
         public void SendAudio(PatchMemberAddress member, uint streamId, ReadOnlyMemory<short> samples, uint sourceId) { }
+        public uint GetFallbackSourceId(PatchMemberAddress member) => 999;
+    }
+
+    private sealed class AllocationFreePatchSink : IPatchForwardingSink
+    {
+        public int FramesSent { get; private set; }
+
+        public uint BeginCall(PatchMemberAddress member, uint sourceId) => 500;
+        public void EndCall(PatchMemberAddress member, uint streamId, uint sourceId) { }
+        public void SendAudio(
+            PatchMemberAddress member,
+            uint streamId,
+            ReadOnlyMemory<short> samples,
+            uint sourceId) => FramesSent++;
         public uint GetFallbackSourceId(PatchMemberAddress member) => 999;
     }
 

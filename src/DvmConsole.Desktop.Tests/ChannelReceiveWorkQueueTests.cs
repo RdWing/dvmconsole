@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Application;
@@ -10,6 +13,34 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class ChannelReceiveWorkQueueTests
 {
+    [Fact]
+    public async Task IdleBurstsReuseOneWorkerUntilTheChannelStops()
+    {
+        var firstProcessed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondProcessed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = CreateChannel("Dispatch", "100");
+        int processed = 0;
+        await using var queue = new ChannelReceiveWorkQueue((_, _) =>
+        {
+            if (Interlocked.Increment(ref processed) == 1)
+                firstProcessed.TrySetResult();
+            else
+                secondProcessed.TrySetResult();
+            return Task.CompletedTask;
+        });
+
+        queue.Enqueue(channel, CreateTraffic(1));
+        await firstProcessed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await Task.Delay(20);
+        queue.Enqueue(channel, CreateTraffic(2));
+        await secondProcessed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(1, queue.GetDiagnostics(channel).WorkerStarts);
+        await queue.StopAsync(channel);
+    }
+
     [Fact]
     public async Task AStalledChannelDoesNotDelayAnotherChannel()
     {
@@ -287,18 +318,19 @@ public sealed class ChannelReceiveWorkQueueTests
     [Fact]
     public async Task MeasuresIngressQueueAndProcessingLatency()
     {
-        var processed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var scheduler = new ManualReceiveWorkQueueScheduler();
         var observed = new TaskCompletionSource<ReceiveWorkItemTiming>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var channel = CreateChannel("Dispatch", "100");
         await using var queue = new ChannelReceiveWorkQueue(
-            async (_, _) =>
+            (_, _) =>
             {
-                await Task.Delay(15);
-                processed.TrySetResult();
+                scheduler.Advance(TimeSpan.FromMilliseconds(15));
+                return Task.CompletedTask;
             },
-            timingObserver: (_, timing) => observed.TrySetResult(timing));
-        long ingressTimestamp = Stopwatch.GetTimestamp() - (Stopwatch.Frequency / 20);
+            timingObserver: (_, timing) => observed.TrySetResult(timing),
+            scheduler: scheduler);
+        long ingressTimestamp = scheduler.GetTimestamp() - (scheduler.TimestampFrequency / 20);
 
         Assert.True(queue.Enqueue(
             channel,
@@ -306,12 +338,11 @@ public sealed class ChannelReceiveWorkQueueTests
             ingressTimestamp,
             out bool dropped));
         Assert.False(dropped);
-        await processed.Task.WaitAsync(TimeSpan.FromSeconds(2));
         ReceiveWorkItemTiming timing = await observed.Task.WaitAsync(TimeSpan.FromSeconds(2));
         ReceiveWorkQueueDiagnostics diagnostics = queue.GetDiagnostics(channel);
 
-        Assert.True(timing.IngressToQueueDelay >= TimeSpan.FromMilliseconds(40));
-        Assert.True(timing.ProcessingDuration >= TimeSpan.FromMilliseconds(10));
+        Assert.Equal(TimeSpan.FromMilliseconds(50), timing.IngressToQueueDelay);
+        Assert.Equal(TimeSpan.FromMilliseconds(15), timing.ProcessingDuration);
         Assert.True(timing.EndToEndDelay >= timing.IngressToQueueDelay);
         Assert.Equal(1, diagnostics.ProcessedFrames);
         Assert.Equal(timing.EndToEndDelay, diagnostics.MaximumEndToEndDelay);
@@ -357,6 +388,29 @@ public sealed class ChannelReceiveWorkQueueTests
         Assert.Equal(timing.WorkerBacklogDuration, diagnostics.MaximumWorkerBacklogDuration);
         Assert.Equal(timing.SessionGateDelay, diagnostics.MaximumSessionGateDelay);
         Assert.Equal(timing.SessionProcessingDuration, diagnostics.MaximumSessionProcessingDuration);
+    }
+
+    [Fact]
+    public async Task CarriesParsedEncryptionFactsToTheOrderedProcessor()
+    {
+        var observed = new TaskCompletionSource<RadioFrameEncryption?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = CreateChannel("Dispatch", "100");
+        var expected = new RadioFrameEncryption(true, AlgorithmId: 5, KeyId: 42);
+        await using ChannelReceiveWorkQueue queue =
+            ChannelReceiveWorkQueue.CreateWithIngressTiming((_, ingress, _) =>
+            {
+                observed.TrySetResult(ingress.Encryption);
+                return Task.FromResult(default(ReceiveProcessingStageTiming));
+            });
+        var ingress = new RadioMediaIngressFrame(
+            CreateTraffic(1),
+            Stopwatch.GetTimestamp(),
+            encryption: expected);
+
+        Assert.True(queue.Enqueue(channel, ingress));
+
+        Assert.Equal(expected, await observed.Task.WaitAsync(TimeSpan.FromSeconds(2)));
     }
 
     [Fact]
@@ -559,8 +613,9 @@ public sealed class ChannelReceiveWorkQueueTests
         Assert.Equal(readyFrameCount, Volatile.Read(ref readyFramesProcessed));
         Assert.Equal(readyFrameCount + 1, diagnostics.ProcessedFrames);
         Assert.True(diagnostics.CoalescedWakeSignals > 0);
-        Assert.Equal(1, diagnostics.WakeWaits);
+        Assert.True(diagnostics.WakeWaits >= 1);
         Assert.Equal(1, diagnostics.WakeTimeouts);
+        Assert.Equal(1, diagnostics.WorkerStarts);
         Assert.InRange(diagnostics.PeakPendingFrames, 1, batchSize);
         Assert.InRange(
             scheduler.TimedOutDuration,
@@ -625,6 +680,256 @@ public sealed class ChannelReceiveWorkQueueTests
         Assert.True(drained.PeakDepth >= 1);
     }
 
+    [Fact]
+    public async Task FinalDisposalDiscardsQueuedVoiceButPreservesTerminatorAndCompletion()
+    {
+        var firstStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var completionRan = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var processed = new List<ushort>();
+        var channel = CreateChannel("Dispatch", "100");
+        var queue = new ChannelReceiveWorkQueue(async (_, traffic) =>
+        {
+            lock (processed)
+                processed.Add(traffic.PacketSequence);
+            if (traffic.PacketSequence == 1)
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task;
+            }
+        });
+
+        queue.Enqueue(channel, CreateTraffic(1));
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        queue.Enqueue(channel, CreateTraffic(2));
+        queue.Enqueue(channel, CreateTraffic(3));
+        queue.Enqueue(channel, CreateTraffic(4, terminator: true));
+        Task streamCompletion = queue.RunAfterStreamAsync(
+            channel,
+            streamId: 99,
+            () =>
+            {
+                completionRan.TrySetResult();
+                return Task.CompletedTask;
+            });
+
+        ValueTask disposal = queue.DisposeAsync();
+        Assert.Equal(1, queue.CaptureHealth().CurrentDepth);
+        releaseFirst.TrySetResult();
+        await disposal.AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+        await streamCompletion.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal([(ushort)1, (ushort)4], processed);
+        Assert.True(completionRan.Task.IsCompletedSuccessfully);
+        Assert.Equal(0, queue.CaptureHealth().CurrentDepth);
+    }
+
+    [Fact]
+    public async Task ConcurrentDisposeCallersShareCompletion()
+    {
+        var processingStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = CreateChannel("Dispatch", "100");
+        var queue = new ChannelReceiveWorkQueue(
+            async (_, _) =>
+            {
+                processingStarted.TrySetResult();
+                await release.Task;
+            },
+            shutdownDrainTimeout: TimeSpan.FromSeconds(5));
+        queue.Enqueue(channel, CreateTraffic(1));
+        await processingStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Task first = queue.DisposeAsync().AsTask();
+        Task second = queue.DisposeAsync().AsTask();
+
+        Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
+        release.TrySetResult();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task DirectContinuationDoesNotRunItsSynchronousPrefixUnderTheQueueLock()
+    {
+        var continuationEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new ManualResetEventSlim();
+        var channel = CreateChannel("Dispatch", "100");
+        await using var queue = new ChannelReceiveWorkQueue(static (_, _) => Task.CompletedTask);
+
+        Task continuation = queue.RunAfterStreamAsync(channel, 99, () =>
+        {
+            continuationEntered.TrySetResult();
+            release.Wait(TimeSpan.FromSeconds(2));
+            return Task.CompletedTask;
+        });
+        await continuationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Task queueOperation = Task.Run(() => queue.Start(channel));
+        await queueOperation.WaitAsync(TimeSpan.FromMilliseconds(500));
+        release.Set();
+        await continuation.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
+    public async Task FinalDisposalCancelsAStalledProcessorAndReportsItsIdentity()
+    {
+        var processingStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var diagnostics = new List<ReceiveWorkerShutdownDiagnostic>();
+        var channel = CreateChannel("Dispatch", "100");
+        var queue = new ChannelReceiveWorkQueue(
+            async (_, _, cancellationToken) =>
+            {
+                processingStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            },
+            shutdownDelayObserver: observed => diagnostics.AddRange(observed),
+            shutdownDrainTimeout: TimeSpan.FromMilliseconds(25),
+            cancellationAcknowledgementTimeout: TimeSpan.FromMilliseconds(250));
+
+        queue.Enqueue(channel, CreateTraffic(1));
+        await processingStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await queue.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+
+        ReceiveWorkerShutdownDiagnostic diagnostic = Assert.Single(diagnostics);
+        Assert.Equal(new ChannelId(channel.SessionId), diagnostic.ChannelId);
+        Assert.Equal(99u, diagnostic.StreamId);
+        Assert.Equal(ReceiveWorkerActivity.ProcessingFrame, diagnostic.Activity);
+        Assert.False(diagnostic.CancellationAcknowledgementTimedOut);
+    }
+
+    [Fact]
+    public async Task ChannelRetirementCancelsAStalledProcessorWithinItsBound()
+    {
+        var processingStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var diagnostics = new List<ReceiveWorkerShutdownDiagnostic>();
+        var channel = CreateChannel("Dispatch", "100");
+        await using var queue = new ChannelReceiveWorkQueue(
+            async (_, _, cancellationToken) =>
+            {
+                processingStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            },
+            shutdownDelayObserver: observed => diagnostics.AddRange(observed),
+            shutdownDrainTimeout: TimeSpan.FromMilliseconds(25),
+            cancellationAcknowledgementTimeout: TimeSpan.FromMilliseconds(250));
+
+        queue.Enqueue(channel, CreateTraffic(1));
+        await processingStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await queue.StopAsync(channel).WaitAsync(TimeSpan.FromSeconds(1));
+
+        ReceiveWorkerShutdownDiagnostic diagnostic = Assert.Single(diagnostics);
+        Assert.Equal(new ChannelId(channel.SessionId), diagnostic.ChannelId);
+        Assert.False(diagnostic.CancellationAcknowledgementTimedOut);
+    }
+
+    [Fact]
+    public async Task ChannelRetirementDefersAProcessorThatIgnoresCancellation()
+    {
+        var processingStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseProcessor = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = CreateChannel("Dispatch", "100");
+        var queue = new ChannelReceiveWorkQueue(
+            async (_, _, _) =>
+            {
+                processingStarted.TrySetResult();
+                await releaseProcessor.Task;
+            },
+            shutdownDrainTimeout: TimeSpan.FromMilliseconds(25),
+            cancellationAcknowledgementTimeout: TimeSpan.FromMilliseconds(25));
+
+        queue.Enqueue(channel, CreateTraffic(1));
+        await processingStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            queue.StopAsync(channel).WaitAsync(TimeSpan.FromSeconds(1)));
+        releaseProcessor.TrySetResult();
+        await queue.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task FinalDisposalCancelsAStalledStreamContinuation()
+    {
+        var packetProcessed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var continuationStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var diagnostics = new List<ReceiveWorkerShutdownDiagnostic>();
+        var channel = CreateChannel("Dispatch", "100");
+        var queue = new ChannelReceiveWorkQueue(
+            (_, _, _) =>
+            {
+                packetProcessed.TrySetResult();
+                return Task.CompletedTask;
+            },
+            shutdownDelayObserver: observed => diagnostics.AddRange(observed),
+            shutdownDrainTimeout: TimeSpan.FromMilliseconds(25),
+            cancellationAcknowledgementTimeout: TimeSpan.FromMilliseconds(250));
+
+        queue.Enqueue(channel, CreateTraffic(1));
+        await packetProcessed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Task continuation = queue.RunAfterStreamAsync(
+            channel,
+            streamId: 99,
+            async cancellationToken =>
+            {
+                continuationStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            });
+        await continuationStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await queue.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => continuation);
+        ReceiveWorkerShutdownDiagnostic diagnostic = Assert.Single(diagnostics);
+        Assert.Equal(99u, diagnostic.StreamId);
+        Assert.Equal(ReceiveWorkerActivity.RunningContinuation, diagnostic.Activity);
+    }
+
+    [Fact]
+    public async Task FinalDisposalStopsWaitingWhenAProcessorIgnoresCancellation()
+    {
+        var processingStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseProcessor = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var diagnostics = new List<ReceiveWorkerShutdownDiagnostic>();
+        var channel = CreateChannel("Dispatch", "100");
+        var queue = new ChannelReceiveWorkQueue(
+            async (_, _, _) =>
+            {
+                processingStarted.TrySetResult();
+                await releaseProcessor.Task;
+            },
+            shutdownDelayObserver: observed => diagnostics.AddRange(observed),
+            shutdownDrainTimeout: TimeSpan.FromMilliseconds(25),
+            cancellationAcknowledgementTimeout: TimeSpan.FromMilliseconds(25));
+
+        queue.Enqueue(channel, CreateTraffic(1));
+        await processingStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        TimeoutException exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+            queue.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(2)));
+
+        Assert.Contains("activity=ProcessingFrame", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, diagnostics.Count);
+        Assert.False(diagnostics[0].CancellationAcknowledgementTimedOut);
+        Assert.True(diagnostics[1].CancellationAcknowledgementTimedOut);
+        releaseProcessor.TrySetResult();
+    }
+
     private static ChannelViewModel CreateChannel(string name, string tgid)
         => new(new ChannelConfiguration
         {
@@ -666,6 +971,9 @@ public sealed class ChannelReceiveWorkQueueTests
 
         public long TimestampFrequency => Stopwatch.Frequency;
 
+        public void Advance(TimeSpan elapsed)
+            => Interlocked.Add(ref timestamp, (long)(elapsed.TotalSeconds * TimestampFrequency));
+
         public TimeSpan GetElapsedTime(long startTimestamp, long endTimestamp)
             => Stopwatch.GetElapsedTime(startTimestamp, endTimestamp);
 
@@ -676,7 +984,7 @@ public sealed class ChannelReceiveWorkQueueTests
             if (signal.TryConsume())
                 return ValueTask.FromResult(true);
             if (timeout == Timeout.InfiniteTimeSpan)
-                throw new InvalidOperationException("The deterministic queue unexpectedly waited indefinitely.");
+                return signal.WaitAsync(timeout);
 
             long elapsedTicks = Math.Max(
                 1,
@@ -685,6 +993,11 @@ public sealed class ChannelReceiveWorkQueueTests
             Interlocked.Add(ref timedOutTicks, elapsedTicks);
             return ValueTask.FromResult(false);
         }
+
+        public Task DelayAsync(
+            TimeSpan delay,
+            CancellationToken cancellationToken = default)
+            => Task.Delay(delay, cancellationToken);
     }
 
     private sealed class TestReceiveEpisodeCompletionPort(

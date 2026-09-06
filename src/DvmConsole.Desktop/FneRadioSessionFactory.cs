@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.Core.Runtime;
 using DvmConsole.FneClient;
@@ -10,7 +13,7 @@ namespace DvmConsole.Desktop;
 /// FNE implementation. Secrets remain in the host-owned connection options and
 /// are deliberately excluded from the descriptor.
 /// </summary>
-internal sealed class FneRadioSessionFactory : IRadioSessionFactory
+internal sealed class FneRadioSessionFactory : IFneRadioSessionFactory, IRadioSessionFactory
 {
     private readonly FneConnectionOptions options;
     private readonly Func<IReadOnlyCollection<TransmitChannelDescriptor>> getChannels;
@@ -24,6 +27,9 @@ internal sealed class FneRadioSessionFactory : IRadioSessionFactory
     }
 
     public RadioSystemDescriptor Descriptor => CreateDescriptor(options);
+
+    public IFneRadioSession Create()
+        => new FneRadioSessionAdapter(options, getChannels);
 
     public ValueTask<IRadioSession> CreateAsync(
         RadioSystemDescriptor system,
@@ -40,8 +46,7 @@ internal sealed class FneRadioSessionFactory : IRadioSessionFactory
                 nameof(system));
         }
 
-        return ValueTask.FromResult<IRadioSession>(
-            new FneRadioSessionAdapter(options, getChannels));
+        return ValueTask.FromResult<IRadioSession>(Create());
     }
 
     private static RadioSystemDescriptor CreateDescriptor(FneConnectionOptions options)

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
@@ -11,17 +14,20 @@ internal sealed class ReceiveSessionFactory
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
     private readonly Action<ChannelId, uint, uint, ReadOnlyMemory<short>>? samplesObserver;
+    private readonly Func<DmrReceiveKeyPolicy>? getDmrReceiveKeyPolicy;
 
     public ReceiveSessionFactory(
         IP25KeyResolver? p25KeyResolver,
         IDmrKeyResolver? dmrKeyResolver,
         INxdnKeyResolver? nxdnKeyResolver,
-        Action<ChannelId, uint, uint, ReadOnlyMemory<short>>? samplesObserver)
+        Action<ChannelId, uint, uint, ReadOnlyMemory<short>>? samplesObserver,
+        Func<DmrReceiveKeyPolicy>? getDmrReceiveKeyPolicy = null)
     {
         this.p25KeyResolver = p25KeyResolver;
         this.dmrKeyResolver = dmrKeyResolver;
         this.nxdnKeyResolver = nxdnKeyResolver;
         this.samplesObserver = samplesObserver;
+        this.getDmrReceiveKeyPolicy = getDmrReceiveKeyPolicy;
     }
 
     public async ValueTask<StreamSessionState> CreateAsync(
@@ -39,21 +45,22 @@ internal sealed class ReceiveSessionFactory
         try
         {
             episodePlayback = playbackPool.CreatePlayback();
-            playback = samplesObserver is null
-                ? episodePlayback
-                : new ObservedAudioPlayback(
-                    episodePlayback,
-                    samples =>
-                    {
-                        if (sampleContext.TryGet(out uint streamId, out uint sourceId))
-                            samplesObserver?.Invoke(channel.Id, streamId, sourceId, samples);
-                    });
-
+            playback = episodePlayback;
             if (activeVocoder is not null)
             {
                 vocoderSession = activeVocoder.CreateSession(
                     ChannelVocoderPolicy.ToVocoderMode(channel.Definition.Protocol));
             }
+            var processing = vocoderSession as IReceiveAudioProcessingSession;
+            processing?.DeferReceiveAudioProcessing();
+            playback = new ObservedAudioPlayback(
+                episodePlayback,
+                samples =>
+                {
+                    if (sampleContext.TryGet(out uint streamId, out uint sourceId))
+                        samplesObserver?.Invoke(channel.Id, streamId, sourceId, samples);
+                },
+                processing?.HasReceiveAudioProcessing == true ? processing : null);
 
             session = new ChannelReceiveAudioSession(
                 channel.Definition,
@@ -61,7 +68,8 @@ internal sealed class ReceiveSessionFactory
                 playback,
                 p25KeyResolver,
                 dmrKeyResolver,
-                nxdnKeyResolver);
+                nxdnKeyResolver,
+                getDmrReceiveKeyPolicy?.Invoke() ?? DmrReceiveKeyPolicy.OnAirMetadata);
             session.SetGain(gain);
             session.SetBalance(balance);
             vocoderSession = null;
@@ -136,10 +144,13 @@ internal sealed class ObservedAudioPlayback :
     private readonly IAudioPlayback inner;
     private readonly ILiveAudioPlaybackControl livePlaybackControl;
     private readonly Action<ReadOnlyMemory<short>> observer;
+    private readonly IReceiveAudioProcessingSession? processing;
+    private short[] presentationBuffer = [];
 
     public ObservedAudioPlayback(
         IAudioPlayback inner,
-        Action<ReadOnlyMemory<short>> observer)
+        Action<ReadOnlyMemory<short>> observer,
+        IReceiveAudioProcessingSession? processing = null)
     {
         this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
         livePlaybackControl = inner as ILiveAudioPlaybackControl ??
@@ -147,6 +158,7 @@ internal sealed class ObservedAudioPlayback :
                 "Observed receive playback requires independent live-presentation control.",
                 nameof(inner));
         this.observer = observer ?? throw new ArgumentNullException(nameof(observer));
+        this.processing = processing;
     }
 
     public PcmAudioFormat Format => inner.Format;
@@ -183,6 +195,7 @@ internal sealed class ObservedAudioPlayback :
     {
         cancellationToken.ThrowIfCancellationRequested();
         observer(samples);
+        samples = PreparePresentation(samples);
         await inner.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
     }
 
@@ -192,6 +205,7 @@ internal sealed class ObservedAudioPlayback :
     {
         cancellationToken.ThrowIfCancellationRequested();
         observer(samples);
+        samples = PreparePresentation(samples);
         if (inner is IConcealmentAudioPlayback concealmentPlayback)
         {
             await concealmentPlayback.WriteConcealmentAsync(samples, cancellationToken)
@@ -209,6 +223,7 @@ internal sealed class ObservedAudioPlayback :
     {
         cancellationToken.ThrowIfCancellationRequested();
         observer(samples);
+        samples = PreparePresentation(samples);
         if (inner is ILivePacketAudioPlayback packetPlayback)
         {
             await packetPlayback.WriteLivePacketAsync(samples, cancellationToken)
@@ -218,6 +233,19 @@ internal sealed class ObservedAudioPlayback :
         {
             await inner.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private ReadOnlyMemory<short> PreparePresentation(ReadOnlyMemory<short> samples)
+    {
+        // Writes are serialized by the owning receive session and awaited before
+        // this reusable buffer is touched again. TAR-only decode does no local DSP.
+        if (processing is null || !LivePlaybackEnabled || samples.IsEmpty)
+            return samples;
+        if (presentationBuffer.Length < samples.Length)
+            presentationBuffer = new short[samples.Length];
+        samples.Span.CopyTo(presentationBuffer);
+        processing.ProcessReceiveAudio(presentationBuffer.AsSpan(0, samples.Length));
+        return presentationBuffer.AsMemory(0, samples.Length);
     }
 
     public ValueTask FlushAsync(CancellationToken cancellationToken = default)

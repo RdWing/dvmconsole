@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.ComponentModel;
 using DvmConsole.Audio;
 using DvmConsole.Ptt;
@@ -31,12 +34,26 @@ internal sealed record KeyboardPttStateChange(
 internal sealed class KeyboardPttBinding : IAsyncDisposable
 {
     private readonly KeyboardPttSource windowSource;
-    private GlobalKeyboardPttSource? globalSource;
+    private readonly Func<KeyboardPttKey, IGlobalKeyboardPttBindingSource> createGlobalSource;
+    private IGlobalKeyboardPttBindingSource? globalSource;
     private bool started;
     private bool disposed;
 
     public KeyboardPttBinding(KeyboardPttKey activationKey, bool toggleMode)
+        : this(
+            activationKey,
+            toggleMode,
+            static key => new GlobalKeyboardPttBindingSource(key))
     {
+    }
+
+    internal KeyboardPttBinding(
+        KeyboardPttKey activationKey,
+        bool toggleMode,
+        Func<KeyboardPttKey, IGlobalKeyboardPttBindingSource> createGlobalSource)
+    {
+        this.createGlobalSource = createGlobalSource ??
+            throw new ArgumentNullException(nameof(createGlobalSource));
         windowSource = new KeyboardPttSource(activationKey)
         {
             ToggleMode = toggleMode
@@ -45,10 +62,18 @@ internal sealed class KeyboardPttBinding : IAsyncDisposable
     }
 
     public event EventHandler<KeyboardPttStateChange>? StateChanged;
+    public event EventHandler<Exception>? CaptureFailed;
+
+    private void ForwardCaptureFailed(object? sender, Exception failure) => CaptureFailed?.Invoke(this, failure);
 
     public KeyboardPttKey ActivationKey => windowSource.ActivationKey;
 
     public bool IsPressed => globalSource?.IsPressed ?? windowSource.IsPressed;
+
+    public bool IsPressedFrom(KeyboardPttInputOrigin origin)
+        => origin == KeyboardPttInputOrigin.OsGlobal && globalSource is not null
+            ? globalSource.IsPressed
+            : windowSource.IsPressed;
 
     public bool ToggleMode
     {
@@ -89,14 +114,19 @@ internal sealed class KeyboardPttBinding : IAsyncDisposable
         }
 
         Exception? globalCaptureError = null;
+        if (globalSource is not null)
+        {
+            await globalSource.StartAsync(cancellationToken).ConfigureAwait(false);
+            started = true;
+            return new KeyboardPttStartResult(KeyboardPttAvailability.OsGlobal);
+        }
         if (GlobalKeyboardPttSource.IsPlatformSupported)
         {
-            var candidate = new GlobalKeyboardPttSource(ActivationKey)
-            {
-                ToggleMode = ToggleMode,
-                InputSuppressed = windowSource.InputSuppressed
-            };
+            IGlobalKeyboardPttBindingSource candidate = createGlobalSource(ActivationKey);
+            candidate.ToggleMode = ToggleMode;
+            candidate.InputSuppressed = windowSource.InputSuppressed;
             candidate.StateChanged += ForwardStateChanged;
+            candidate.CaptureFailed += ForwardCaptureFailed;
             try
             {
                 await candidate.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -107,12 +137,14 @@ internal sealed class KeyboardPttBinding : IAsyncDisposable
             catch (Exception exception) when (IsGlobalCaptureFailure(exception))
             {
                 candidate.StateChanged -= ForwardStateChanged;
+                candidate.CaptureFailed -= ForwardCaptureFailed;
                 await candidate.DisposeAsync().ConfigureAwait(false);
                 globalCaptureError = exception;
             }
             catch
             {
                 candidate.StateChanged -= ForwardStateChanged;
+                candidate.CaptureFailed -= ForwardCaptureFailed;
                 await candidate.DisposeAsync().ConfigureAwait(false);
                 throw;
             }
@@ -125,9 +157,42 @@ internal sealed class KeyboardPttBinding : IAsyncDisposable
             globalCaptureError);
     }
 
-    public bool HandleKeyDown(KeyboardPttKey key) => windowSource.HandleKeyDown(key);
+    public bool HandleKeyDown(KeyboardPttKey key)
+        => globalSource is not null
+            ? key == ActivationKey
+            : windowSource.HandleKeyDown(key);
 
-    public bool HandleKeyUp(KeyboardPttKey key) => windowSource.HandleKeyUp(key);
+    public bool HandleKeyUp(KeyboardPttKey key)
+        => globalSource is not null
+            ? key == ActivationKey
+            : windowSource.HandleKeyUp(key);
+
+    public void ReleaseToggleLatch(KeyboardPttInputOrigin origin)
+    {
+        if (origin == KeyboardPttInputOrigin.OsGlobal && globalSource is not null)
+            globalSource.ReleaseToggleLatch();
+        else
+            windowSource.ReleaseToggleLatch();
+    }
+
+    public async ValueTask StopAsync(CancellationToken cancellationToken = default)
+    {
+        if (!started)
+            return;
+
+        ReleaseAllToggleLatches();
+        if (globalSource is not null)
+            await globalSource.StopAsync(cancellationToken).ConfigureAwait(false);
+        else
+            await windowSource.StopAsync(cancellationToken).ConfigureAwait(false);
+        started = false;
+    }
+
+    public void ReleaseAllToggleLatches()
+    {
+        windowSource.ReleaseToggleLatch();
+        globalSource?.ReleaseToggleLatch();
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -139,6 +204,7 @@ internal sealed class KeyboardPttBinding : IAsyncDisposable
         if (globalSource is not null)
         {
             globalSource.StateChanged -= ForwardStateChanged;
+            globalSource.CaptureFailed -= ForwardCaptureFailed;
             await globalSource.DisposeAsync().ConfigureAwait(false);
             globalSource = null;
         }
@@ -152,14 +218,83 @@ internal sealed class KeyboardPttBinding : IAsyncDisposable
             this,
             new KeyboardPttStateChange(
                 pressed,
-                sender is GlobalKeyboardPttSource
+                sender is IGlobalKeyboardPttBindingSource
                     ? KeyboardPttInputOrigin.OsGlobal
                     : KeyboardPttInputOrigin.WindowLocal));
 
     private static bool IsGlobalCaptureFailure(Exception exception)
         => exception is PlatformNotSupportedException or
             UnauthorizedAccessException or
+            DllNotFoundException or
+            EntryPointNotFoundException or
+            BadImageFormatException or
             InvalidOperationException or
             TimeoutException or
             Win32Exception;
+}
+
+internal interface IGlobalKeyboardPttBindingSource : IAsyncDisposable
+{
+    event EventHandler<bool>? StateChanged;
+    event EventHandler<Exception>? CaptureFailed;
+    bool IsPressed { get; }
+    bool ToggleMode { get; set; }
+    bool InputSuppressed { get; set; }
+    ValueTask StartAsync(CancellationToken cancellationToken = default);
+    ValueTask StopAsync(CancellationToken cancellationToken = default);
+    void ReleaseToggleLatch();
+}
+
+internal sealed class GlobalKeyboardPttBindingSource : IGlobalKeyboardPttBindingSource
+{
+    private readonly GlobalKeyboardPttSource inner;
+
+    public GlobalKeyboardPttBindingSource(KeyboardPttKey activationKey)
+    {
+        inner = new GlobalKeyboardPttSource(activationKey);
+        inner.StateChanged += HandleStateChanged;
+        inner.CaptureFailed += HandleCaptureFailed;
+    }
+
+    public event EventHandler<bool>? StateChanged;
+    public event EventHandler<Exception>? CaptureFailed;
+
+    public bool IsPressed => inner.IsPressed;
+
+    public bool ToggleMode
+    {
+        get => inner.ToggleMode;
+        set => inner.ToggleMode = value;
+    }
+
+    public bool InputSuppressed
+    {
+        get => inner.InputSuppressed;
+        set => inner.InputSuppressed = value;
+    }
+
+    public ValueTask StartAsync(CancellationToken cancellationToken = default)
+        => inner.StartAsync(cancellationToken);
+
+    public ValueTask StopAsync(CancellationToken cancellationToken = default)
+        => inner.StopAsync(cancellationToken);
+
+    public void ReleaseToggleLatch()
+        => inner.ReleaseToggleLatch();
+
+    public async ValueTask DisposeAsync()
+    {
+        inner.StateChanged -= HandleStateChanged;
+        inner.CaptureFailed -= HandleCaptureFailed;
+        await inner.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private void HandleCaptureFailed(Exception failure)
+    {
+        DesktopCrashLog.Write("Global PTT capture lost; reactivate the keyboard binding", failure);
+        CaptureFailed?.Invoke(this, failure);
+    }
+
+    private void HandleStateChanged(object? sender, bool pressed)
+        => StateChanged?.Invoke(this, pressed);
 }

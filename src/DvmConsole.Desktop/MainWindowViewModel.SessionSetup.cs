@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.Core.Diagnostics;
 using DvmConsole.Core.Runtime;
@@ -36,29 +39,15 @@ public sealed partial class MainWindowViewModel
     }
 
     private void ConfigureWebStreams()
-    {
-        foreach (WebStreamViewModel stream in Zones.SelectMany(zone => zone.WebStreams))
-        {
-            stream.SetOutputDeviceOptions(AudioOutputDevices);
-            stream.SetInitialVolume(
-                userSettings.WebStreamVolumes.TryGetValue(stream.Name, out double savedVolume)
-                    ? savedVolume
-                    : 1.0);
-            stream.RestoreOutputDeviceId(
-                userSettings.WebStreamOutputDeviceIds.TryGetValue(stream.Name, out string? savedOutputDeviceId)
-                    ? savedOutputDeviceId
-                    : string.Empty);
-            stream.VolumeChanged += HandleWebStreamVolumeChanged;
-            stream.PropertyChanged += HandleWebStreamPropertyChanged;
-            stream.Configure(StartWebStreamAsync, StopWebStreamAsync);
-            webStreams.Add(stream);
-        }
-    }
+        => webStreamOperator.Initialize(
+            Zones.SelectMany(zone => zone.WebStreams),
+            AudioOutputDevices);
 
     private void ConfigureChannels()
     {
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
         {
+            channel.SelectionChanged += HandleChannelSelectionChanged;
             channel.SetOutputDeviceOptions(AudioOutputDevices);
             if (channel.Definition.SelectableEncryption &&
                 userSettings.TransmitEncryptionStates.TryGetValue(channel.SettingsKey, out bool savedEncryptionState))
@@ -86,6 +75,7 @@ public sealed partial class MainWindowViewModel
             channel.VolumeChanged += HandleChannelVolumeChanged;
             channel.StereoBalanceChanged += HandleChannelStereoBalanceChanged;
             channel.PropertyChanged += HandleActivityChannelPropertyChanged;
+            channel.PropertyChanged += HandleToneTargetChannelPropertyChanged;
             channel.SetIgnoredSubscriberIds(
                 userSettings.RecordingIgnoredSubscriberIds.TryGetValue(
                     channel.SettingsKey,
@@ -101,7 +91,7 @@ public sealed partial class MainWindowViewModel
                     channel.SettingsKey,
                     StringComparer.OrdinalIgnoreCase))
             {
-                channel.SetAudioEnabled(true);
+                channel.SetAudioEnabled(true, "settings restore");
             }
             channel.RestoreTransmitSelection(userSettings.TransmitSelectedChannelKeys.Contains(
                 channel.SettingsKey,
@@ -166,7 +156,7 @@ public sealed partial class MainWindowViewModel
         if (uiDispatcher.CheckAccess())
             Apply();
         else
-            uiDispatcher.Post(Apply);
+            PostToUi(Apply);
     }
 
     private async Task StopTransmitForTalkgroupAuthorityAsync(
@@ -230,22 +220,5 @@ public sealed partial class MainWindowViewModel
     }
 
     private void RestoreInitialSelection()
-    {
-        selectedChannel = userSettings.RestoreSelectedChannelsOnStartup
-            ? Systems
-                .SelectMany(system => system.Channels)
-                .FirstOrDefault(channel => channel.SettingsKey.Equals(
-                    userSettings.LastSelectedChannelKey,
-                    StringComparison.Ordinal))
-            : null;
-        selectedSystem = userSettings.RestoreSelectedChannelsOnStartup
-            ? Systems.FirstOrDefault(system => system.Name.Equals(
-                userSettings.LastSelectedSystemName,
-                StringComparison.OrdinalIgnoreCase)) ??
-                Systems.FirstOrDefault(system => selectedChannel is not null && system.Channels.Contains(selectedChannel)) ??
-                (Systems.Count > 0 ? Systems[0] : null)
-            : Systems.Count > 0 ? Systems[0] : null;
-        foreach (SystemViewModel system in Systems)
-            system.SetSelected(ReferenceEquals(system, selectedSystem));
-    }
+        => channelSelection.Restore();
 }

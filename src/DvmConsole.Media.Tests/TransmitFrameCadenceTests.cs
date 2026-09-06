@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Media;
 using Xunit;
 
@@ -95,6 +98,24 @@ public sealed class TransmitFrameCadenceTests
             [TimeSpan.FromMilliseconds(20), TimeSpan.FromMilliseconds(20)],
             delay.Durations);
         Assert.Equal(TimeSpan.FromMilliseconds(40), time.Elapsed);
+    }
+
+    [Fact]
+    public async Task ProtocolIntervalStartsAtTheFirstPacketOpportunity()
+    {
+        var time = new ManualTimeProvider();
+        var delay = new RecordingDelay(time);
+        var cadence = new TransmitFrameCadence(
+            TimeSpan.FromMilliseconds(60),
+            time,
+            delay.WaitAsync);
+
+        await cadence.WaitForNextFrameAsync();
+        time.Advance(TimeSpan.FromMilliseconds(40));
+        await cadence.WaitForNextFrameAsync();
+
+        Assert.Equal([TimeSpan.FromMilliseconds(20)], delay.Durations);
+        Assert.Equal(TimeSpan.FromMilliseconds(60), time.Elapsed);
     }
 
     [Fact]

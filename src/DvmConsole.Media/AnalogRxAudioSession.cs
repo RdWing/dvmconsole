@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 
@@ -8,6 +11,10 @@ public sealed class AnalogRxAudioSession : IAsyncDisposable
 {
     private readonly AnalogTrafficSelector selector;
     private readonly IAudioPlayback playback;
+    // ChannelReceiveAudioCoordinator serializes access to a receive session.
+    // Retaining the packet buffer therefore removes one allocation per packet
+    // without exposing mutable samples outside the awaited playback write.
+    private readonly short[] packetSamples = new short[AnalogVoicePacketCodec.SamplesPerPacket];
     private bool disposed;
 
     public AnalogRxAudioSession(AnalogTrafficSelector selector, IAudioPlayback playback)
@@ -26,14 +33,13 @@ public sealed class AnalogRxAudioSession : IAsyncDisposable
         if (!selector.Matches(traffic))
             return 0;
 
-        short[] samples = new short[AnalogVoicePacketCodec.SamplesPerPacket];
-        if (!AnalogVoicePacketCodec.TryExtractPcm(traffic.Payload, samples))
+        if (!AnalogVoicePacketCodec.TryExtractPcm(traffic.Payload, packetSamples))
         {
             MalformedPackets++;
             return 0;
         }
 
-        await LivePacketAudioWriter.WriteAsync(playback, samples, cancellationToken)
+        await LivePacketAudioWriter.WriteAsync(playback, packetSamples, cancellationToken)
             .ConfigureAwait(false);
         FramesDecoded++;
         return 0;

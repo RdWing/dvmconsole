@@ -16,7 +16,7 @@ managed configurations can use the same group name without sharing state.
 ![Groups page](../../Assets/configuration-studio-groups.png)
 
 When Studio is editing the active codeplug, enable controls and multi-select PTT
-remain operational. They take effect immediately. Those controls are disabled
+work immediately. Those controls are disabled
 for a new, inactive, or unsaved codeplug.
 
 ---
@@ -32,12 +32,49 @@ protocol. Destination audio follows the protocol's 20 ms transmit clock instead
 of arriving in decoded batches. This allows cross-protocol patches; source
 vocoder codewords are not passed directly to destinations.
 
-Patch groups have two separate pieces of state:
+Outbound patches bypass the optional RX high-pass filter, voice peaking, and
+compressor. Those settings apply only to local listening; changing
+them does not interrupt patch decoding. Jitter buffering and normal decoder
+smoothing still apply to forwarded audio.
 
-- membership
-- active/on-off state
+## When a forwarded call is skipped or shortened
 
-Membership can exist while the patch is disabled.
+A destination can transmit only one call at a time. If incoming audio arrives
+faster than it can forward complete calls, queued audio would become
+progressively older. DVM Console limits that backlog:
+
+- Each destination keeps at most two unfinished calls, including calls still
+  finishing. A new call is skipped if that capacity is full.
+- Unencoded audio may wait up to one second in the queue. A waiting call that
+  expires is skipped; an active call discards its remaining stale audio and
+  finishes its protocol tail and terminator.
+- A skipped or shortened source call does not restart midway. A new source
+  call can forward once the destination has capacity again.
+
+Open **View > Debug Logs** and search for `PATCH` to find overload warnings
+identifying the affected destination. Source receive audio and TAR recordings
+are independent of this forwarding limit. The one-second threshold measures
+queued audio age, not total forwarding delay: protocol completion or a stalled
+transport can take longer.
+
+If this happens repeatedly, check whether several sources are competing for
+the same destination and whether the destination connection is healthy. Local
+speaker volume and mute controls do not increase patch capacity. Also check
+that the patch is enabled, its source and direction are correct, and the
+destination is connected, transmit-capable, permitted by its FNE, and has any
+required encryption key. An unavailable destination can prevent forwarding
+without an overload warning.
+
+## Membership and source identity
+
+A patch keeps its member list separately from its on/off setting. Turning it
+off leaves the members assigned.
+
+The Groups page also has a codeplug-wide **Preserve inbound source ID when
+forwarding patches** option. Leave it off to use the destination FNE system's
+configured console RID. Turn it on when forwarded traffic should attempt to
+retain the inbound source ID. The option applies to every patch in the
+codeplug, regardless of the selected group.
 
 ---
 
@@ -130,7 +167,7 @@ To edit a group:
 DVM Console shows a conflict warning when a channel assignment cannot be used
 safely. Resolve the conflict before using the group.
 
-Membership, direction, and enabled state are codeplug-scoped operator settings.
+Membership, direction, and enabled state are saved separately for each codeplug.
 They take effect on the active console immediately and do not rewrite YAML,
 disconnect FNE sessions, or require a codeplug reload. Group definition changes,
 including a rename or deletion, still wait for **Review & Save** because the
@@ -139,7 +176,7 @@ definitions belong to the YAML codeplug.
 On the Groups page, **Save YAML changes…** is reserved for definition changes
 such as adding, renaming, changing the type of, or deleting a group. That path
 only becomes available when the YAML draft has changed and offers to disconnect
-and reload because it changes the running topology. Do not use it for routine
+and reload to use the new definitions. Do not use it for routine
 membership, direction, or enabled-state changes.
 
 ---
@@ -151,6 +188,11 @@ received traffic and do not need a separate operator PTT control on this page.
 
 DVM Console adds a short transmit tail after de-key so call-end signaling does
 not clip the final audio frames.
+
+Closing the console or replacing its configuration stops pending patch audio
+and finishes the current call's end signaling. Queued replacement calls do not
+start during shutdown. Normal receive-call endings drain audio within the
+backlog limits above; TAR recordings remain independent of patch playback.
 
 ---
 

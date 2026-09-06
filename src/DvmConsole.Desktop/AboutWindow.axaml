@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="DvmConsole.Desktop.AboutWindow"
@@ -5,7 +8,7 @@
         Background="{DynamicResource ShellBackgroundBrush}"
         Icon="avares://DvmConsole/Assets/DVMConsole.png"
         WindowStartupLocation="CenterOwner">
-  <Grid Margin="18" RowDefinitions="Auto,Auto,Auto,*,Auto" RowSpacing="12">
+  <Grid Margin="16" RowDefinitions="Auto,Auto,Auto,*,Auto" RowSpacing="10">
     <StackPanel Orientation="Horizontal" Spacing="12">
       <Image Source="avares://DvmConsole/Assets/DVMConsole.png" Width="78" Height="78" />
       <StackPanel VerticalAlignment="Center" Spacing="2">
@@ -15,17 +18,19 @@
         <TextBlock x:Name="versionText" Classes="muted" />
       </StackPanel>
     </StackPanel>
-    <Border Grid.Row="1" Background="{DynamicResource CardBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="7" Padding="12">
+    <Border Grid.Row="1" Background="{DynamicResource CardBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="7" Padding="10">
       <StackPanel Spacing="7">
-        <TextBlock Text="Open-source DVM FNE operator console for macOS and Windows." TextWrapping="Wrap" FontWeight="SemiBold" />
+        <TextBlock Text="Open-source DVM FNE operator console for macOS, Windows, and Linux." TextWrapping="Wrap" FontWeight="SemiBold" />
         <TextBlock Text="Copyright © 2025–2026 RdWing." TextWrapping="Wrap" />
         <TextBlock Text="Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-only). Distributed without warranty." TextWrapping="Wrap" />
       </StackPanel>
     </Border>
-    <Border Grid.Row="2" Background="{DynamicResource WarningBackgroundBrush}" BorderBrush="{DynamicResource WarningBorderBrush}" BorderThickness="1" CornerRadius="7" Padding="12">
+    <Border Grid.Row="2" Background="{DynamicResource WarningBackgroundBrush}" BorderBrush="{DynamicResource WarningBorderBrush}" BorderThickness="1" CornerRadius="7" Padding="10">
       <TextBlock Text="For amateur and educational use. Not for public- or life-safety operation." TextWrapping="Wrap" FontWeight="SemiBold" />
     </Border>
-    <TextBlock Grid.Row="3" Classes="muted" Text="Independently maintained downstream of DVMProject/dvmconsole. NEO is not an official DVMProject release and does not imply DVMProject endorsement." TextWrapping="Wrap" VerticalAlignment="Top" />
+    <ScrollViewer Grid.Row="3" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+      <TextBlock Classes="muted" Text="Independently maintained downstream of DVMProject/dvmconsole. NEO is not an official DVMProject release and does not imply DVMProject endorsement." TextWrapping="Wrap" VerticalAlignment="Top" />
+    </ScrollViewer>
     <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
       <Button Content="Upstream" Click="HandleUpstreamClick" />
       <Button Content="Repository" Click="HandleRepositoryClick" />

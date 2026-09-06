@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Core.Runtime;
 
 // Owns loop-prevention state independently from patch membership and call
@@ -9,10 +12,11 @@ internal sealed class PatchLoopSuppression
 {
     private readonly TimeProvider timeProvider;
     private readonly TimeSpan teardownWindow;
-    private readonly HashSet<string> activeStreams = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, DateTimeOffset> recentlyEndedStreams = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, int> activeTargetUseCounts = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, DateTimeOffset> recentlyEndedSources = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<StreamKey> activeStreams = [];
+    private readonly Dictionary<StreamKey, DateTimeOffset> recentlyEndedStreams = [];
+    private readonly Dictionary<PatchMemberIdentity, int> activeTargetUseCounts = [];
+    private readonly Dictionary<SourceKey, DateTimeOffset> recentlyEndedSources = [];
+    private DateTimeOffset nextExpiry = DateTimeOffset.MaxValue;
 
     public PatchLoopSuppression(TimeProvider timeProvider, TimeSpan teardownWindow)
     {
@@ -31,11 +35,11 @@ internal sealed class PatchLoopSuppression
         if (streamId == 0)
             throw new ArgumentOutOfRangeException(nameof(streamId));
 
-        string streamKey = BuildStreamKey(member, streamId);
+        var streamKey = new StreamKey(member.Identity, streamId);
         activeStreams.Add(streamKey);
         recentlyEndedStreams.Remove(streamKey);
-        recentlyEndedSources.Remove(BuildSourceKey(member, outboundSourceId));
-        activeTargetUseCounts[member.Key] = activeTargetUseCounts.GetValueOrDefault(member.Key) + 1;
+        recentlyEndedSources.Remove(new SourceKey(member.Identity, outboundSourceId));
+        activeTargetUseCounts[member.Identity] = activeTargetUseCounts.GetValueOrDefault(member.Identity) + 1;
     }
 
     public void ReleaseTarget(
@@ -51,19 +55,21 @@ internal sealed class PatchLoopSuppression
             throw new ArgumentOutOfRangeException(nameof(releasedUseCount));
 
         DateTimeOffset suppressUntil = timeProvider.GetUtcNow() + teardownWindow;
-        string streamKey = BuildStreamKey(member, streamId);
+        var streamKey = new StreamKey(member.Identity, streamId);
         activeStreams.Remove(streamKey);
         recentlyEndedStreams[streamKey] = suppressUntil;
-        recentlyEndedSources[BuildSourceKey(member, outboundSourceId)] = suppressUntil;
+        recentlyEndedSources[new SourceKey(member.Identity, outboundSourceId)] = suppressUntil;
+        if (suppressUntil < nextExpiry)
+            nextExpiry = suppressUntil;
 
-        int remainingUseCount = activeTargetUseCounts.GetValueOrDefault(member.Key) - releasedUseCount;
+        int remainingUseCount = activeTargetUseCounts.GetValueOrDefault(member.Identity) - releasedUseCount;
         if (remainingUseCount > 0)
         {
-            activeTargetUseCounts[member.Key] = remainingUseCount;
+            activeTargetUseCounts[member.Identity] = remainingUseCount;
             return;
         }
 
-        activeTargetUseCounts.Remove(member.Key);
+        activeTargetUseCounts.Remove(member.Identity);
     }
 
     public bool ShouldSuppressInbound(
@@ -76,56 +82,73 @@ internal sealed class PatchLoopSuppression
             return false;
 
         CleanupExpiredEntries();
-        string streamKey = BuildStreamKey(member, streamId);
+        var streamKey = new StreamKey(member.Identity, streamId);
         return activeStreams.Contains(streamKey) ||
                recentlyEndedStreams.ContainsKey(streamKey) ||
-               activeTargetUseCounts.ContainsKey(member.Key) ||
-               recentlyEndedSources.ContainsKey(BuildSourceKey(member, sourceId));
+               activeTargetUseCounts.ContainsKey(member.Identity) ||
+               recentlyEndedSources.ContainsKey(new SourceKey(member.Identity, sourceId));
     }
 
     public bool IsTargetActive(PatchMemberAddress member)
     {
         ArgumentNullException.ThrowIfNull(member);
-        return activeTargetUseCounts.ContainsKey(member.Key);
+        return activeTargetUseCounts.ContainsKey(member.Identity);
     }
 
-    public void AllowReconfiguredSource(string memberKey)
+    public void AllowReconfiguredSource(PatchMemberIdentity member)
     {
-        if (string.IsNullOrWhiteSpace(memberKey))
-            return;
-
-        string prefix = $"{memberKey}|";
-        foreach (string sourceKey in recentlyEndedSources.Keys
-            .Where(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            .ToArray())
+        List<SourceKey>? removals = null;
+        foreach (SourceKey sourceKey in recentlyEndedSources.Keys)
         {
-            recentlyEndedSources.Remove(sourceKey);
+            if (sourceKey.Member != member)
+                continue;
+            (removals ??= []).Add(sourceKey);
         }
+        if (removals is null)
+            return;
+        foreach (SourceKey sourceKey in removals)
+            recentlyEndedSources.Remove(sourceKey);
     }
 
     private void CleanupExpiredEntries()
     {
         DateTimeOffset now = timeProvider.GetUtcNow();
+        if (now < nextExpiry)
+            return;
         RemoveExpired(recentlyEndedStreams, now);
         RemoveExpired(recentlyEndedSources, now);
+        nextExpiry = FindNextExpiry();
     }
 
-    private static void RemoveExpired(
-        Dictionary<string, DateTimeOffset> entries,
+    private static void RemoveExpired<TKey>(
+        Dictionary<TKey, DateTimeOffset> entries,
         DateTimeOffset now)
+        where TKey : notnull
     {
-        foreach (string key in entries
-            .Where(entry => entry.Value <= now)
-            .Select(entry => entry.Key)
-            .ToArray())
+        List<TKey>? removals = null;
+        foreach ((TKey key, DateTimeOffset expiry) in entries)
         {
-            entries.Remove(key);
+            if (expiry <= now)
+                (removals ??= []).Add(key);
         }
+        if (removals is null)
+            return;
+        foreach (TKey key in removals)
+            entries.Remove(key);
     }
 
-    private static string BuildStreamKey(PatchMemberAddress member, uint streamId)
-        => $"{member.Key}|{streamId}";
+    private DateTimeOffset FindNextExpiry()
+    {
+        DateTimeOffset next = DateTimeOffset.MaxValue;
+        foreach (DateTimeOffset expiry in recentlyEndedStreams.Values)
+            if (expiry < next)
+                next = expiry;
+        foreach (DateTimeOffset expiry in recentlyEndedSources.Values)
+            if (expiry < next)
+                next = expiry;
+        return next;
+    }
 
-    private static string BuildSourceKey(PatchMemberAddress member, uint sourceId)
-        => $"{member.Key}|{sourceId}";
+    private readonly record struct StreamKey(PatchMemberIdentity Member, uint StreamId);
+    private readonly record struct SourceKey(PatchMemberIdentity Member, uint SourceId);
 }

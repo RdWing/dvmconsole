@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Desktop;
 
 // Prevents work queued by a session-owned service from reaching the UI after
@@ -17,11 +20,10 @@ internal sealed class SessionUiCallbackGate
     public void Post(Action callback, bool background = false)
     {
         ArgumentNullException.ThrowIfNull(callback);
-        lock (sync)
-        {
-            if (closed)
-                return;
-        }
+        // Producers must not wait for an executing UI callback. The callback
+        // rechecks under the lifetime lock, so a concurrent Close still fences it.
+        if (Volatile.Read(ref closed))
+            return;
 
         dispatcher.Post(
             () =>
@@ -40,6 +42,6 @@ internal sealed class SessionUiCallbackGate
     public void Close()
     {
         lock (sync)
-            closed = true;
+            Volatile.Write(ref closed, true);
     }
 }

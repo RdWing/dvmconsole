@@ -1,5 +1,8 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Runtime;
-using DvmConsole.Media;
+using DvmConsole.Application;
 
 namespace DvmConsole.Desktop;
 
@@ -78,42 +81,11 @@ internal static class EncryptionSnapshotResolver
     public static EncryptionSnapshot? TryResolve(IRadioMediaFrame traffic)
     {
         ArgumentNullException.ThrowIfNull(traffic);
-        if (traffic.Protocol == RadioMediaProtocol.P25 &&
-            P25DfsiFrameCodec.TryExtractEncryptionMetadata(
-                traffic,
-                out P25DfsiFrameCodec.P25EncryptionMetadata p25Metadata))
-        {
-            return EncryptionSnapshot.FromProtocol(
-                p25Metadata.AlgorithmId != P25EncryptionAlgorithms.Unencrypted,
-                p25Metadata.AlgorithmId,
-                p25Metadata.KeyId);
-        }
-
-        if (traffic.Protocol == RadioMediaProtocol.Dmr &&
-            traffic.FrameType.Equals("DATA_SYNC", StringComparison.OrdinalIgnoreCase) &&
-            traffic.Subtype.Equals("VOICE_PI_HEADER", StringComparison.OrdinalIgnoreCase) &&
-            DmrVoicePacketCodec.TryExtractEncryptionMetadata(
-                traffic.Payload,
-                out DmrVoicePacketCodec.DmrEncryptionMetadata dmrMetadata))
-        {
-            return EncryptionSnapshot.FromProtocol(
-                dmrMetadata.AlgorithmId != 0,
-                dmrMetadata.AlgorithmId,
-                dmrMetadata.KeyId);
-        }
-
-        if (traffic.Protocol == RadioMediaProtocol.Nxdn &&
-            NxdnVoicePacketCodec.TryExtractCallMetadata(
-                traffic.Payload,
-                out NxdnVoicePacketCodec.CallMetadata nxdnMetadata) &&
-            nxdnMetadata.MessageType == NxdnVoicePacketCodec.VoiceCallMessageType)
-        {
-            return EncryptionSnapshot.FromProtocol(
-                nxdnMetadata.CipherType != 0,
-                nxdnMetadata.CipherType,
-                nxdnMetadata.KeyId);
-        }
-
-        return null;
+        return RadioFrameEncryptionResolver.TryResolve(traffic) is { } encryption
+            ? EncryptionSnapshot.FromProtocol(
+                encryption.IsSecure,
+                encryption.AlgorithmId,
+                encryption.KeyId)
+            : null;
     }
 }

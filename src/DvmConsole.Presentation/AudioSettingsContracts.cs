@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections;
 using System.Windows.Input;
 
@@ -52,7 +55,6 @@ public interface IAudioSettingsViewModel
     bool IsMicrophonePermissionRequestAvailable { get; }
     IEnumerable RxAudioProcessingModes { get; }
     ICommand ApplyRxAudioProcessingOptionsCommand { get; }
-    bool IsAppleVoiceProcessingPlatformAvailable { get; }
     IReadOnlyList<string> AudioProcessingModeOptions { get; }
     string SelectedAudioProcessingMode { get; set; }
     string AudioProcessingDescription { get; }
@@ -68,6 +70,9 @@ public interface IAudioSettingsViewModel
     ICommand ApplyAudioInputSettingsCommand { get; }
     string AudioInputPresetNameText { get; set; }
     IEnumerable AudioInputPresets { get; }
+    string AudioInputPresetFilterText { get; set; }
+    bool IsAudioInputPresetFilterVisible { get; }
+    IEnumerable FilteredAudioInputPresets { get; }
     IEnumerable AudioRouteSystems { get; }
 }
 

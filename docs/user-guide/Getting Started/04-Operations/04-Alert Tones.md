@@ -10,7 +10,7 @@ Use them for pages, alerts, and channel-hold tone behavior.
 # Sending alert tones
 
 The toolbar buttons **ALERT 1**, **ALERT 2**, and **ALERT 3** use DVM Console's
-built-in tone generator and do not need external audio files.
+built-in tone generator by default and do not need external audio files.
 
 As the main window narrows, the alert shortcuts move into **MORE** before
 **TONES** or the configured clocks. The same three actions are available there
@@ -19,6 +19,17 @@ and follow the normal armed-resource and validation rules.
 - **ALERT 1:** continuous 1000 Hz for 3 seconds.
 - **ALERT 2:** alternating 1500 Hz and 800 Hz every 250 milliseconds for seven cycles.
 - **ALERT 3:** eight 250-millisecond bursts of 1000 Hz, separated by 250 milliseconds of silence.
+
+Right-click a toolbar tone button to assign **Saved Alerts** (generated tone
+patterns) or **Custom Alerts** (imported audio files). Both send to channels
+with **ALERT** enabled. **Restore ALERT 1**, **2**, or **3** restores that button's
+original built-in pattern.
+
+Assignments are saved in your settings. The button shows the first word of the
+pattern name in uppercase, limited to seven characters without an ellipsis; hover to see its
+full name and target type. Left-click sends the assigned pattern. If the saved
+pattern is deleted, the shortcut reports that it is unavailable until you
+reassign or reset it.
 
 The tone generator outputs approximately -25 dBFS.
 
@@ -49,18 +60,27 @@ Open from:
 Commands > Tones
 ```
 
-The **TONES** toolbar button opens the same page. From there, operators can:
+The **TONES** toolbar button opens the same page. From there, you can:
 
 - import, send, and delete custom alert audio
 - build an ordered tone and silence pattern
 - save and send DTMF or generated-tone presets
 - send a Quick Call II two-tone page
 
+Use the section links at the top to jump to **DTMF**, **Patterns**, **Custom
+audio**, or **QCII paging**. Long preset lists scroll within their section.
+**Load** copies a preset into the editable fields without sending it.
+
+Each section shows how many channels are armed for its destination. Hover over
+the count to see their system and channel names. **Send** uses ALERT-armed
+channels, except in **QCII paging**, where it uses PAGE-armed channels. The normal
+connection and transmit checks still apply to every send.
+
 Pattern rows label their two value fields **Frequency** and **Duration (sec)**.
 Each frequency must be from 300 to 2500 Hz. All pattern steps remain in one
 transmitted call.
 
-The normal settings system saves these changes.
+These changes are saved with your console settings.
 
 The **Monitor generated tones locally** checkbox under General settings controls
 whether DVM Console plays an attenuated local copy while transmitting generated

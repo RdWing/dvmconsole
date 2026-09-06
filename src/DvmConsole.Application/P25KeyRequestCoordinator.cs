@@ -1,9 +1,13 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Application;
 
 internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
 {
     internal static readonly TimeSpan StartupDelay = TimeSpan.FromSeconds(5);
     internal static readonly TimeSpan RequestSpacing = TimeSpan.FromMilliseconds(100);
+    internal static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(2);
 
     private readonly object sync = new();
     private readonly Dictionary<string, RequestSchedule> schedules = new(StringComparer.OrdinalIgnoreCase);
@@ -25,12 +29,16 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
         IReadOnlyList<(byte AlgorithmId, ushort KeyId)> requests,
         Func<bool> isConnected,
         Action<byte, ushort> requestKey,
+        Func<byte, ushort, bool> hasResponse,
+        Action<byte, ushort> retryKey,
         Action<Exception>? handleFailure = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(systemName);
         ArgumentNullException.ThrowIfNull(requests);
         ArgumentNullException.ThrowIfNull(isConnected);
         ArgumentNullException.ThrowIfNull(requestKey);
+        ArgumentNullException.ThrowIfNull(hasResponse);
+        ArgumentNullException.ThrowIfNull(retryKey);
 
         if (requests.Count == 0)
         {
@@ -55,6 +63,8 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
             requests,
             isConnected,
             requestKey,
+            hasResponse,
+            retryKey,
             handleFailure,
             schedule);
         return schedule.Task;
@@ -91,6 +101,8 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
         IReadOnlyList<(byte AlgorithmId, ushort KeyId)> requests,
         Func<bool> isConnected,
         Action<byte, ushort> requestKey,
+        Func<byte, ushort, bool> hasResponse,
+        Action<byte, ushort> retryKey,
         Action<Exception>? handleFailure,
         RequestSchedule schedule)
     {
@@ -98,25 +110,27 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
         try
         {
             await delayAsync(StartupDelay, cancellationToken).ConfigureAwait(false);
-            for (int index = 0; index < requests.Count; index++)
+            if (!await SendPassAsync(
+                    requests,
+                    isConnected,
+                    requestKey,
+                    handleFailure,
+                    cancellationToken).ConfigureAwait(false))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!isConnected())
-                    return;
-
-                (byte algorithmId, ushort keyId) = requests[index];
-                try
-                {
-                    requestKey(algorithmId, keyId);
-                }
-                catch (Exception exception)
-                {
-                    handleFailure?.Invoke(exception);
-                }
-
-                if (index < requests.Count - 1)
-                    await delayAsync(RequestSpacing, cancellationToken).ConfigureAwait(false);
+                return;
             }
+
+            await delayAsync(RetryDelay, cancellationToken).ConfigureAwait(false);
+            (byte AlgorithmId, ushort KeyId)[] unanswered = requests
+                .Where(request => !hasResponse(request.AlgorithmId, request.KeyId))
+                .ToArray();
+            await SendPassAsync(
+                    unanswered,
+                    isConnected,
+                    retryKey,
+                    handleFailure,
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -134,6 +148,36 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
             }
             schedule.Cancellation.Dispose();
         }
+    }
+
+    private async Task<bool> SendPassAsync(
+        IReadOnlyList<(byte AlgorithmId, ushort KeyId)> requests,
+        Func<bool> isConnected,
+        Action<byte, ushort> requestKey,
+        Action<Exception>? handleFailure,
+        CancellationToken cancellationToken)
+    {
+        for (int index = 0; index < requests.Count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!isConnected())
+                return false;
+
+            (byte algorithmId, ushort keyId) = requests[index];
+            try
+            {
+                requestKey(algorithmId, keyId);
+            }
+            catch (Exception exception)
+            {
+                handleFailure?.Invoke(exception);
+            }
+
+            if (index < requests.Count - 1)
+                await delayAsync(RequestSpacing, cancellationToken).ConfigureAwait(false);
+        }
+
+        return true;
     }
 
     private sealed class RequestSchedule(CancellationTokenSource cancellation)

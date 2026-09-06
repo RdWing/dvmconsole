@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using Xunit;
 
@@ -90,4 +93,65 @@ public sealed class RadioConnectionCoordinatorTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => startup);
         Assert.True(stopObserved.Task.IsCompletedSuccessfully);
     }
+
+    [Fact]
+    public async Task RestoreStartsOnlyThePreviouslyActiveSystemsAndThenSynchronizesDependents()
+    {
+        var operations = new List<string>();
+        SystemId northId = SystemId.FromName("North");
+        SystemId southId = SystemId.FromName("South");
+        bool northActive = false;
+        bool southActive = false;
+        var coordinator = new RadioConnectionCoordinator(
+            [
+                CreateEndpoint(northId, "North", () => northActive, value => northActive = value, operations),
+                CreateEndpoint(southId, "South", () => southActive, value => southActive = value, operations)
+            ],
+            _ =>
+            {
+                operations.Add("sync-dependent");
+                return ValueTask.CompletedTask;
+            },
+            _ => ValueTask.CompletedTask,
+            () => { },
+            busy => operations.Add($"busy-{busy}"),
+            transition => operations.Add($"transition-{transition.Kind}-{transition.SystemName}"));
+
+        await coordinator.RestoreAsync([southId, southId]);
+
+        Assert.False(northActive);
+        Assert.True(southActive);
+        Assert.Equal(
+            [
+                "busy-True",
+                "transition-StartingSystem-South",
+                "start-South",
+                "sync-dependent",
+                "busy-False"
+            ],
+            operations);
+    }
+
+    private static RadioConnectionEndpoint CreateEndpoint(
+        SystemId id,
+        string name,
+        Func<bool> isActive,
+        Action<bool> setActive,
+        ICollection<string> operations)
+        => new(
+            id,
+            name,
+            isActive,
+            _ =>
+            {
+                setActive(true);
+                operations.Add($"start-{name}");
+                return ValueTask.CompletedTask;
+            },
+            _ =>
+            {
+                setActive(false);
+                operations.Add($"stop-{name}");
+                return ValueTask.CompletedTask;
+            });
 }

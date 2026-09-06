@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Concentus": {
+        "type": "Transitive",
+        "resolved": "2.2.2",
+        "contentHash": "2B9YmHPKO+k7YpAAnqmiXwiMJnfjfj1C868RszOll2iZWLnGTAiC1q21L/d7CvTan7T+hyqU8dR0Dcy3cpjVfQ=="
+      },
+      "Concentus.Oggfile": {
+        "type": "Transitive",
+        "resolved": "1.0.7",
+        "contentHash": "rKWtI5oiTWqK2ol1aWvIT1BRTPi07Uo1hAet0ysQoZQqFo/mxBRwr+ERw89fIdkL3tbMf3ncoW7b3HDGx8Sk4g==",
+        "dependencies": {
+          "Concentus": "2.2.2"
+        }
+      },
+      "NAudio.Core": {
+        "type": "Transitive",
+        "resolved": "3.0.1",
+        "contentHash": "3fJ6UnkoiNBeeczKd9OozvcE85FvtyYCykmfzEbFW0uB0uT2+keKdconUGkz9qYlhaq1RJDTFptXOooQBYLijA==",
+        "dependencies": {
+          "System.Numerics.Tensors": "9.0.0"
+        }
+      },
+      "NAudio.Wasapi": {
+        "type": "Transitive",
+        "resolved": "3.0.1",
+        "contentHash": "1j8+HaeAJXFaDaIeVpnaahwAa3ZvMog2bswgmY1JSDysAbeehRx+PIeC0AbNyXZr5gvhu9PfOPD7xwuAEKJcbw==",
+        "dependencies": {
+          "NAudio.Core": "3.0.1"
+        }
+      },
+      "NLayer": {
+        "type": "Transitive",
+        "resolved": "3.0.0",
+        "contentHash": "aQrCT93NjIrJNXA7wiTSHMp9OUhGNb8YTJAwnsx2FtaNdAe74vwfguFExf6QFNU72XhNPb/bLAcdMbxvaNZgWg=="
+      },
+      "runtime.linux-arm.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "gK720fg6HemDg8sXcfy+xCMZ9+hF78Gc7BmREbmkS4noqlu1BAr9qZtuWGhLzFjBfgecmdtl4+SYVwJ1VneZBQ=="
+      },
+      "runtime.linux-arm64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "KYG6/3ojhEWbb3FwQAKgGWPHrY+HKUXXdVjJlrtyCLn3EMcNTaNcPadb2c0ndQzixZSmAxZKopXJr0nLwhOrpQ=="
+      },
+      "runtime.linux-x64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "Wnw5vhA4mgGbIFoo6l9Fk3iEcwRSq49a1aKwJgXUCUtEQLCSUDjTGSxqy/oMUuOyyn7uLHsH8KgZzQ1y3lReiQ=="
+      },
+      "runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "Ee7Sz5llLpTgyKIWzKI/GeuRSbFkOABgJRY00SqTY0OkTYtkB+9l5rFZfE7fxPA3c22RfytCBYkUdAkcmwMjQg==",
+        "dependencies": {
+          "runtime.linux-arm.runtime.native.System.IO.Ports": "8.0.0",
+          "runtime.linux-arm64.runtime.native.System.IO.Ports": "8.0.0",
+          "runtime.linux-x64.runtime.native.System.IO.Ports": "8.0.0",
+          "runtime.osx-arm64.runtime.native.System.IO.Ports": "8.0.0",
+          "runtime.osx-x64.runtime.native.System.IO.Ports": "8.0.0"
+        }
+      },
+      "runtime.osx-arm64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "rbUBLAaFW9oVkbsb0+XSrAo2QdhBeAyzLl5KQ6Oci9L/u626uXGKInsVJG6B9Z5EO8bmplC8tsMiaHK8wOBZ+w=="
+      },
+      "runtime.osx-x64.runtime.native.System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "IcfB4jKtM9pkzP9OpYelEcUX1MiDt0IJPBh3XYYdEISFF+6Mc+T8WWi0dr9wVh1gtcdVjubVEIBgB8BHESlGfQ=="
+      },
+      "System.IO.Ports": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "MaiPbx2/QXZc62gm/DrajRrGPG1lU4m08GWMoWiymPYM+ba4kfACp2PbiYpqJ4QiFGhHD00zX3RoVDTucjWe9g==",
+        "dependencies": {
+          "runtime.native.System.IO.Ports": "8.0.0"
+        }
+      },
+      "System.Numerics.Tensors": {
+        "type": "Transitive",
+        "resolved": "9.0.0",
+        "contentHash": "hyJB4UlpAi19Xr9AXzu2NuagKC4lPfHObNMEAA0HmqFz2rX7wKgzeYzO/jM/eBHDhnUGFFEjk5cOoJaxqg5J4A=="
+      },
+      "Tmds.DBus.Protocol": {
+        "type": "Transitive",
+        "resolved": "0.21.3",
+        "contentHash": "hDwB8WsQoyALQKqIbwzS68UKdlnafDm4T/DkO/JrA/YIneP/rKv96SxYPVXeh3FP4i/SXfShrYftKLtciJAIlw=="
+      },
+      "dvmconsole.audio.abstractions": {
+        "type": "Project"
+      },
+      "dvmconsole.audio.core": {
+        "type": "Project",
+        "dependencies": {
+          "Concentus.Oggfile": "[1.0.7, )",
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "NLayer": "[3.0.0, )"
+        }
+      },
+      "dvmconsole.audio.desktop": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Core": "[0.7.0, )",
+          "DvmConsole.Audio.Linux": "[0.7.0, )",
+          "DvmConsole.Audio.MacOS": "[0.7.0, )",
+          "DvmConsole.Audio.Windows": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.audio.linux": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Core": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.audio.macos": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Core": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.audio.windows": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "NAudio.Wasapi": "[3.0.1, )"
+        }
+      },
+      "dvmconsole.ptt.abstractions": {
+        "type": "Project"
+      },
+      "dvmconsole.ptt.desktop": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Ptt.Abstractions": "[0.7.0, )",
+          "System.IO.Ports": "[8.0.0, )",
+          "Tmds.DBus.Protocol": "[0.21.3, )"
+        }
+      }
+    }
+  }
+}

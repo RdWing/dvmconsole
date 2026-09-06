@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Media;
 
 /// <summary>
@@ -23,7 +26,20 @@ public sealed class TransmitFrameCadence
     private bool frameStarted;
 
     public TransmitFrameCadence(TimeProvider? timeProvider = null)
-        : this(timeProvider, delay: null, delayFirstFrame: false)
+        : this(FrameInterval, timeProvider, delay: null, delayFirstFrame: false)
+    {
+    }
+
+    public TransmitFrameCadence(TimeSpan frameInterval, TimeProvider? timeProvider = null)
+        : this(frameInterval, timeProvider, delay: null, delayFirstFrame: false)
+    {
+    }
+
+    internal TransmitFrameCadence(
+        TimeSpan frameInterval,
+        TimeProvider? timeProvider,
+        Func<TimeSpan, CancellationToken, ValueTask> delay)
+        : this(frameInterval, timeProvider, delay, delayFirstFrame: false)
     {
     }
 
@@ -34,20 +50,40 @@ public sealed class TransmitFrameCadence
     public static TransmitFrameCadence StartAfterFrameInterval(
         TimeProvider? timeProvider = null,
         Func<TimeSpan, CancellationToken, ValueTask>? delay = null)
-        => new(timeProvider, delay, delayFirstFrame: true);
+        => new(FrameInterval, timeProvider, delay, delayFirstFrame: true);
+
+    /// <summary>
+    /// Creates a cadence for an arbitrary media interval and waits for that
+    /// interval before releasing its first frame.
+    /// </summary>
+    public static TransmitFrameCadence StartAfterInterval(
+        TimeSpan interval,
+        TimeProvider? timeProvider = null)
+        => new(interval, timeProvider, delay: null, delayFirstFrame: true);
 
     internal TransmitFrameCadence(
         TimeProvider? timeProvider,
         Func<TimeSpan, CancellationToken, ValueTask>? delay,
         bool delayFirstFrame = false)
+        : this(FrameInterval, timeProvider, delay, delayFirstFrame)
     {
+    }
+
+    private TransmitFrameCadence(
+        TimeSpan frameInterval,
+        TimeProvider? timeProvider,
+        Func<TimeSpan, CancellationToken, ValueTask>? delay,
+        bool delayFirstFrame)
+    {
+        if (frameInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(frameInterval));
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.delay = delay ?? DelayAsync;
         this.delayFirstFrame = delayFirstFrame;
         frameIntervalTimestampUnits = Math.Max(
             1,
             checked((long)Math.Round(
-                FrameInterval.TotalSeconds * this.timeProvider.TimestampFrequency)));
+                frameInterval.TotalSeconds * this.timeProvider.TimestampFrequency)));
     }
 
     public async ValueTask WaitForNextFrameAsync(CancellationToken cancellationToken = default)

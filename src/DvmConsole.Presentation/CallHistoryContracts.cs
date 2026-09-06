@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections;
 
 namespace DvmConsole.Presentation;
@@ -20,6 +23,9 @@ public interface ICallHistoryItemViewModel
     string EncryptionText { get; }
     bool HasRecording { get; }
     bool HasPlayableRecording { get; }
+    bool IsRecordingPlaying { get; }
+    string RecordingPlaybackActionText { get; }
+    string RecordingPlaybackHelpText { get; }
     string RecordingFileName { get; }
     string RecordingDetailsText { get; }
 }

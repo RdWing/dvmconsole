@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections.Concurrent;
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
@@ -506,7 +509,7 @@ public sealed class PatchPipelineIntegrationTests
 
         public void SendTraffic(
             FneTrafficProtocol protocol,
-            ReadOnlySpan<byte> payload,
+            ReadOnlyMemory<byte> payload,
             ushort sequence,
             uint streamId)
             => sent.Enqueue(new SentPacket(protocol, payload.ToArray(), sequence, streamId));

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using Xunit;
 
@@ -132,28 +135,6 @@ public sealed class PcmInputProcessorTests
         Assert.Equal(-12, normalized.LowGainDb);
         Assert.Equal(0, normalized.MidGainDb);
         Assert.Equal(12, normalized.HighGainDb);
-    }
-
-    [Fact]
-    public async Task AppleModeDoesNotRunDvmConsoleGainOrAgcASecondTime()
-    {
-        var source = new TestCapture();
-        await using var capture = new ProcessedAudioCapture(source, new AudioInputProcessingOptions
-        {
-            ProcessingMode = AudioProcessingMode.AppleVoiceProcessing,
-            AgcEnabled = true,
-            Gain = 3,
-            LowGainDb = 12,
-            MidGainDb = 12,
-            HighGainDb = 12
-        });
-        short[]? received = null;
-        capture.SamplesAvailable += (_, args) => received = args.Samples.ToArray();
-
-        short[] appleProcessed = [100, -200, 300];
-        source.Emit(appleProcessed);
-
-        Assert.Equal(appleProcessed, received);
     }
 
     [Fact]

@@ -1,9 +1,11 @@
-#nullable enable
+// SPDX-FileCopyrightText: 2025-2026 RdWing
 // SPDX-License-Identifier: AGPL-3.0-only
+
+#nullable enable
 
 namespace fnecore;
 
-internal sealed class FneTransportNegotiationState
+internal sealed class FneTransportNegotiationState : IDisposable
 {
     private readonly object sync = new();
     private readonly FneTransportEncryptionMode configuredMode;
@@ -11,7 +13,7 @@ internal sealed class FneTransportNegotiationState
     private FneTransportEncryptionMode lastSentMode;
     private FneTransportEncryptionMode? negotiatedMode;
     private bool isCryptoWrapped;
-    private byte[]? presharedKey;
+    private FneTransportCryptoContext? crypto;
 
     public FneTransportNegotiationState(FneTransportEncryptionMode configuredMode)
     {
@@ -35,7 +37,8 @@ internal sealed class FneTransportNegotiationState
     {
         lock (sync)
         {
-            presharedKey = key?.ToArray();
+            crypto?.Dispose();
+            crypto = key is null ? null : new FneTransportCryptoContext(key);
             isCryptoWrapped = key is not null;
             sendMode = InitialMode(configuredMode);
             lastSentMode = sendMode;
@@ -47,71 +50,83 @@ internal sealed class FneTransportNegotiationState
 
     public byte[] WrapForSend(byte[] message)
     {
-        byte[]? key;
-        bool wrapped;
-        FneTransportEncryptionMode mode;
-
         lock (sync)
         {
-            wrapped = isCryptoWrapped;
-            key = presharedKey;
-            mode = negotiatedMode ?? sendMode;
+            if (!isCryptoWrapped)
+                return message;
+            FneTransportCryptoContext context = crypto ??
+                throw new InvalidOperationException("Encrypted FNE transport has no preshared key.");
+            FneTransportEncryptionMode mode = negotiatedMode ?? sendMode;
             lastSentMode = mode;
             if (configuredMode == FneTransportEncryptionMode.Auto && negotiatedMode is null)
                 sendMode = OtherMode(mode);
+            return context.Wrap(message, mode);
         }
-
-        if (!wrapped)
-            return message;
-        if (key is null)
-            throw new InvalidOperationException("Encrypted FNE transport has no preshared key.");
-
-        return FneTransportCryptoCodec.Wrap(message, key, mode);
     }
 
     public byte[] Unwrap(byte[] wire, out bool wrapped)
     {
-        byte[]? key;
-        FneTransportEncryptionMode preferredMode;
         lock (sync)
         {
             wrapped = isCryptoWrapped;
-            key = presharedKey;
-            preferredMode = negotiatedMode ?? lastSentMode;
-        }
-
-        if (!wrapped)
-            return wire;
-        if (key is null)
-            throw new InvalidOperationException("Encrypted FNE transport has no preshared key.");
-
-        if (configuredMode != FneTransportEncryptionMode.Auto)
-        {
-            return FneTransportCryptoCodec.TryUnwrap(wire, key, configuredMode, out byte[] decrypted)
-                ? decrypted
-                : [];
-        }
-
-        FneTransportEncryptionMode alternateMode = OtherMode(preferredMode);
-        foreach (FneTransportEncryptionMode mode in new[] { preferredMode, alternateMode })
-        {
-            if (!FneTransportCryptoCodec.TryUnwrap(wire, key, mode, out byte[] candidate) ||
-                !FneTransportCryptoCodec.LooksLikeFneFrame(candidate))
+            if (!wrapped)
+                return wire;
+            FneTransportCryptoContext context = crypto ??
+                throw new InvalidOperationException("Encrypted FNE transport has no preshared key.");
+            if (configuredMode != FneTransportEncryptionMode.Auto)
             {
-                continue;
+                return context.TryUnwrap(wire, configuredMode, out byte[] decrypted)
+                    ? decrypted
+                    : [];
             }
 
-            lock (sync)
+            FneTransportEncryptionMode preferredMode = negotiatedMode ?? lastSentMode;
+            if (TryUnwrapAuto(context, wire, preferredMode, out byte[] candidate, out FneTransportEncryptionMode mode))
             {
                 negotiatedMode = mode;
                 sendMode = mode;
                 lastSentMode = mode;
+                return candidate;
             }
+            return [];
+        }
+    }
 
-            return candidate;
+    private static bool TryUnwrapAuto(
+        FneTransportCryptoContext context,
+        byte[] wire,
+        FneTransportEncryptionMode preferredMode,
+        out byte[] candidate,
+        out FneTransportEncryptionMode acceptedMode)
+    {
+        if (context.TryUnwrap(wire, preferredMode, out candidate) &&
+            FneTransportCryptoCodec.LooksLikeFneFrame(candidate))
+        {
+            acceptedMode = preferredMode;
+            return true;
         }
 
-        return [];
+        FneTransportEncryptionMode alternateMode = OtherMode(preferredMode);
+        if (context.TryUnwrap(wire, alternateMode, out candidate) &&
+            FneTransportCryptoCodec.LooksLikeFneFrame(candidate))
+        {
+            acceptedMode = alternateMode;
+            return true;
+        }
+
+        acceptedMode = default;
+        candidate = [];
+        return false;
+    }
+
+    public void Dispose()
+    {
+        lock (sync)
+        {
+            crypto?.Dispose();
+            crypto = null;
+            isCryptoWrapped = false;
+        }
     }
 
     internal static FneTransportEncryptionMode InitialMode(FneTransportEncryptionMode mode)

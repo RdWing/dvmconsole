@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using DvmConsole.Vocoder;
 
@@ -19,11 +22,11 @@ internal static class Program
             : null);
         try
         {
-            ValidateBuiltInVocoder();
             App.SmokeWindows = args.Contains("--smoke-windows", StringComparer.Ordinal);
             App.SmokeResultPath = ReadOption(args, "--smoke-result=");
             if (App.SmokeWindows)
                 App.InitializeSmokeResult();
+            ValidateBuiltInVocoder();
             App.ConfigurationPath = App.DemoMode
                 ? App.ResolveDemoConfigurationPath(AppContext.BaseDirectory)
                 : ReadConfigurationPath(args);
@@ -70,6 +73,10 @@ internal static class Program
 #elif DVMCONSOLE_WINDOWS
         AppBuilder builder = AppBuilder.Configure<App>()
             .UseWin32()
+            .UseSkia();
+#elif DVMCONSOLE_LINUX
+        AppBuilder builder = AppBuilder.Configure<App>()
+            .UseX11()
             .UseSkia();
 #else
         AppBuilder builder = AppBuilder.Configure<App>()

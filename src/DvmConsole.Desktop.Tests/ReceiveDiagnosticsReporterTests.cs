@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Configuration;
 using Xunit;
 
@@ -5,6 +8,18 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class ReceiveDiagnosticsReporterTests
 {
+    [Fact]
+    public void FullInspectionIsRateLimitedPerChannel()
+    {
+        var reporter = new ReceiveDiagnosticsReporter(TimeSpan.FromSeconds(5));
+        ChannelViewModel channel = CreateChannel();
+        DateTimeOffset now = DateTimeOffset.UnixEpoch;
+
+        Assert.True(reporter.ShouldInspect(channel, now));
+        Assert.False(reporter.ShouldInspect(channel, now.AddMilliseconds(100)));
+        Assert.True(reporter.ShouldInspect(channel, now.AddMilliseconds(250)));
+    }
+
     [Fact]
     public void RepeatedCumulativeIssueIsNotRepublished()
     {

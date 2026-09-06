@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using System.Diagnostics;
@@ -8,16 +11,55 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class ReceivePresentationControllerTests
 {
     [Fact]
+    public async Task BrokenTimingObserverDoesNotStrandLaterActivityUpdates()
+    {
+        await using var system = CreateSystem();
+        var posted = new Queue<Action>();
+        var presented = new List<ushort>();
+        var controller = new ReceivePresentationController(new ReceivePresentationPort(
+            () => false, () => false, posted.Enqueue,
+            (_, item, _) => presented.Add(item.Traffic.PacketSequence),
+            getTimestamp: () => Stopwatch.Frequency,
+            observeTiming: (_, _, _) => throw new InvalidOperationException()));
+        controller.Present(system, CreateWorkItem(1));
+        controller.Present(system, CreateWorkItem(2));
+        posted.Dequeue()();
+        Assert.Equal([(ushort)1, (ushort)2], presented);
+        Assert.Empty(posted);
+    }
+
+    [Fact]
+    public async Task MeasuresQueueWaitSeparatelyFromApplyingActivity()
+    {
+        await using var system = CreateSystem();
+        var posted = new Queue<Action>();
+        long now = Stopwatch.Frequency;
+        var observed = new List<(TimeSpan Queue, TimeSpan Apply)>();
+        var controller = new ReceivePresentationController(new ReceivePresentationPort(
+            () => false, () => false, posted.Enqueue,
+            (_, _, _) => now += Stopwatch.Frequency / 100,
+            getTimestamp: () => now,
+            observeTiming: (_, queue, apply) => observed.Add((queue, apply))));
+        controller.Present(system, CreateWorkItem(1));
+        now += Stopwatch.Frequency / 2;
+        posted.Dequeue()();
+        var timing = Assert.Single(observed);
+        Assert.Equal(TimeSpan.FromMilliseconds(500), timing.Queue);
+        Assert.Equal(TimeSpan.FromMilliseconds(10), timing.Apply);
+    }
+
+    [Fact]
     public async Task BackgroundContinuationBurstPresentsOnlyLatestVisualState()
     {
         await using var system = CreateSystem();
         var posted = new Queue<Action>();
         var presented = new List<ushort>();
         var controller = new ReceivePresentationController(
-            () => false,
-            () => false,
-            posted.Enqueue,
-            (_, workItem, _) => presented.Add(workItem.Traffic.PacketSequence));
+            new ReceivePresentationPort(
+                () => false,
+                () => false,
+                posted.Enqueue,
+                (_, workItem, _) => presented.Add(workItem.Traffic.PacketSequence)));
 
         for (ushort sequence = 1; sequence <= 100; sequence++)
             controller.Present(system, CreateWorkItem(sequence, canCoalescePresentation: true));
@@ -38,11 +80,12 @@ public sealed class ReceivePresentationControllerTests
         var posted = new Queue<Action>();
         var diagnosticsFlags = new List<bool>();
         var controller = new ReceivePresentationController(
-            () => false,
-            () => false,
-            posted.Enqueue,
-            (_, _, publishDiagnostics) => diagnosticsFlags.Add(publishDiagnostics),
-            getTimestamp: () => Stopwatch.Frequency);
+            new ReceivePresentationPort(
+                () => false,
+                () => false,
+                posted.Enqueue,
+                (_, _, publishDiagnostics) => diagnosticsFlags.Add(publishDiagnostics),
+                getTimestamp: () => Stopwatch.Frequency));
 
         for (int index = 0; index < 65; index++)
             controller.Present(system, default);
@@ -56,10 +99,11 @@ public sealed class ReceivePresentationControllerTests
         Assert.Equal(65, diagnosticsFlags.Count);
 
         var immediate = new ReceivePresentationController(
-            () => false,
-            () => true,
-            _ => throw new InvalidOperationException("UI traffic must not be posted."),
-            (_, _, publishDiagnostics) => diagnosticsFlags.Add(publishDiagnostics));
+            new ReceivePresentationPort(
+                () => false,
+                () => true,
+                _ => throw new InvalidOperationException("UI traffic must not be posted."),
+                (_, _, publishDiagnostics) => diagnosticsFlags.Add(publishDiagnostics)));
         immediate.Present(system, default);
 
         Assert.True(diagnosticsFlags[^1]);
@@ -74,16 +118,17 @@ public sealed class ReceivePresentationControllerTests
         long timestamp = Stopwatch.Frequency;
         long twoMilliseconds = Stopwatch.Frequency / 500;
         var controller = new ReceivePresentationController(
-            () => false,
-            () => false,
-            posted.Enqueue,
-            (_, workItem, _) =>
-            {
-                presented.Add(workItem.Traffic.PacketSequence);
-                timestamp += twoMilliseconds;
-            },
-            maximumBatchDuration: TimeSpan.FromMilliseconds(4),
-            getTimestamp: () => timestamp);
+            new ReceivePresentationPort(
+                () => false,
+                () => false,
+                posted.Enqueue,
+                (_, workItem, _) =>
+                {
+                    presented.Add(workItem.Traffic.PacketSequence);
+                    timestamp += twoMilliseconds;
+                },
+                getTimestamp: () => timestamp),
+            maximumBatchDuration: TimeSpan.FromMilliseconds(4));
 
         for (ushort sequence = 0; sequence < 5; sequence++)
             controller.Present(system, CreateWorkItem(sequence));
@@ -111,16 +156,17 @@ public sealed class ReceivePresentationControllerTests
         long timestamp = Stopwatch.Frequency;
         long fourMilliseconds = Stopwatch.Frequency / 250;
         var controller = new ReceivePresentationController(
-            () => false,
-            () => false,
-            posted.Enqueue,
-            (_, workItem, _) =>
-            {
-                presented.Add(workItem.Traffic.PacketSequence);
-                timestamp += fourMilliseconds;
-            },
-            maximumBatchDuration: TimeSpan.FromMilliseconds(4),
-            getTimestamp: () => timestamp);
+            new ReceivePresentationPort(
+                () => false,
+                () => false,
+                posted.Enqueue,
+                (_, workItem, _) =>
+                {
+                    presented.Add(workItem.Traffic.PacketSequence);
+                    timestamp += fourMilliseconds;
+                },
+                getTimestamp: () => timestamp),
+            maximumBatchDuration: TimeSpan.FromMilliseconds(4));
 
         for (ushort sequence = 0; sequence < 300; sequence++)
             controller.Present(system, CreateWorkItem(sequence));

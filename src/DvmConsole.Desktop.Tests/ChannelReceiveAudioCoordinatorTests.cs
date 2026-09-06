@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
@@ -12,6 +15,82 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class ChannelReceiveAudioCoordinatorTests
 {
+    [Fact]
+    public async Task RecordingAndListeningShareOneRawDecoderWithPresentationOnlyProcessing()
+    {
+        var vocoder = new DeferredProcessingVocoder();
+        int observed = 0;
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => new FakeAudioBackend(), () => vocoder,
+            samplesObserver: (_, _, _, samples) =>
+            {
+                Assert.All(samples.ToArray(), sample => Assert.Equal(100, sample));
+                observed += samples.Length;
+            });
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "TAR",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        await coordinator.StartAsync(channel);
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0));
+        Assert.True(observed > 0);
+        Assert.True(vocoder.ProcessCalls > 0);
+        int processingCalls = vocoder.ProcessCalls;
+        int firstObserved = observed;
+        await coordinator.SetLivePlaybackEnabledAsync(channel, false);
+        await coordinator.ProcessAsync(channel, CreateTraffic(100, 0, packetSequence: 2));
+        Assert.True(observed > firstObserved);
+        Assert.Equal(processingCalls, vocoder.ProcessCalls);
+        Assert.Equal(1, vocoder.SessionsCreated);
+    }
+
+    private sealed class DeferredProcessingVocoder : IVocoderBackend, IVocoderSession, IReceiveAudioProcessingSession
+    {
+        private bool deferred;
+        public int SessionsCreated { get; private set; }
+        public int ProcessCalls { get; private set; }
+        public string Name => "Deferred test";
+        public bool IsAvailable => true;
+        public bool HasReceiveAudioProcessing => true;
+        public IVocoderSession CreateSession(VocoderMode mode) { SessionsCreated++; return this; }
+        public void DeferReceiveAudioProcessing() => deferred = true;
+        public void ProcessReceiveAudio(Span<short> samples) { ProcessCalls++; samples.Fill(200); }
+        public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples) { samples.Fill((short)(deferred ? 100 : 200)); return 0; }
+        public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword) => 0;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public async Task ReusesWorkerCancellationAndSkipsExpiryScansOnWarmedFrames()
+    {
+        var backend = new FakeAudioBackend();
+        await using var coordinator = new ChannelReceiveAudioCoordinator(
+            () => backend,
+            () => new FakeVocoderBackend());
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        await coordinator.StartAsync(channel);
+        FneTrafficFrame header = CreateDmrVoiceLcHeader(100, slot: 1);
+        using var workerLifetime = new CancellationTokenSource();
+
+        for (int index = 0; index < 10_000; index++)
+            await coordinator.ProcessAsync(channel, header, workerLifetime.Token);
+
+        ReceiveAudioHotPathDiagnostics diagnostics = coordinator.GetHotPathDiagnostics(channel);
+        Assert.Equal(1, diagnostics.LinkedCancellationSourceCreations);
+        Assert.Equal(0, diagnostics.CompletedStreamExpiryScans);
+    }
+
     [Fact]
     public async Task ReportsSessionGateAndProcessingTimingWithoutChangingProcessContract()
     {
@@ -872,8 +951,11 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         });
 
         await coordinator.StartAsync(channel);
+        var outputFailure = new TaskCompletionSource<ReceiveAudioOutputFailure>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        coordinator.OutputFailed += failure => outputFailure.TrySetResult(failure);
         await coordinator.ProcessAsync(channel, CreateTraffic(100, 0));
-        await WaitForAsync(() => firstBackend.Playback.WriteAttempts > 0);
+        await outputFailure.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
         await Assert.ThrowsAsync<IOException>(() => coordinator.ProcessAsync(
             channel,
@@ -916,8 +998,11 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         await coordinator.StartAsync(first);
         await coordinator.StartAsync(second);
 
+        var outputFailure = new TaskCompletionSource<ReceiveAudioOutputFailure>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        coordinator.OutputFailed += failure => outputFailure.TrySetResult(failure);
         await coordinator.ProcessAsync(first, CreateTraffic(100, 0));
-        await WaitForAsync(() => firstBackend.Playback.WriteAttempts > 0);
+        await outputFailure.Task.WaitAsync(TimeSpan.FromSeconds(1));
         await Assert.ThrowsAsync<IOException>(() => coordinator.ProcessAsync(
             first,
             CreateTraffic(100, 0, packetSequence: 2)));
@@ -997,8 +1082,11 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         await coordinator.ProcessAsync(unaffected, CreateTraffic(101, 1, streamId: 200));
         await WaitForAsync(() => alternateBackend.AlternatePlayback.Frames.Count > 0);
 
+        var outputFailure = new TaskCompletionSource<ReceiveAudioOutputFailure>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        coordinator.OutputFailed += failure => outputFailure.TrySetResult(failure);
         await coordinator.ProcessAsync(failed, CreateTraffic(100, 0));
-        await WaitForAsync(() => failedBackend.Playback.WriteAttempts > 0);
+        await outputFailure.Task.WaitAsync(TimeSpan.FromSeconds(1));
         await Assert.ThrowsAsync<IOException>(() => coordinator.ProcessAsync(
             failed,
             CreateTraffic(100, 0, packetSequence: 2)));
@@ -1143,6 +1231,49 @@ public sealed class ChannelReceiveAudioCoordinatorTests
 
         Assert.True(backend.IsDisposed);
         Assert.Equal(1, backend.Playback.DisposeCalls);
+    }
+
+    [Fact]
+    public async Task StopDetachesAReceiveSessionWithoutWaitingForANonCooperativeDecoder()
+    {
+        var backend = new FakeAudioBackend();
+        var vocoder = new NonCooperativeVocoderBackend();
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "100",
+            Mode = "dmr",
+            Slot = 1
+        });
+        var coordinator = new ChannelReceiveAudioCoordinator(() => backend, () => vocoder);
+        await coordinator.StartAsync(channel);
+        Task<int> processing = Task.Run(() => coordinator.ProcessAsync(channel, CreateTraffic(100, 0)));
+        try
+        {
+            await vocoder.Session.DecodeStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            Task stop = coordinator.StopAsync(channel);
+            await stop.WaitAsync(TimeSpan.FromSeconds(10));
+
+            Assert.False(coordinator.IsActive(channel));
+            Assert.False(processing.IsCompleted);
+        }
+        finally
+        {
+            vocoder.Session.ReleaseDecode.TrySetResult();
+        }
+        try
+        {
+            await processing.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        catch (Exception exception) when (
+            exception.GetBaseException() is OperationCanceledException or ObjectDisposedException or IOException)
+        {
+            // The retirement token is expected to win after the decoder returns.
+        }
+        await WaitForAsync(() => vocoder.Session.IsDisposed);
+        await coordinator.DisposeAsync();
     }
 
     private static FneTrafficFrame CreateTraffic(
@@ -1511,13 +1642,11 @@ public sealed class ChannelReceiveAudioCoordinatorTests
     private sealed class RecoveringPlayback(bool failWrites) : IAudioPlayback
     {
         public List<short[]> Frames { get; } = [];
-        public int WriteAttempts { get; private set; }
         public PcmAudioFormat Format { get; } = PcmAudioFormat.Voice8KhzMono16Bit;
 
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            WriteAttempts++;
             if (failWrites)
                 throw new IOException("The output audio device was removed.");
             Frames.Add(samples.ToArray());
@@ -1618,6 +1747,36 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         {
             release.TrySetResult();
         }
+    }
+
+    private sealed class NonCooperativeVocoderBackend : IVocoderBackend
+    {
+        public NonCooperativeVocoderSession Session { get; } = new();
+        public string Name => "non-cooperative";
+        public bool IsAvailable => true;
+        public IVocoderSession CreateSession(VocoderMode mode) => Session;
+        public void Dispose() { }
+    }
+
+    private sealed class NonCooperativeVocoderSession : IVocoderSession
+    {
+        public TaskCompletionSource DecodeStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseDecode { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool IsDisposed { get; private set; }
+
+        public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword) => 0;
+
+        public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples)
+        {
+            DecodeStarted.TrySetResult();
+            ReleaseDecode.Task.GetAwaiter().GetResult();
+            samples.Clear();
+            return 0;
+        }
+
+        public void Dispose() => IsDisposed = true;
     }
 
     private sealed class FakeVocoderSession : IVocoderSession

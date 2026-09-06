@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Presentation;
 
 namespace DvmConsole.Desktop;
@@ -5,6 +8,9 @@ namespace DvmConsole.Desktop;
 public sealed partial class MainWindowViewModel : IRecorderSettingsViewModel
 {
     public bool IsExternalRecordingLocationAvailable => true;
+    public bool IsRecordingUnavailable => !callRecordings.CanWriteRecordings;
+    public string? RecordingAvailabilityWarning => IsRecordingUnavailable
+        ? callRecordings.FinalizationHealth.LastError : null;
 
     public string RecordingLocationText
     {

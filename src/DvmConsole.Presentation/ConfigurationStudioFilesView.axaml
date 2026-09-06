@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:config="using:DvmConsole.Core.Configuration"
@@ -60,7 +63,7 @@
           <Grid x:Name="AliasFields" ColumnDefinitions="*,2*" ColumnSpacing="8" IsEnabled="{Binding CanEditSelectedAlias}">
             <StackPanel>
               <TextBlock Classes="caption" Text="RID"/>
-              <TextBox x:Name="AliasRidEditor" Text="{Binding SelectedAlias.Rid, Mode=TwoWay}" LostFocus="HandleAliasFieldEdit" AutomationProperties.Name="RID alias radio ID"/>
+              <TextBox x:Name="AliasRidEditor" Text="{Binding SelectedAlias.Rid, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleAliasFieldEdit" AutomationProperties.Name="RID alias radio ID"/>
             </StackPanel>
             <StackPanel Grid.Column="1">
               <TextBlock Classes="caption" Text="Alias"/>

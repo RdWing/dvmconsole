@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Globalization;
 using System.Xml.Linq;
 using DvmConsole.Application;
@@ -101,6 +104,15 @@ public sealed class OperatorInterfaceGateTests
         string commands = ReadDesktopSource("OperatorCommandCatalog.cs");
 
         Assert.Contains("ItemsControl Classes=\"channel-canvas\"", cards, StringComparison.Ordinal);
+        Assert.Contains("ViewportAwareAbsolutePanel", cards, StringComparison.Ordinal);
+        Assert.Contains("SelectionChanged=\"HandleNavigationSelectionChanged\"", cards, StringComparison.Ordinal);
+        Assert.DoesNotContain("Reveal selected", cards, StringComparison.Ordinal);
+        Assert.Contains("ItemsSource=\"{Binding WebStreamCards}\"", cards, StringComparison.Ordinal);
+        Assert.Contains("Classes=\"channel-card web-stream-card\"", cards, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding ToggleCommand}\"", cards, StringComparison.Ordinal);
+        Assert.Contains("Canvas.Left\" Value=\"{Binding WidgetX}\"", cards, StringComparison.Ordinal);
+        Assert.Contains("Canvas.Top\" Value=\"{Binding WidgetY}\"", cards, StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(cards, "PointerPressed=\"HandleChannelPointerPressed\""));
         Assert.Contains("x:Name=\"channelRendererHost\"", shell, StringComparison.Ordinal);
         XDocument document = XDocument.Parse(shell);
         XElement cardsMenuItem = document.Descendants()
@@ -130,11 +142,16 @@ public sealed class OperatorInterfaceGateTests
             FindRepositoryRoot(),
             "scripts",
             "smoke-desktop-macos.sh"));
+        string program = ReadDesktopSource("Program.cs");
 
         Assert.Contains(
             "--args --demo --smoke-windows",
             script,
             StringComparison.Ordinal);
+        Assert.True(
+            program.IndexOf("App.InitializeSmokeResult()", StringComparison.Ordinal) <
+            program.IndexOf("ValidateBuiltInVocoder();", StringComparison.Ordinal),
+            "Smoke reporting must be initialized before built-in native validation can fail.");
     }
 
     [Fact]
@@ -275,6 +292,17 @@ public sealed class OperatorInterfaceGateTests
     }
 
     [Fact]
+    public void ConfigurationStudioExposesTheCodeplugWidePatchSourceIdSetting()
+    {
+        XDocument groups = XDocument.Parse(ReadPresentationSource("ConfigurationStudioGroupsView.axaml"));
+        XElement passthrough = groups.Descendants().Single(element =>
+            Attribute(element, "AutomationProperties.Name") == "Preserve patch source IDs");
+
+        Assert.Equal("{Binding PatchSourceIdPassthrough, Mode=TwoWay}", Attribute(passthrough, "IsChecked"));
+        Assert.Equal("{Binding CanEdit}", Attribute(passthrough, "IsEnabled"));
+    }
+
+    [Fact]
     public void ConfigurationStudioReadOnlyModeDisablesEveryCompanionAndGroupEditor()
     {
         XDocument groups = XDocument.Parse(ReadPresentationSource("ConfigurationStudioGroupsView.axaml"));
@@ -341,6 +369,28 @@ public sealed class OperatorInterfaceGateTests
     }
 
     [Fact]
+    public void ConfigurationStudioExposesZoneNamesAndSystemScopedKeys()
+    {
+        XDocument systems = XDocument.Parse(ReadPresentationSource("ConfigurationStudioSystemsView.axaml"));
+        XDocument zones = XDocument.Parse(ReadPresentationSource("ConfigurationStudioZonesView.axaml"));
+        XDocument keys = XDocument.Parse(ReadPresentationSource("ConfigurationStudioKeysView.axaml"));
+
+        XElement systemName = systems.Descendants().Single(element =>
+            Attribute(element, "AutomationProperties.Name") == "System name");
+        XElement zoneName = zones.Descendants().Single(element =>
+            Attribute(element, "AutomationProperties.Name") == "Zone name");
+        XElement keySystem = keys.Descendants().Single(element =>
+            Attribute(element, "AutomationProperties.Name") == "Encryption key FNE system");
+
+        Assert.Equal("{Binding SelectedSystem.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}",
+            Attribute(systemName, "Text"));
+        Assert.Equal("{Binding SelectedZoneName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}",
+            Attribute(zoneName, "Text"));
+        Assert.Equal("{Binding Systems}", Attribute(keySystem, "ItemsSource"));
+        Assert.Equal("{Binding SelectedKeySystem, Mode=TwoWay}", Attribute(keySystem, "SelectedValue"));
+    }
+
+    [Fact]
     public void ConfigurationStudioUsesDropdownsForDmrSlotsAndPlainTextForRidAliases()
     {
         XDocument zones = XDocument.Parse(ReadPresentationSource("ConfigurationStudioZonesView.axaml"));
@@ -390,32 +440,21 @@ public sealed class OperatorInterfaceGateTests
     }
 
     [Fact]
-    public void ChannelAudioMeterClipsAFullWidthThresholdScale()
+    public void ChannelAudioMeterUsesTheSharedRenderOnlyThresholdScale()
     {
         XDocument sharedCard = XDocument.Parse(ReadPresentationSource("ChannelCardContent.axaml"));
         XElement meter = sharedCard.Descendants()
             .Single(element => Attribute(element, "Classes") == "channel-audio-meter");
-        XElement fillClip = meter.Descendants()
-            .Single(element => Attribute(element, "Classes") == "channel-audio-meter-fill-clip");
-        XElement colorScale = fillClip.Elements()
-            .Single(element => element.Name.LocalName == "Border");
 
-        Assert.Equal("{Binding AudioFillWidth}", Attribute(fillClip, "Width"));
-        Assert.Equal("True", Attribute(fillClip, "ClipToBounds"));
-        Assert.Equal("{Binding AudioMeterWidth}", Attribute(colorScale, "Width"));
-        Assert.DoesNotContain(fillClip.Descendants(), element => element.Name.LocalName == "ScaleTransform");
+        Assert.Equal("AudioLevelMeter", meter.Name.LocalName);
+        Assert.Equal("{Binding AudioMeter}", Attribute(meter, "Meter"));
+        Assert.Equal("{Binding AudioMeterWidth}", Attribute(meter, "Width"));
+        Assert.Empty(meter.Elements());
 
-        string[] offsets = colorScale.Descendants()
-            .Where(element => element.Name.LocalName == "GradientStop")
-            .Select(element => Attribute(element, "Offset")!)
-            .ToArray();
-        Assert.Equal(["0", "0.76", "0.76", "0.88", "0.88", "1"], offsets);
-        Assert.Equal(
-            ChannelAudioMeter.YellowThresholdDisplayLevel / 100,
-            double.Parse(offsets[1], CultureInfo.InvariantCulture));
-        Assert.Equal(
-            ChannelAudioMeter.RedThresholdDisplayLevel / 100,
-            double.Parse(offsets[3], CultureInfo.InvariantCulture));
+        string source = ReadPresentationSource("AudioLevelMeter.cs");
+        Assert.Contains("AffectsRender<AudioLevelMeter>(MeterProperty, ColorizePeakProperty)", source, StringComparison.Ordinal);
+        Assert.Contains("0.76", source, StringComparison.Ordinal);
+        Assert.Contains("0.88", source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -505,6 +544,9 @@ public sealed class OperatorInterfaceGateTests
         => element.Attributes()
             .FirstOrDefault(attribute => attribute.Name.LocalName == localName)?
             .Value;
+
+    private static int CountOccurrences(string source, string value)
+        => source.Split(value, StringSplitOptions.None).Length - 1;
 
     private static string ReadDesktopSource(string fileName)
         => File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "DvmConsole.Desktop", fileName));

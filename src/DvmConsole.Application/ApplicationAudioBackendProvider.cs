@@ -1,5 +1,9 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Media;
+using System.Diagnostics;
 
 namespace DvmConsole.Application;
 
@@ -8,15 +12,14 @@ internal sealed record ApplicationAudioConfiguration(
     string InputDeviceId,
     string OutputDeviceId);
 
-// Creates audio backends for one configured application route. Apple Voice
-// Processing I/O is full-duplex, so every playback source must feed one shared
-// mixer instead of opening a competing CoreAudio output unit.
+// Creates audio backends for the configured application route.
 internal sealed class ApplicationAudioBackendProvider : IAsyncDisposable
 {
     private readonly object sync = new();
     private readonly Func<ApplicationAudioConfiguration, IAudioBackend> createNativeBackend;
+    private readonly List<WeakReference<IImmediateAudioStop>> immediateStops = [];
     private ApplicationAudioConfiguration configuration;
-    private SharedAudioOutputRouter? sharedOutput;
+    private bool immediateStopRequested;
     private bool disposed;
 
     public ApplicationAudioBackendProvider(
@@ -32,210 +35,177 @@ internal sealed class ApplicationAudioBackendProvider : IAsyncDisposable
         lock (sync)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            ApplicationAudioConfiguration current = configuration;
-            IAudioBackend backend = createNativeBackend(current);
-            if (current.ProcessingMode != AudioProcessingMode.AppleVoiceProcessing)
-                return backend;
-
-            sharedOutput ??= new SharedAudioOutputRouter(
-                () => createNativeBackend(current));
-            return new SharedOutputAudioBackend(backend, sharedOutput);
+            return new TrackedAudioBackend(
+                createNativeBackend(configuration),
+                TrackImmediateStop);
         }
     }
 
-    public async Task ReconfigureAsync(ApplicationAudioConfiguration next)
+    public IReadOnlyList<Exception> StopImmediately()
     {
-        ArgumentNullException.ThrowIfNull(next);
-        SharedAudioOutputRouter? previousOutput;
+        IImmediateAudioStop[] endpoints;
         lock (sync)
         {
-            ObjectDisposedException.ThrowIf(disposed, this);
-            if (configuration == next)
-                return;
-
-            previousOutput = sharedOutput;
-            sharedOutput = null;
-            configuration = next;
-        }
-
-        if (previousOutput is not null)
-            await previousOutput.DisposeAsync().ConfigureAwait(false);
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        SharedAudioOutputRouter? output;
-        lock (sync)
-        {
-            if (disposed)
-                return;
-            disposed = true;
-            output = sharedOutput;
-            sharedOutput = null;
-        }
-
-        if (output is not null)
-            await output.DisposeAsync().ConfigureAwait(false);
-    }
-}
-
-// Routes independent playback clients into one physical stream. Each caller
-// receives an isolated mixer lane and retains normal IAudioPlayback ownership.
-internal sealed class SharedAudioOutputRouter : IAsyncDisposable
-{
-    private readonly object sync = new();
-    private readonly Func<IAudioBackend> createBackend;
-    private readonly Dictionary<string, SharedAudioOutputRoute> routes =
-        new(StringComparer.OrdinalIgnoreCase);
-    private bool disposed;
-
-    public SharedAudioOutputRouter(Func<IAudioBackend> createBackend)
-    {
-        this.createBackend = createBackend ?? throw new ArgumentNullException(nameof(createBackend));
-    }
-
-    public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
-    {
-        ArgumentNullException.ThrowIfNull(device);
-        ArgumentNullException.ThrowIfNull(format);
-        if (format != PcmAudioFormat.Voice8KhzMono16Bit)
-        {
-            throw new NotSupportedException(
-                "The shared Apple voice output currently supports 8 kHz mono 16-bit PCM.");
-        }
-
-        lock (sync)
-        {
-            ObjectDisposedException.ThrowIf(disposed, this);
-            if (!routes.TryGetValue(device.Id, out SharedAudioOutputRoute? route))
-            {
-                route = CreateRoute(device);
-                routes.Add(device.Id, route);
-            }
-            return route.Mixer.OpenChannel($"application playback on {device.Name}");
-        }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        SharedAudioOutputRoute[] oldRoutes;
-        lock (sync)
-        {
-            if (disposed)
-                return;
-            disposed = true;
-            oldRoutes = routes.Values.ToArray();
-            routes.Clear();
+            immediateStopRequested = true;
+            endpoints = CollectLiveEndpoints();
         }
 
         List<Exception>? failures = null;
-        foreach (SharedAudioOutputRoute route in oldRoutes)
+        foreach (IImmediateAudioStop endpoint in endpoints)
         {
             try
             {
-                await DisposeRouteAsync(route).ConfigureAwait(false);
+                endpoint.StopImmediately();
             }
             catch (Exception exception)
             {
                 (failures ??= []).Add(exception);
             }
         }
-        if (failures is { Count: 1 })
-            throw failures[0];
-        if (failures is { Count: > 1 })
-            throw new AggregateException("Multiple shared audio routes failed to close.", failures);
+        return failures ?? [];
     }
 
-    private SharedAudioOutputRoute CreateRoute(AudioDeviceInfo device)
+    public async Task ReconfigureAsync(ApplicationAudioConfiguration next)
     {
-        IAudioBackend? backend = null;
-        IAudioPlayback? playback = null;
-        try
+        ArgumentNullException.ThrowIfNull(next);
+        lock (sync)
         {
-            backend = createBackend();
-            playback = backend.OpenPlayback(device, PcmAudioFormat.Voice8KhzMono16Bit);
-            var route = new SharedAudioOutputRoute(backend, new AudioMixer(playback));
-            route.Mixer.Faulted += _ => RetireFailedRoute(device.Id, route);
-            backend = null;
-            playback = null;
-            return route;
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (configuration == next)
+                return;
+
+            configuration = next;
         }
-        finally
-        {
-            if (playback is not null)
-                Observe(playback.DisposeAsync().AsTask());
-            backend?.Dispose();
-        }
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
-    private void RetireFailedRoute(string deviceId, SharedAudioOutputRoute failedRoute)
+    public async ValueTask DisposeAsync()
     {
         lock (sync)
         {
-            if (!routes.TryGetValue(deviceId, out SharedAudioOutputRoute? current) ||
-                !ReferenceEquals(current, failedRoute))
-            {
+            if (disposed)
                 return;
+            disposed = true;
+        }
+        await ValueTask.CompletedTask.ConfigureAwait(false);
+    }
+
+    private bool TrackImmediateStop(object endpoint)
+    {
+        IImmediateAudioStop? immediateStop = endpoint as IImmediateAudioStop;
+        bool stopNow;
+        lock (sync)
+        {
+            if (immediateStop is not null)
+            {
+                bool alreadyTracked = false;
+                for (int index = immediateStops.Count - 1; index >= 0; index--)
+                {
+                    if (!immediateStops[index].TryGetTarget(out IImmediateAudioStop? tracked))
+                    {
+                        immediateStops.RemoveAt(index);
+                        continue;
+                    }
+                    alreadyTracked |= ReferenceEquals(tracked, immediateStop);
+                }
+                if (!alreadyTracked)
+                    immediateStops.Add(new WeakReference<IImmediateAudioStop>(immediateStop));
             }
-            routes.Remove(deviceId);
+            stopNow = immediateStopRequested;
         }
+        if (!stopNow)
+            return false;
 
-        // Existing lanes already carry the mixer failure. Retire their native
-        // route in the background so the next playback open can create a clean
-        // physical mixer immediately.
-        Observe(DisposeRouteAsync(failedRoute));
+        immediateStop?.StopImmediately();
+        return true;
     }
 
-    private static async Task DisposeRouteAsync(SharedAudioOutputRoute route)
+    private IImmediateAudioStop[] CollectLiveEndpoints()
     {
-        try
+        var endpoints = new List<IImmediateAudioStop>(immediateStops.Count);
+        for (int index = immediateStops.Count - 1; index >= 0; index--)
         {
-            await route.Mixer.DisposeAsync().ConfigureAwait(false);
+            if (immediateStops[index].TryGetTarget(out IImmediateAudioStop? endpoint))
+                endpoints.Add(endpoint);
+            else
+                immediateStops.RemoveAt(index);
         }
-        finally
-        {
-            route.Backend.Dispose();
-        }
+        return endpoints.ToArray();
     }
 
-    private static void Observe(Task task)
-        => _ = task.ContinueWith(
-            static completed => _ = completed.Exception,
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-
-    private sealed record SharedAudioOutputRoute(IAudioBackend Backend, AudioMixer Mixer);
-}
-
-internal sealed class SharedOutputAudioBackend :
-    IAudioBackend,
-    IDefaultAudioDeviceIdentityProvider
-{
-    private readonly IAudioBackend inner;
-    private readonly SharedAudioOutputRouter sharedOutput;
-
-    public SharedOutputAudioBackend(
+    private sealed class TrackedAudioBackend(
         IAudioBackend inner,
-        SharedAudioOutputRouter sharedOutput)
+        Func<object, bool> trackEndpoint) :
+        IAudioBackend,
+        IDefaultAudioDeviceIdentityProvider
     {
-        this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
-        this.sharedOutput = sharedOutput ?? throw new ArgumentNullException(nameof(sharedOutput));
+        private int disposed;
+
+        public string Name => inner.Name;
+
+        public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
+            => inner.EnumerateDevices(direction);
+
+        public string? GetDefaultDeviceIdentity(AudioDirection direction)
+            => inner is IDefaultAudioDeviceIdentityProvider identityProvider
+                ? identityProvider.GetDefaultDeviceIdentity(direction)
+                : null;
+
+        public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+            IAudioCapture capture = inner.OpenCapture(device, format);
+            return TrackOrReject(capture);
+        }
+
+        public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+            IAudioPlayback playback = inner.OpenPlayback(device, format);
+            return TrackOrReject(playback);
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+                inner.Dispose();
+        }
+
+        private T TrackOrReject<T>(T endpoint)
+            where T : IAsyncDisposable
+        {
+            try
+            {
+                if (!trackEndpoint(endpoint))
+                    return endpoint;
+            }
+            catch
+            {
+                ObserveDisposal(endpoint);
+                throw;
+            }
+
+            ObserveDisposal(endpoint);
+            throw new ObjectDisposedException(
+                nameof(ApplicationAudioBackendProvider),
+                "The application audio safety fence has already closed new routes.");
+        }
+
+        private static void ObserveDisposal(IAsyncDisposable endpoint)
+            => _ = ObserveDisposalAsync(endpoint);
+
+        private static async Task ObserveDisposalAsync(IAsyncDisposable endpoint)
+        {
+            try
+            {
+                await endpoint.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                Trace.TraceError(
+                    "An audio endpoint rejected after the final safety fence failed to dispose: {0}",
+                    exception);
+            }
+        }
     }
-
-    public string Name => inner.Name;
-
-    public IReadOnlyList<AudioDeviceInfo> EnumerateDevices(AudioDirection direction)
-        => inner.EnumerateDevices(direction);
-
-    public string? GetDefaultDeviceIdentity(AudioDirection direction)
-        => (inner as IDefaultAudioDeviceIdentityProvider)?.GetDefaultDeviceIdentity(direction);
-
-    public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
-        => inner.OpenCapture(device, format);
-
-    public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
-        => sharedOutput.OpenPlayback(device, format);
-
-    public void Dispose() => inner.Dispose();
 }

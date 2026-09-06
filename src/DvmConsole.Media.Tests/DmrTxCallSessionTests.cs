@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
 using fnecore.DMR;
@@ -18,7 +21,8 @@ public sealed class DmrTxCallSessionTests
             slot: 0,
             streamId: 77,
             vocoder: new FakeVocoderSession(),
-            send: (payload, sequence, stream) => packets.Add((payload.ToArray(), sequence, stream)));
+            send: (payload, sequence, stream) => packets.Add((payload.ToArray(), sequence, stream)),
+            waitForNextPacket: TestPacketCadence.NoDelayAsync);
 
         session.Start();
         var headerPacket = Assert.Single(packets);
@@ -33,7 +37,7 @@ public sealed class DmrTxCallSessionTests
         Assert.Equal((uint)0xA0B0C0, headerLc.DstId);
 
         Assert.Equal(1, session.Process(new short[480]));
-        await session.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
+        await session.EndAsync();
 
         Assert.Equal(8, packets.Count);
         Assert.Equal((ushort)1, packets[1].Sequence);
@@ -56,11 +60,12 @@ public sealed class DmrTxCallSessionTests
             slot: 0,
             streamId: 3,
             vocoder: new FakeVocoderSession(),
-            send: (payload, _, _) => packets.Add(payload.ToArray()));
+            send: (payload, _, _) => packets.Add(payload.ToArray()),
+            waitForNextPacket: TestPacketCadence.NoDelayAsync);
 
         session.Start();
         Assert.Equal(0, session.Process(new short[200]));
-        await session.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
+        await session.EndAsync();
 
         Assert.Equal(8, packets.Count);
         Assert.Equal((byte)0x10, packets[1][15]);
@@ -84,10 +89,11 @@ public sealed class DmrTxCallSessionTests
             streamId: 3,
             vocoder: new FakeHalfRateSession(),
             send: (payload, _, _) => packets.Add(payload.ToArray()),
+            waitForNextPacket: TestPacketCadence.NoDelayAsync,
             privacy: privacy);
 
         session.Start();
-        await session.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
+        await session.EndAsync();
 
         LC header = Assert.IsType<LC>(FullLC.Decode(
             packets[0][DmrVoicePacketCodec.HeaderBytes..],
@@ -114,13 +120,14 @@ public sealed class DmrTxCallSessionTests
             slot: 0,
             streamId: 3,
             vocoder: new FakeVocoderSession(),
-            send: (payload, _, _) => packets.Add(payload.ToArray()));
+            send: (payload, _, _) => packets.Add(payload.ToArray()),
+            waitForNextPacket: cadence.WaitAsync);
 
         session.Start();
         session.Process(new short[480]);
         int packetsBeforeEnd = packets.Count;
         int packetsEmittedByEnd = 8 - packetsBeforeEnd;
-        ValueTask end = session.EndAsync(cadence.WaitAsync, CancellationToken.None);
+        ValueTask end = session.EndAsync();
 
         await WaitUntilAsync(() => cadence.WaitCount == 1);
         Assert.Equal(packetsBeforeEnd, packets.Count);
@@ -152,6 +159,57 @@ public sealed class DmrTxCallSessionTests
             send: (_, _, _) => { });
 
         Assert.Throws<InvalidOperationException>(() => session.Process(new short[160]));
+    }
+
+    [Fact]
+    public void StartPropagatesAnImmediateTransportFailure()
+    {
+        var expected = new InvalidOperationException("transport failed");
+        using var session = new DmrTxCallSession(
+            sourceId: 1,
+            destinationId: 2,
+            slot: 0,
+            streamId: 3,
+            vocoder: new FakeVocoderSession(),
+            send: (_, _, _) => throw expected,
+            waitForNextPacket: TestPacketCadence.NoDelayAsync);
+
+        Assert.Same(expected, Assert.Throws<InvalidOperationException>(session.Start));
+        Assert.False(session.IsStarted);
+    }
+
+    [Fact]
+    public async Task FailedCompletionRetriesTheTerminatorWithoutRebuildingTheCallTail()
+    {
+        bool failNextPacket = false;
+        int failedPackets = 0;
+        var packets = new List<byte[]>();
+        using var session = new DmrTxCallSession(
+            sourceId: 1,
+            destinationId: 2,
+            slot: 0,
+            streamId: 3,
+            vocoder: new FakeVocoderSession(),
+            send: (payload, _, _) =>
+            {
+                if (failNextPacket)
+                {
+                    failNextPacket = false;
+                    failedPackets++;
+                    throw new IOException("transient transport failure");
+                }
+                packets.Add(payload.ToArray());
+            },
+            waitForNextPacket: TestPacketCadence.NoDelayAsync);
+        session.Start();
+        failNextPacket = true;
+
+        await Assert.ThrowsAsync<IOException>(() => session.EndAsync().AsTask());
+        await session.EndAsync();
+
+        Assert.Equal(1, failedPackets);
+        Assert.True(session.IsEnded);
+        Assert.Equal((byte)0x22, packets[^1][15]);
     }
 
     [Fact]
@@ -219,12 +277,15 @@ public sealed class DmrTxCallSessionTests
     private sealed class ManualCadence
     {
         private readonly SemaphoreSlim releases = new(0);
+        private int started;
         private int waitCount;
 
         public int WaitCount => Volatile.Read(ref waitCount);
 
         public async ValueTask WaitAsync(CancellationToken cancellationToken)
         {
+            if (Interlocked.Exchange(ref started, 1) == 0)
+                return;
             Interlocked.Increment(ref waitCount);
             await releases.WaitAsync(cancellationToken);
         }

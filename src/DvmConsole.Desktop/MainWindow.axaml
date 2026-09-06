@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="using:DvmConsole.Desktop"
@@ -9,6 +12,13 @@
         Background="{DynamicResource ShellBackgroundBrush}" Topmost="{Binding KeepWindowOnTop, Mode=TwoWay}" FontSize="{Binding UiFontSize}"
         SizeChanged="HandleResponsiveToolbarSizeChanged">
   <Window.Styles>
+    <Style Selector="Border.activity-call-card">
+      <Setter Property="Background" Value="{DynamicResource ActivityBackgroundBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+    </Style>
+    <Style Selector="Border.activity-call-card.playing">
+      <Setter Property="BorderBrush" Value="{DynamicResource OperationalSelectionBorderBrush}" />
+    </Style>
     <Style Selector="TextBlock"><Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" /></Style>
     <Style Selector="TextBlock.muted"><Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" /></Style>
     <Style Selector="TextBlock.eyebrow"><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" /><Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" /></Style>
@@ -205,7 +215,7 @@
                           ItemsSource="{Binding BuiltInAlertTones}"
                           AutomationProperties.Name="Alert tone shortcuts">
               <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-              <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:BuiltInAlertToneViewModel"><Button Content="{Binding Name}" Tag="{Binding}" ToolTip.Tip="{Binding Description}" Padding="6,3" AutomationProperties.Name="{Binding Description}" Click="HandleToolbarAlertToneClick" /></DataTemplate></ItemsControl.ItemTemplate>
+              <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:BuiltInAlertToneViewModel"><Button Width="70" HorizontalContentAlignment="Stretch" Tag="{Binding}" ToolTip.Tip="{Binding Description}" Padding="6,3" AutomationProperties.Name="{Binding Description}" Click="HandleToolbarAlertToneClick" ContextRequested="HandleToolbarToneContextRequested"><TextBlock Text="{Binding DisplayName}" TextAlignment="Center" /></Button></DataTemplate></ItemsControl.ItemTemplate>
             </ItemsControl>
             <Button x:Name="toolbarTonesLauncher" Content="TONES" Tag="settings.tones" ToolTip.Tip="Open Console Settings directly to Tones and DTMF" Padding="6,3" AutomationProperties.Name="Open Tones and DTMF" Click="HandleOperatorCommandClick" />
           </StackPanel>
@@ -215,9 +225,9 @@
             <MenuItem Header="MORE" AutomationProperties.Name="More toolbar items">
               <MenuItem Header="Configured clocks" Tag="settings.clock" Click="HandleOperatorCommandClick" />
               <Separator />
-              <MenuItem Header="Send ALERT 1" Tag="{Binding BuiltInAlertTones[0]}" AutomationProperties.Name="Send alert tone 1" Click="HandleResponsiveAlertToneClick" />
-              <MenuItem Header="Send ALERT 2" Tag="{Binding BuiltInAlertTones[1]}" AutomationProperties.Name="Send alert tone 2" Click="HandleResponsiveAlertToneClick" />
-              <MenuItem Header="Send ALERT 3" Tag="{Binding BuiltInAlertTones[2]}" AutomationProperties.Name="Send alert tone 3" Click="HandleResponsiveAlertToneClick" />
+              <MenuItem Header="{Binding BuiltInAlertTones[0].Name}" Tag="{Binding BuiltInAlertTones[0]}" ContextRequested="HandleToolbarToneContextRequested" AutomationProperties.Name="{Binding BuiltInAlertTones[0].Description}" Click="HandleResponsiveAlertToneClick" />
+              <MenuItem Header="{Binding BuiltInAlertTones[1].Name}" Tag="{Binding BuiltInAlertTones[1]}" ContextRequested="HandleToolbarToneContextRequested" AutomationProperties.Name="{Binding BuiltInAlertTones[1].Description}" Click="HandleResponsiveAlertToneClick" />
+              <MenuItem Header="{Binding BuiltInAlertTones[2].Name}" Tag="{Binding BuiltInAlertTones[2]}" ContextRequested="HandleToolbarToneContextRequested" AutomationProperties.Name="{Binding BuiltInAlertTones[2].Description}" Click="HandleResponsiveAlertToneClick" />
               <MenuItem Header="Tones and DTMF…" Tag="settings.tones" Click="HandleOperatorCommandClick" />
             </MenuItem>
           </Menu>
@@ -233,7 +243,7 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="local:SystemViewModel">
-                <Button Classes="status-card" BorderBrush="{Binding ConnectionBrush}" Tag="{Binding}" ToolTip.Tip="{Binding ConnectionActionText}" Click="HandleSystemStatusClick">
+                <Button Classes="status-card" BorderBrush="{Binding ConnectionBrush}" Tag="{Binding}" ToolTip.Tip="{Binding ConnectionActionText}" AutomationProperties.Name="{Binding ConnectionActionText}" AutomationProperties.HelpText="Activate this system and perform the displayed connection action." Click="HandleSystemStatusClick">
                   <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
                     <StackPanel Spacing="0"><TextBlock FontWeight="SemiBold" FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" Text="{Binding ConnectionPillText}" /><TextBlock Classes="eyebrow" Text="{Binding Name}" /></StackPanel>
                   </StackPanel>
@@ -254,24 +264,49 @@
         </Grid>
       </Border>
       <Border Grid.Row="1" Grid.Column="1" Width="{Binding ActivitySidebarWidth}" Background="{DynamicResource SidebarBackgroundBrush}" Padding="8,10">
-        <Grid RowDefinitions="Auto,*">
+        <Grid RowDefinitions="Auto,Auto,*">
           <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="4" IsVisible="{Binding ShowCallHistoryPane}" DoubleTapped="HandleActivityDoubleTapped">
             <TextBlock FontSize="{Binding UiFontSize}" FontWeight="SemiBold" Text="Activity" VerticalAlignment="Center" />
-            <Button Grid.Column="1" Content="{Binding ActivityZoneFilterButtonText}" Padding="6,2" ToolTip.Tip="Switch Event History between the complete system and the current zone" Click="HandleToggleActivityZoneFilterClick" />
-            <Button Grid.Column="2" Content="{Binding ActivityReceiveFilterButtonText}" Padding="6,2" ToolTip.Tip="Switch Event History between RX-enabled channels and all channel activity" Click="HandleToggleActivityReceiveFilterClick" />
-            <Button Grid.Column="3" Content="‹" Padding="4,0" ToolTip.Tip="Collapse Activity sidebar" Click="HandleToggleActivitySidebarClick" />
+            <Button Grid.Column="1" Content="{Binding ActivityZoneFilterButtonText}" Padding="6,2" ToolTip.Tip="Switch Event History between the complete system and the current zone" AutomationProperties.Name="{Binding ActivityZoneFilterButtonText, StringFormat='Activity scope: {0}'}" AutomationProperties.HelpText="Switch between activity for the selected system and the selected zone." Click="HandleToggleActivityZoneFilterClick" />
+            <Button Grid.Column="2" Content="{Binding ActivityReceiveFilterButtonText}" Padding="6,2" ToolTip.Tip="Switch Event History between RX-enabled channels and all channel activity" AutomationProperties.Name="{Binding ActivityReceiveFilterButtonText, StringFormat='Activity receive filter: {0}'}" AutomationProperties.HelpText="Switch between audible receive activity and all activity." Click="HandleToggleActivityReceiveFilterClick" />
+            <Button Grid.Column="3" Content="‹" Padding="4,0" ToolTip.Tip="Collapse Activity sidebar" AutomationProperties.Name="Collapse Activity sidebar" Click="HandleToggleActivitySidebarClick" />
           </Grid>
-          <Button Content="›" Padding="0" HorizontalAlignment="Stretch" ToolTip.Tip="Expand Activity sidebar" IsVisible="{Binding IsActivitySidebarCollapsed}" Click="HandleToggleActivitySidebarClick" />
-          <ScrollViewer x:Name="activityScrollViewer" Grid.Row="1" Margin="0,8,0,0" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto" IsVisible="{Binding ShowCallHistoryPane}">
+          <Button Content="›" Padding="0" HorizontalAlignment="Stretch" ToolTip.Tip="Expand Activity sidebar" AutomationProperties.Name="Expand Activity sidebar" IsVisible="{Binding IsActivitySidebarCollapsed}" Click="HandleToggleActivitySidebarClick" />
+          <TextBlock Grid.Row="1" Classes="eyebrow" Text="Event History" Margin="0,8,0,0"
+                     IsVisible="{Binding ShowCallHistoryPane}" />
+          <ScrollViewer x:Name="activityScrollViewer" Grid.Row="2" Margin="0,6,0,0" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto" IsVisible="{Binding ShowCallHistoryPane}">
             <StackPanel Spacing="14">
               <StackPanel Spacing="6">
-                <TextBlock Classes="eyebrow" Text="Event History" />
                 <ItemsControl x:Name="activityCallHistoryList" ItemsSource="{Binding ActivityCallHistory}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="local:CallHistoryEntry">
-                      <Border Classes="activity-call-card" Background="{DynamicResource ActivityBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6" DoubleTapped="HandleCallHistoryDoubleTapped" ToolTip.Tip="Double-click to show the TAR recording in Finder or Explorer">
-                        <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4"><TextBlock FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" FontWeight="SemiBold" Text="{Binding DisplayChannelText}" /><Button Grid.Column="1" Grid.RowSpan="3" Tag="{Binding}" IsVisible="{Binding HasPlayableRecording}" ToolTip.Tip="{Binding RecordingPlaybackToolTip}" Padding="5,2" VerticalAlignment="Center" Click="HandlePlayCallHistoryRecordingClick"><Grid><PathIcon Width="11" Height="11" IsVisible="{Binding !IsRecordingPlaying}" Data="M 2,1 L 11,6 L 2,11 Z" /><PathIcon Width="11" Height="11" IsVisible="{Binding IsRecordingPlaying}" Data="M 2,2 H 10 V 10 H 2 Z" /></Grid></Button><TextBlock Grid.Column="2" Classes="eyebrow" Text="{Binding TimestampText}" /><TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Row="1" Grid.Column="2" Classes="eyebrow" Text="{Binding ProtocolText}" /><TextBlock Grid.Row="2" Classes="eyebrow" Text="{Binding EncryptionText}" /><TextBlock Grid.Row="2" Grid.Column="2" Classes="eyebrow" Text="{Binding DurationText}" /></Grid>
-                      </Border>
+                      <StackPanel>
+                        <TextBlock Classes="eyebrow" Text="{Binding DateText}" IsVisible="{Binding StartsActivityDay}" Margin="0,3,0,6" />
+                        <Border Classes="activity-call-card" Classes.playing="{Binding IsRecordingPlaying}"
+                                BorderThickness="1" CornerRadius="6" Padding="7" Margin="0,0,0,6"
+                                DoubleTapped="HandleCallHistoryDoubleTapped" ToolTip.Tip="Double-click to show the TAR recording in its folder">
+                          <Grid RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
+                            <TextBlock FontSize="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiSmallFontSize}" FontWeight="SemiBold" Text="{Binding DisplayChannelText}" />
+                            <Button Grid.Column="1" Grid.RowSpan="3" Tag="{Binding}" IsVisible="{Binding HasPlayableRecording}"
+                                    ToolTip.Tip="{Binding RecordingPlaybackHelpText}" AutomationProperties.Name="{Binding RecordingPlaybackActionText}"
+                                    AutomationProperties.HelpText="{Binding RecordingPlaybackHelpText}" Padding="5,2" VerticalAlignment="Center"
+                                    Click="HandlePlayCallHistoryRecordingClick">
+                              <Grid>
+                                <PathIcon Width="11" Height="11" IsVisible="{Binding !IsRecordingPlaying}" Data="M 2,1 L 11,6 L 2,11 Z" />
+                                <PathIcon Width="11" Height="11" IsVisible="{Binding IsRecordingPlaying}" Data="M 2,2 H 10 V 10 H 2 Z" />
+                              </Grid>
+                            </Button>
+                            <TextBlock Grid.Column="2" Classes="eyebrow" Text="{Binding TimestampText}" />
+                            <TextBlock Grid.Row="1" Classes="eyebrow" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Grid.Row="1" Grid.Column="2" Classes="eyebrow" Text="{Binding ProtocolText}" />
+                            <WrapPanel Grid.Row="2" ItemSpacing="6">
+                              <TextBlock Classes="eyebrow" Text="{Binding EncryptionText}" />
+                              <TextBlock Classes="eyebrow" Text="Playing" FontWeight="SemiBold" IsVisible="{Binding IsRecordingPlaying}" />
+                            </WrapPanel>
+                            <TextBlock Grid.Row="2" Grid.Column="2" Classes="eyebrow" Text="{Binding DurationText}" />
+                          </Grid>
+                        </Border>
+                      </StackPanel>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
@@ -306,7 +341,37 @@
                                  Grid.Row="3"
                                  Grid.ColumnSpan="2"
                                  IsVisible="False" />
-    <Border Grid.Row="4" Grid.ColumnSpan="2" Background="{DynamicResource StatusBarBackgroundBrush}" Padding="8,5"><Grid ColumnDefinitions="*,*,*"><TextBlock Classes="eyebrow" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" /><TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding AudioStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Center" /><TextBlock Grid.Column="2" Classes="eyebrow" Text="{Binding TransmitStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Right" /></Grid></Border>
+    <Border Grid.Row="4" Grid.ColumnSpan="2" Background="{DynamicResource StatusBarBackgroundBrush}" Padding="8,5">
+      <Grid>
+        <Grid IsVisible="{Binding !HasUndoNotification}">
+          <Grid x:Name="fullStatusBar" ColumnDefinitions="*,*,*">
+            <TextBlock Classes="eyebrow" Text="{Binding StatusText}" TextTrimming="CharacterEllipsis" />
+            <TextBlock Grid.Column="1" Classes="eyebrow" Text="{Binding AudioStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Center" />
+            <TextBlock Grid.Column="2" Classes="eyebrow" Text="{Binding TransmitStatusText}" TextTrimming="CharacterEllipsis" TextAlignment="Right" />
+          </Grid>
+          <Button x:Name="compactStatusBar"
+                  IsVisible="False"
+                  HorizontalAlignment="Stretch"
+                  HorizontalContentAlignment="Left"
+                  Padding="0"
+                  Background="Transparent"
+                  BorderThickness="0"
+                  Content="{Binding CompactStatusText}"
+                  AutomationProperties.Name="Open detailed console status"
+                  AutomationProperties.HelpText="{Binding StatusDetailsText}">
+            <Button.Flyout>
+              <Flyout>
+                <TextBlock MaxWidth="520" Margin="10" Text="{Binding StatusDetailsText}" TextWrapping="Wrap" />
+              </Flyout>
+            </Button.Flyout>
+          </Button>
+        </Grid>
+        <Grid IsVisible="{Binding HasUndoNotification}" ColumnDefinitions="*,Auto" ColumnSpacing="10">
+          <TextBlock Classes="eyebrow" Text="{Binding UndoNotificationText}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+          <Button Grid.Column="1" Content="Undo" Padding="8,2" AutomationProperties.Name="Undo last operator action" Click="HandleUndoLastOperatorActionClick" />
+        </Grid>
+      </Grid>
+    </Border>
   </Grid>
   </LayoutTransformControl>
 </Window>

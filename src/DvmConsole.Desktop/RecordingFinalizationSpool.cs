@@ -1,6 +1,11 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 using System.Text.Json;
+
+using DvmConsole.Core.Settings;
 
 namespace DvmConsole.Desktop;
 
@@ -99,11 +104,15 @@ internal sealed class RecordingFinalizationSpool
         string temporaryPath = $"{path}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
         try
         {
-            File.WriteAllText(
-                temporaryPath,
-                JsonSerializer.Serialize(
+            using (FileStream stream = AppDataFileProtection.CreatePrivateFile(temporaryPath))
+            using (var writer = new StreamWriter(stream))
+            {
+                writer.Write(JsonSerializer.Serialize(
                     descriptor,
                     DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor));
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
             File.Move(temporaryPath, path, overwrite: true);
             lock (sync)
             {
@@ -227,12 +236,17 @@ internal sealed class RecordingFinalizationSpool
         {
             try
             {
+                if (!IsUnderRoot(activePath, descriptorPath))
+                    throw new InvalidDataException("The recovery descriptor is outside the recording spool.");
+                AppDataFileProtection.EnsurePrivateOwnedFile(descriptorPath);
                 RecordingFinalizationDescriptor descriptor =
                     JsonSerializer.Deserialize<RecordingFinalizationDescriptor>(
                         File.ReadAllText(descriptorPath),
                         DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor)
                     ?? throw new InvalidDataException("The finalization descriptor was empty.");
                 Validate(descriptor, requireFiles: true);
+                AppDataFileProtection.EnsurePrivateOwnedFile(descriptor.WavePath);
+                AppDataFileProtection.EnsurePrivateOwnedFile(descriptor.OutputPath);
                 if (!FileSystemPathIdentity.AreEquivalent(
                         descriptorPath,
                         GetDescriptorPath(descriptor.JobId)))
@@ -263,6 +277,9 @@ internal sealed class RecordingFinalizationSpool
                 continue;
             try
             {
+                if (!IsUnderRoot(activePath, wavePath))
+                    throw new IOException("The orphan recording is outside the recording spool.");
+                AppDataFileProtection.EnsurePrivateOwnedFile(wavePath);
                 Directory.CreateDirectory(quarantinePath);
                 string destination = Path.Combine(
                     quarantinePath,

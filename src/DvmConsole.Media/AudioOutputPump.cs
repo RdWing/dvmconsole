@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using System.Buffers;
 using System.Diagnostics;
@@ -7,7 +10,8 @@ namespace DvmConsole.Media;
 internal readonly record struct MixerPresentationNotification(
     MixerLaneBuffer? Channel,
     Action<ReadOnlyMemory<short>, TimeSpan>? Observer,
-    ReadOnlyMemory<short> Samples);
+    ReadOnlyMemory<short> Samples,
+    short[]? RecyclableFrame = null);
 
 internal delegate bool TryTakeMixedFrame(
     out ReadOnlyMemory<short> frame,
@@ -173,6 +177,7 @@ internal sealed class AudioOutputPump : IDisposable
                     {
                         if (notificationCount > 0)
                         {
+                            RecyclePresentationFrames(notifications, notificationCount);
                             ArrayPool<MixerPresentationNotification>.Shared.Return(
                                 notifications,
                                 clearArray: true);
@@ -215,6 +220,21 @@ internal sealed class AudioOutputPump : IDisposable
             {
                 // Presentation observers are diagnostic/UI consumers and must
                 // never stop the real-time mixer thread.
+            }
+        }
+    }
+
+    private static void RecyclePresentationFrames(
+        MixerPresentationNotification[] notifications,
+        int count)
+    {
+        for (int index = 0; index < count; index++)
+        {
+            MixerPresentationNotification notification = notifications[index];
+            if (notification.Channel is { } channel &&
+                notification.RecyclableFrame is { } frame)
+            {
+                channel.FrameReleased?.Invoke(frame);
             }
         }
     }

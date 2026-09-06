@@ -1,4 +1,8 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
+using DvmConsole.Core.Settings;
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
@@ -33,6 +37,12 @@ internal sealed class DesktopRecordingStore : IRecordingStore, IAsyncDisposable
     private string rootPath;
     private int retentionDays;
     private int disposed;
+    private RecordingRootLease? rootLease;
+    private readonly object disposalSync = new();
+    private Task? disposalTask;
+    private readonly TaskCompletionSource ownershipReleased = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal Task OwnershipReleased => ownershipReleased.Task;
+    private const string RootBusyMessage = "Recording is unavailable: another console owns this recording folder or the folder is not writable. Close the other console or restore folder access, then select the folder again.";
 
     public DesktopRecordingStore(
         string rootPath,
@@ -54,12 +64,16 @@ internal sealed class DesktopRecordingStore : IRecordingStore, IAsyncDisposable
         this.retentionDays = retentionDays;
         this.finalizeRecording = finalizeRecording ?? FinalizeRecordingAsync;
         finalizationSpool = new RecordingFinalizationSpool(this.rootPath);
-        finalizationSpool.RecoverOrphanedWaveFiles();
         finalizationQueue = new RecordingFinalizationQueue(finalizationQueueCapacity);
         finalizationQueue.Finalized += HandleRecordingFinalized;
         try
         {
-            SchedulePendingFinalizations(excludedJobId: null);
+            rootLease = RecordingRootLease.TryAcquire(this.rootPath);
+            if (rootLease is not null)
+            {
+                finalizationSpool.RecoverOrphanedWaveFiles();
+                SchedulePendingFinalizations(excludedJobId: null);
+            }
         }
         catch (Exception constructionException)
         {
@@ -74,6 +88,10 @@ internal sealed class DesktopRecordingStore : IRecordingStore, IAsyncDisposable
                     "Recording recovery and finalization-queue rollback both failed.",
                     constructionException,
                     cleanupException);
+            }
+            finally
+            {
+                TaskObservation.Observe(ReleaseRootAfterWorkerAsync());
             }
             throw;
         }
@@ -110,8 +128,18 @@ internal sealed class DesktopRecordingStore : IRecordingStore, IAsyncDisposable
         }
     }
 
+    public bool CanWriteRecordings => rootLease is not null && Volatile.Read(ref disposed) == 0;
+
     public RecordingFinalizationSpoolHealth FinalizationHealth
-        => finalizationSpool.GetHealth();
+    {
+        get
+        {
+            lock (sync)
+                return rootLease is null
+                    ? new RecordingFinalizationSpoolHealth(0, 0, null, RootBusyMessage)
+                    : finalizationSpool.GetHealth();
+        }
+    }
 
     public int ScheduledFinalizationCount
     {
@@ -150,44 +178,66 @@ internal sealed class DesktopRecordingStore : IRecordingStore, IAsyncDisposable
         string mediaType,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(mediaType);
-        cancellationToken.ThrowIfCancellationRequested();
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
-
-        RecordingId id = RecordingId.New();
-        string captureRoot;
-        lock (sync)
-            captureRoot = rootPath;
-        string activeDirectory = Path.Combine(captureRoot, ".active");
-        Directory.CreateDirectory(activeDirectory);
-        string wavePath = Path.Combine(activeDirectory, $"{id.Value:N}.wav");
-        var stream = new FileStream(
-            wavePath,
-            FileMode.CreateNew,
-            FileAccess.ReadWrite,
-            FileShare.Read,
-            64 * 1024,
-            FileOptions.Asynchronous);
-        var handle = new WriteHandle(
-            this,
-            id,
-            callId,
-            channelId,
-            startedAt,
-            mediaType.Trim(),
-            captureRoot,
-            wavePath,
-            stream);
         lock (sync)
         {
-            if (Volatile.Read(ref disposed) != 0)
+            ArgumentException.ThrowIfNullOrWhiteSpace(mediaType);
+            cancellationToken.ThrowIfCancellationRequested();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+
+            // A replacement session is constructed before the outgoing store
+            // releases its lease. Retry at the mutation boundary so that an
+            // initial ownership conflict does not disable recording forever.
+            if (rootLease is null)
             {
-                stream.Dispose();
-                throw new ObjectDisposedException(nameof(DesktopRecordingStore));
+                RecordingRootLease? acquiredLease = RecordingRootLease.TryAcquire(rootPath);
+                if (acquiredLease is not null)
+                {
+                    try { finalizationSpool.RecoverOrphanedWaveFiles(); }
+                    catch
+                    {
+                        acquiredLease.Dispose();
+                        throw;
+                    }
+                    rootLease = acquiredLease;
+                    SchedulePendingFinalizations(excludedJobId: null);
+                }
             }
-            active.Add(id, handle);
+            if (!CanWriteRecordings)
+                throw new IOException(RootBusyMessage);
+            RecordingId id = RecordingId.New();
+            string captureRoot;
+            lock (sync)
+                captureRoot = rootPath;
+            string activeDirectory = Path.Combine(captureRoot, ".active");
+            Directory.CreateDirectory(activeDirectory);
+            string wavePath = Path.Combine(activeDirectory, $"{id.Value:N}.wav");
+            var stream = AppDataFileProtection.CreatePrivateFile(
+                wavePath,
+                FileAccess.ReadWrite,
+                FileShare.Read,
+                64 * 1024,
+                FileOptions.Asynchronous);
+            var handle = new WriteHandle(
+                this,
+                id,
+                callId,
+                channelId,
+                startedAt,
+                mediaType.Trim(),
+                captureRoot,
+                wavePath,
+                stream);
+            lock (sync)
+            {
+                if (Volatile.Read(ref disposed) != 0)
+                {
+                    stream.Dispose();
+                    throw new ObjectDisposedException(nameof(DesktopRecordingStore));
+                }
+                active.Add(id, handle);
+            }
+            return ValueTask.FromResult<IRecordingWriteHandle>(handle);
         }
-        return ValueTask.FromResult<IRecordingWriteHandle>(handle);
     }
 
     public ValueTask<Stream> OpenReadAsync(
@@ -246,28 +296,25 @@ internal sealed class DesktopRecordingStore : IRecordingStore, IAsyncDisposable
         bool pruneExpired,
         DateTimeOffset? now = null,
         CancellationToken cancellationToken = default)
-        => Task.Run(
-            () => catalogStore.Scan(
-                RootPath,
-                pruneExpired ? retentionDays : 0,
-                now ?? DateTimeOffset.UtcNow,
-                cancellationToken),
-            cancellationToken);
+        => Task.Run(() =>
+        {
+            lock (sync)
+                return catalogStore.Scan(rootPath, pruneExpired && CanWriteRecordings ? retentionDays : 0,
+                    now ?? DateTimeOffset.UtcNow, cancellationToken);
+        }, cancellationToken);
 
     public int PruneExpired(DateTimeOffset? now = null)
     {
-        int days = retentionDays;
-        return days <= 0
-            ? 0
-            : catalogStore.Scan(
-                RootPath,
-                days,
-                now ?? DateTimeOffset.UtcNow,
-                CancellationToken.None).PrunedFiles;
+        lock (sync)
+            return retentionDays <= 0 || !CanWriteRecordings ? 0 :
+                catalogStore.Scan(rootPath, retentionDays, now ?? DateTimeOffset.UtcNow, CancellationToken.None).PrunedFiles;
     }
 
     public bool DeleteRecording(CallRecordingMetadata metadata)
-        => catalogStore.Delete(RootPath, metadata);
+    {
+        lock (sync)
+            return CanWriteRecordings && catalogStore.Delete(rootPath, metadata);
+    }
 
     public bool TryGetRecordingPath(CallRecordingMetadata metadata, out string recordingPath)
         => catalogStore.TryGetExistingPath(RootPath, metadata, out recordingPath);
@@ -295,53 +342,106 @@ internal sealed class DesktopRecordingStore : IRecordingStore, IAsyncDisposable
 
         lock (sync)
         {
+            if (Volatile.Read(ref disposed) != 0)
+            {
+                errorMessage = "The recording store has stopped.";
+                return false;
+            }
             if (active.Count > 0)
             {
                 errorMessage = "Stop active recordings before changing the recording folder.";
                 return false;
             }
-            if (finalizationSpool.GetHealth().PendingJobs > 0)
+            if (rootLease is not null && (finalizationSpool.GetHealth().PendingJobs > 0 || ScheduledFinalizationCount > 0))
             {
                 errorMessage = "Wait for pending recording finalization before changing the recording folder.";
                 return false;
             }
+            if (FileSystemPathIdentity.AreEquivalent(rootPath, normalizedPath) && rootLease is not null)
+                return true;
+            RecordingRootLease? nextLease = RecordingRootLease.TryAcquire(normalizedPath);
+            if (nextLease is null)
+            {
+                errorMessage = RootBusyMessage;
+                return false;
+            }
+            var nextSpool = new RecordingFinalizationSpool(normalizedPath);
+            try { nextSpool.RecoverOrphanedWaveFiles(); }
+            catch
+            {
+                nextLease.Dispose();
+                throw;
+            }
+            rootLease?.Dispose();
+            rootLease = nextLease;
             rootPath = normalizedPath;
-            finalizationSpool = new RecordingFinalizationSpool(rootPath);
+            finalizationSpool = nextSpool;
+            SchedulePendingFinalizations(excludedJobId: null);
+            return true;
         }
-        finalizationSpool.RecoverOrphanedWaveFiles();
-        SchedulePendingFinalizations(excludedJobId: null);
-        return true;
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref disposed, 1) != 0)
-            return;
+        lock (disposalSync)
+            return new ValueTask(disposalTask ??= DisposeCoreAsync());
+    }
 
+    private async Task DisposeCoreAsync()
+    {
+        Interlocked.Exchange(ref disposed, 1);
         WriteHandle[] abandoned;
         lock (sync)
         {
             abandoned = active.Values.ToArray();
             active.Clear();
         }
+        var failures = new List<Exception>();
         foreach (WriteHandle handle in abandoned)
-            await handle.CloseStreamAsync(CancellationToken.None).ConfigureAwait(false);
+        {
+            try { await handle.CloseStreamAsync(CancellationToken.None).ConfigureAwait(false); }
+            catch (Exception exception) { failures.Add(exception); }
+        }
+        try { await finalizationQueue.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception exception) { failures.Add(exception); }
+        finally
+        {
+            finalizationQueue.Finalized -= HandleRecordingFinalized;
+            // A cancellation-ignoring encoder still owns its root after bounded
+            // shutdown returns. Keep the lease until its real completion.
+            TaskObservation.Observe(ReleaseRootAfterWorkerAsync());
+        }
+        if (failures.Count > 0)
+            throw new AggregateException("Recording store cleanup failed.", failures);
+    }
 
-        await finalizationQueue.DisposeAsync().ConfigureAwait(false);
-        finalizationQueue.Finalized -= HandleRecordingFinalized;
+    private async Task ReleaseRootAfterWorkerAsync()
+    {
+        try { await finalizationQueue.Completion.ConfigureAwait(false); }
+        finally
+        {
+            lock (sync)
+            {
+                rootLease?.Dispose();
+                rootLease = null;
+                ownershipReleased.TrySetResult();
+            }
+        }
     }
 
     private void UpdateContext(WriteHandle handle, RecordingCaptureContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
-        lock (handle.Sync)
-        {
-            handle.Context = context;
-            RecordingFinalizationDescriptor descriptor = CreateSnapshot(handle, context.ObservedAt);
-            handle.OutputPath = pathPolicy.CreatePath(descriptor);
-            descriptor = descriptor with { OutputPath = handle.OutputPath };
-            finalizationSpool.PersistCaptureSnapshot(descriptor);
-        }
+        lock (sync)
+            lock (handle.Sync)
+            {
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+                handle.Context = context;
+                RecordingFinalizationDescriptor descriptor = CreateSnapshot(handle, context.ObservedAt);
+                handle.OutputPath = pathPolicy.CreatePath(descriptor);
+                descriptor = descriptor with { OutputPath = handle.OutputPath };
+                finalizationSpool.PersistCaptureSnapshot(descriptor);
+            }
     }
 
     private async ValueTask CommitAsync(
@@ -351,16 +451,23 @@ internal sealed class DesktopRecordingStore : IRecordingStore, IAsyncDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
         await handle.CloseStreamAsync(cancellationToken).ConfigureAwait(false);
-        RemoveActive(handle);
-        RecordingCaptureContext context = handle.Context
-            ?? throw new InvalidOperationException("Recording capture metadata was not supplied.");
-        DateTimeOffset sampleEnd = handle.StartedAt.Add(duration);
-        DateTimeOffset endedAt = context.ObservedAt > sampleEnd ? context.ObservedAt : sampleEnd;
-        RecordingFinalizationDescriptor descriptor = CreateSnapshot(handle, endedAt);
-        handle.OutputPath = pathPolicy.CreatePath(descriptor);
-        descriptor = descriptor with { OutputPath = handle.OutputPath };
-        finalizationSpool.PersistReady(descriptor);
-        TryScheduleFinalization(descriptor, handle.ChannelId);
+        lock (sync)
+        {
+            try
+            {
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+                RecordingCaptureContext context = handle.Context
+                    ?? throw new InvalidOperationException("Recording capture metadata was not supplied.");
+                DateTimeOffset sampleEnd = handle.StartedAt.Add(duration);
+                DateTimeOffset endedAt = context.ObservedAt > sampleEnd ? context.ObservedAt : sampleEnd;
+                RecordingFinalizationDescriptor descriptor = CreateSnapshot(handle, endedAt);
+                handle.OutputPath = pathPolicy.CreatePath(descriptor);
+                descriptor = descriptor with { OutputPath = handle.OutputPath };
+                finalizationSpool.PersistReady(descriptor);
+                TryScheduleFinalization(descriptor, handle.ChannelId);
+            }
+            finally { RemoveActive(handle); }
+        }
     }
 
     private async ValueTask AbortAsync(
@@ -433,35 +540,39 @@ internal sealed class DesktopRecordingStore : IRecordingStore, IAsyncDisposable
 
     private void HandleRecordingFinalized(object? sender, RecordingFinalizationResult result)
     {
-        if (result.Descriptor is RecordingFinalizationDescriptor descriptor)
+        lock (sync)
         {
-            lock (finalizationScheduleSync)
+            if (result.Descriptor is RecordingFinalizationDescriptor descriptor)
             {
-                scheduledFinalizations.Remove(descriptor.JobId);
-                scheduledFinalizationChannels.Remove(descriptor.JobId);
+                lock (finalizationScheduleSync)
+                {
+                    scheduledFinalizations.Remove(descriptor.JobId);
+                    scheduledFinalizationChannels.Remove(descriptor.JobId);
+                }
+                if (result.Error is null)
+                    finalizationSpool.Complete(descriptor);
+                else if (result.Error is not (IOException or UnauthorizedAccessException))
+                    finalizationSpool.Quarantine(descriptor, result.Diagnostic ?? result.Error.Message);
             }
-            if (result.Error is null)
-                finalizationSpool.Complete(descriptor);
-            else if (result.Error is not (IOException or UnauthorizedAccessException))
-                finalizationSpool.Quarantine(descriptor, result.Diagnostic ?? result.Error.Message);
+            if (Volatile.Read(ref disposed) == 0)
+                SchedulePendingFinalizations(result.Error is null ? null : result.Descriptor?.JobId);
         }
         if (result.Error is Exception exception && result.ChannelId is ChannelId channelId)
             faultHandler?.Invoke(channelId, exception);
-
-        if (Volatile.Read(ref disposed) == 0)
-            SchedulePendingFinalizations(result.Error is null ? null : result.Descriptor?.JobId);
-
         RecordingFinalized?.Invoke(this, result);
     }
 
     private void SchedulePendingFinalizations(Guid? excludedJobId)
     {
-        foreach (RecordingFinalizationDescriptor descriptor in finalizationSpool.LoadReadyFinalizations())
+        lock (sync)
         {
-            if (descriptor.JobId == excludedJobId)
-                continue;
-            if (!TryScheduleFinalization(descriptor, channelId: null))
-                return;
+            foreach (RecordingFinalizationDescriptor descriptor in finalizationSpool.LoadReadyFinalizations())
+            {
+                if (descriptor.JobId == excludedJobId)
+                    continue;
+                if (!TryScheduleFinalization(descriptor, channelId: null))
+                    return;
+            }
         }
     }
 
@@ -647,7 +758,8 @@ internal sealed class DesktopRecordingStore : IRecordingStore, IAsyncDisposable
         private readonly DesktopRecordingStore owner;
         private readonly FileStream stream;
         private int completed;
-        private int streamClosed;
+        private readonly object closeSync = new();
+        private Task? closeTask;
 
         public WriteHandle(
             DesktopRecordingStore owner,
@@ -717,12 +829,16 @@ internal sealed class DesktopRecordingStore : IRecordingStore, IAsyncDisposable
                 await CloseStreamAsync(CancellationToken.None).ConfigureAwait(false);
         }
 
-        public async ValueTask CloseStreamAsync(CancellationToken cancellationToken)
+        public ValueTask CloseStreamAsync(CancellationToken cancellationToken)
         {
-            if (Interlocked.Exchange(ref streamClosed, 1) != 0)
-                return;
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-            await stream.DisposeAsync().ConfigureAwait(false);
+            lock (closeSync)
+                return new ValueTask(closeTask ??= CloseStreamCoreAsync());
+        }
+
+        private async Task CloseStreamCoreAsync()
+        {
+            try { await stream.FlushAsync(CancellationToken.None).ConfigureAwait(false); }
+            finally { await stream.DisposeAsync().ConfigureAwait(false); }
         }
     }
 }

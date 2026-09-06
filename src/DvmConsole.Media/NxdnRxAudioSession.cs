@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Vocoder;
@@ -8,6 +11,8 @@ namespace DvmConsole.Media;
 // them through the mandatory software vocoder.
 public sealed class NxdnRxAudioSession : IAsyncDisposable
 {
+    private const int MaximumConcealedPackets = 10;
+
     private readonly NxdnTrafficSelector selector;
     private readonly VoiceFrameDecoder decoder;
     private readonly IHalfRateVocoderSession? halfRateVocoder;
@@ -16,6 +21,13 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
     private readonly string systemName;
     private readonly VoicePacketSequenceTracker sequenceTracker = new();
     private readonly NxdnSacchMessageCollector sacchCollector = new();
+    private readonly byte[] ambe = new byte[NxdnVoicePacketCodec.AmbeBytes];
+    private readonly short[] packetSamples = new short[
+        NxdnVoicePacketCodec.CodewordsPerFrame * VocoderFrameSizes.PcmSamplesPerFrame];
+    private readonly bool[] concealed = new bool[NxdnVoicePacketCodec.CodewordsPerFrame];
+    private readonly short[] concealmentSamples = new short[
+        MaximumConcealedPackets * NxdnVoicePacketCodec.CodewordsPerFrame *
+        VocoderFrameSizes.PcmSamplesPerFrame];
     private NxdnPrivacyProcessor? privacyProcessor;
     private byte privacyAlgorithm;
     private byte privacyKeyId;
@@ -84,16 +96,24 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
             InvalidatePrivacyAfterLoss();
         }
 
-        if (NxdnVoicePacketCodec.TryExtractFacchCallMetadata(
-            traffic.Payload,
-            0,
-            out NxdnVoicePacketCodec.CallMetadata firstMetadata))
+        Span<byte> sacchFragment = stackalloc byte[3];
+        if (!NxdnVoicePacketCodec.TryParseVoicePacket(
+                traffic.Payload,
+                ambe,
+                sacchFragment,
+                out NxdnVoicePacketCodec.ParsedVoicePacket parsed))
+        {
+            MalformedPackets++;
+            await ConcealCurrentPacketAsync(cancellationToken).ConfigureAwait(false);
+            sacchCollector.Reset();
+            InvalidatePrivacyAfterLoss();
+            return 0;
+        }
+
+        if (parsed.FirstFacchMetadata is { } firstMetadata)
         {
             HandleCallMetadata(firstMetadata);
-            if (NxdnVoicePacketCodec.TryExtractFacchCallMetadata(
-                traffic.Payload,
-                1,
-                out NxdnVoicePacketCodec.CallMetadata secondMetadata) &&
+            if (parsed.SecondFacchMetadata is { } secondMetadata &&
                 !CallMetadataMatches(firstMetadata, secondMetadata))
             {
                 HandleCallMetadata(secondMetadata);
@@ -102,7 +122,11 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         }
 
         NxdnVoicePacketCodec.CallMetadata? metadataAfterVoice = null;
-        if (sacchCollector.TryAccept(traffic.Payload, out NxdnVoicePacketCodec.CallMetadata sacchMetadata))
+        if (parsed.HasSacchFragment &&
+            sacchCollector.TryAccept(
+                parsed.SacchStructure,
+                sacchFragment,
+                out NxdnVoicePacketCodec.CallMetadata sacchMetadata))
         {
             if (sacchMetadata.MessageType == NxdnVoicePacketCodec.VoiceCallIvMessageType)
                 metadataAfterVoice = sacchMetadata;
@@ -110,8 +134,8 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
                 HandleCallMetadata(sacchMetadata);
         }
 
-        byte[] ambe = new byte[NxdnVoicePacketCodec.AmbeBytes];
-        if (!NxdnVoicePacketCodec.TryExtractAmbe(traffic.Payload, ambe, out int codewordCount))
+        int codewordCount = parsed.AmbeCodewordCount;
+        if (codewordCount == 0)
         {
             MalformedPackets++;
             await ConcealCurrentPacketAsync(cancellationToken).ConfigureAwait(false);
@@ -122,9 +146,7 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         lastVoiceCodewordCount = codewordCount;
         int errors = 0;
         bool missingPrivacy = false;
-        short[] packetSamples = new short[
-            checked(codewordCount * VocoderFrameSizes.PcmSamplesPerFrame)];
-        bool[] concealed = new bool[codewordCount];
+        Array.Clear(concealed, 0, codewordCount);
         Span<byte> parameters = stackalloc byte[VocoderFrameSizes.HalfRateParameterBytes];
         for (int index = 0; index < codewordCount; index++)
         {
@@ -161,7 +183,7 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
             FramesDecoded++;
             hasDecodedVoiceInActiveStream = true;
         }
-        await WritePacketSegmentsAsync(packetSamples, concealed, cancellationToken)
+        await WritePacketSegmentsAsync(packetSamples, concealed, codewordCount, cancellationToken)
             .ConfigureAwait(false);
         if (metadataAfterVoice is { } completedMetadata)
             HandleCallMetadata(completedMetadata);
@@ -177,21 +199,20 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
         if (!hasDecodedVoiceInActiveStream || lostPackets <= 0 || lastVoiceCodewordCount <= 0)
             return;
 
-        const int maximumConcealedPackets = 10;
-        int frameCount = checked((int)Math.Min(lostPackets, maximumConcealedPackets)) *
+        int frameCount = checked((int)Math.Min(lostPackets, MaximumConcealedPackets)) *
             lastVoiceCodewordCount;
-        var concealedSamples = new short[
-            checked(frameCount * VocoderFrameSizes.PcmSamplesPerFrame)];
+        int sampleCount = checked(frameCount * VocoderFrameSizes.PcmSamplesPerFrame);
+        Memory<short> concealedSamples = concealmentSamples.AsMemory(0, sampleCount);
         for (int index = 0; index < frameCount; index++)
         {
-            decoder.ProcessLost(concealedSamples.AsSpan(
+            decoder.ProcessLost(concealedSamples.Span.Slice(
                 index * VocoderFrameSizes.PcmSamplesPerFrame,
                 VocoderFrameSizes.PcmSamplesPerFrame));
             FramesDecoded++;
         }
         await ConcealmentAudioWriter.WriteAsync(playback, concealedSamples, cancellationToken)
             .ConfigureAwait(false);
-        if (lostPackets > maximumConcealedPackets)
+        if (lostPackets > MaximumConcealedPackets)
             decoder.Reset();
     }
 
@@ -201,14 +222,15 @@ public sealed class NxdnRxAudioSession : IAsyncDisposable
     private async ValueTask WritePacketSegmentsAsync(
         short[] packetSamples,
         bool[] concealed,
+        int codewordCount,
         CancellationToken cancellationToken)
     {
         int segmentStart = 0;
-        while (segmentStart < concealed.Length)
+        while (segmentStart < codewordCount)
         {
             bool isConcealed = concealed[segmentStart];
             int segmentEnd = segmentStart + 1;
-            while (segmentEnd < concealed.Length && concealed[segmentEnd] == isConcealed)
+            while (segmentEnd < codewordCount && concealed[segmentEnd] == isConcealed)
                 segmentEnd++;
 
             ReadOnlyMemory<short> segment = packetSamples.AsMemory(

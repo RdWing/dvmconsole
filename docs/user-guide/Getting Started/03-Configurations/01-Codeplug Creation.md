@@ -1,10 +1,10 @@
 # Configuration Studio and codeplugs
 
-Configuration Studio edits an app-owned configuration. YAML remains the
-interoperable import/export format, but an imported file is no longer the live
-backing file. DVM Console copies the YAML and approved companion files into the
-Configuration Library, assigns a stable configuration ID, and commits immutable
-revisions. Studio keeps changes in a draft until you review and save them.
+Configuration Studio edits a copy kept in the Configuration Library. Import
+and export use YAML, but edits do not change the original file. DVM Console
+copies the YAML and approved companion files into the library, gives the
+configuration a stable ID, and saves each revision without changing earlier
+ones. Your edits stay in a draft until you review and save them.
 
 Open the current codeplug from:
 
@@ -13,8 +13,8 @@ File > Configuration Studio
 ```
 
 To create a configuration from scratch, choose **File > New Configuration**.
-To import an existing YAML codeplug, choose **File > Import Codeplug**. The
-Studio is a separate, modeless window, so you can refer to the main console
+To import an existing YAML codeplug, choose **File > Import Codeplug**.
+Studio opens in a separate window, so you can use the main console
 while editing. Opening a Studio section again brings the existing window
 forward.
 
@@ -22,24 +22,58 @@ forward.
 YAML paths. Use it to return to a configuration that is already in the library.
 
 Use **File > Configuration Library** to activate, duplicate, remove, or restore
-managed configurations. Only committed revisions can be activated. Removing an
+managed configurations. Only saved revisions can be loaded. Removing an
 inactive configuration moves it to recoverable library trash; it never deletes
 an imported source file.
 
 ![Configuration Studio shell](../../Assets/configuration-studio-shell.png)
 
+## Creating your first configuration
+
+No preexisting YAML, alias file, or key file is required.
+
+1. Choose **File > New Configuration**, then **FNE Systems > Add FNE**.
+2. Enter the FNE name, address, port, peer ID, console RID, and credentials
+   supplied for your system. A starter zone is created with the FNE.
+3. Select **Add channel**. Name the zone and channel, enter the destination ID,
+   and choose P25, DMR, or NXDN. For DMR, set the appropriate slot.
+4. For encrypted operation, open **Encryption Keys**, select **Add**, and set
+   the owning FNE, protocol, algorithm, key ID, and material. Use the matching
+   algorithm and key ID on the channel. Studio creates the managed key file.
+5. Under **Files & Interoperability**, select the FNE that owns your RID aliases
+   and choose **Add**. Enter a radio ID and its display name. Studio creates
+   the alias companion when needed; repeat for other radios or FNEs.
+6. Under **Web Streams**, choose **Add**, enter a direct audio URL, and select
+   its owning zone. Streams provide local listening, not radio transmission.
+7. Add any patch or multi-select definitions under **Groups**. Operational
+   membership becomes available after this configuration is saved and loaded.
+8. Select **Review & Save**, resolve any errors, and confirm the review. Accept
+   **Disconnect and load** to activate the new configuration. Saving alone
+   leaves it in the library without replacing the running configuration.
+9. Choose the input/output devices in **Audio settings**. Check the talk-permit
+   tone, then connect the FNE when ready. Enable TAR for the channels you want
+   recorded and check its destination on the Recorder page.
+
+To add more zones, select the intended FNE or one of its zones, open the zone
+editor's edit menu, and choose **Add zone**. The new zone uses the selected
+FNE; check **Assigned FNE system** before adding its channels.
+
 ## Importing an existing codeplug
 
-On the first upgraded launch, DVM Console imports the previous
-`LastCodeplugPath` before creating the session. Other recent paths remain lazy
-legacy candidates and are imported only when selected. A command-line YAML path
-is imported and activated.
+Version 0.7.0 uses a separate NEO application-data directory and never opens the
+ambiguous WPF-era directory as live storage. When the new store is empty, the
+first-launch assistant can copy selected settings, profiles, managed
+configurations, companions, and referenced assets into NEO. Nothing is selected
+by default, and recordings, logs, unknown files, and the old directory are left
+unchanged. You can also use **File > Import Codeplug** at any time. A command-line
+YAML path is imported and activated.
 
-Import identity includes the source origin, YAML content, resolved companion
-mapping, and companion hashes. Reopening an unchanged source reuses the managed
-entry. If only the source changed and the managed entry has not diverged, the
-import appends a revision. If both changed, DVM Console asks whether to import
-as new, replace with a recoverable revision, or cancel; it does not merge YAML.
+DVM Console compares the source location, YAML content, companion references,
+and companion file hashes to recognize an import. Reopening an unchanged
+source reuses its library entry. If only the source changed, importing it adds
+a revision to that entry. If both the source and library copy changed, DVM
+Console asks whether to import as new, replace with a recoverable revision,
+or cancel. It does not merge YAML.
 
 Safe same-folder key and alias references are copied automatically. Absolute or
 out-of-tree companions require explicit approval or selection. Missing-file
@@ -80,10 +114,11 @@ it.
 
 The FNE Systems page covers the connection name, identity, address, port, peer
 ID, console RID, call-priority policy, password, transport encryption,
-transport mode, transport preshared key, and KMF preshared key. Select **Add
-channel** to open a new channel for the selected FNE; Studio creates that
-system's first zone when needed. RID alias ownership and import are managed
-under **Files & Interoperability**.
+transport mode, transport preshared key, and KMF preshared key. Adding an FNE
+also creates and selects an empty named zone for it. The new system name appears
+in the hierarchy as it is edited. Select **Add channel** to create the first
+channel without saving or reopening Studio. RID alias ownership and import are
+managed under **Files & Interoperability**.
 
 Passwords and preshared keys stay masked. Validation messages name the field but
 never include its value. Port and Peer ID are plain numeric text fields without
@@ -100,9 +135,9 @@ the transport key.
 
 Open an FNE system in the left hierarchy and select one of its zones. Each zone
 is assigned to one FNE system. The zone inspector shows that assignment and
-lets you change it. Studio then writes the selected system into every channel's
-existing YAML `system` field. There is no separate system selector for each
-channel.
+lets you edit the zone name or change its system. Studio then writes the
+selected system into every channel's existing YAML `system` field. There is no
+separate system selector for each channel.
 
 Channel fields include destination ID, mode, algorithm, key ID, selectable
 encryption, receive-only state, resource color, and card size. DMR channels
@@ -115,9 +150,13 @@ DMR slot, encryption algorithm, receive-only state, and card size directly in
 the table. Selecting or focusing an inline editor also selects that channel;
 the table and right-side inspector stay synchronized and share the same
 validation and Undo/Redo history. Use the inspector for key ID, selectable
-encryption, and resource color. When the inspector would leave too little room
-for usable columns, Studio switches to a compact channel list and keeps the
-selected channel's fields in the inspector instead of clipping table values.
+encryption, and resource color. Desktop-sized windows keep the full grid and
+use horizontal scrolling when its columns need more room. Only phone-width
+viewports switch to a compact two-line channel summary; the selected channel's
+fields remain available in the inspector below it.
+
+The resource-color picker leaves each swatch visible. The selected swatch uses
+an accent outline instead of replacing the chosen color with the accent color.
 
 Select several channel rows to apply the current card size or change their
 receive-only state together.
@@ -150,7 +189,8 @@ Configuration Studio is the place to edit definitions and prepare a layout.
 The first time you select **Add** under Encryption Keys, Studio creates a
 managed `keys.clear` companion if the configuration does not already reference
 one. Enter the key protocol, algorithm, hexadecimal key ID, and key material,
-then select the channel and use the same algorithm and key ID there.
+choose its owning FNE system, then select the channel and use the same
+algorithm and key ID there.
 
 Under **Files & Interoperability**, use **Browse…** to choose an existing key
 file. For RID aliases, select the owning FNE and use **Choose file…** to open
@@ -163,18 +203,20 @@ If the selected FNE has no alias file, one **Add** creates its managed
 `aliases.yml` companion and selects the first editable row. Enter the RID and
 alias in the fields below the list; the selected row updates immediately.
 
-When a new configuration has an FNE system but no zone, adding the first
-channel creates the required zone automatically. This keeps the initial setup
-path continuous from FNE system to channel and encryption.
+If an imported or compatible configuration has an FNE system but no zone,
+adding its first channel creates the required zone automatically. This keeps
+the setup path continuous from FNE system to channel and encryption.
 
 ## Web streams
 
-The Web Streams page shows streams from every zone in one table. The owning zone
-is still explicit. Moving a stream to another zone changes where its
+The Web Streams page shows streams from every zone in one table. **Add** creates
+a starter zone if none exists, so you can begin entering a stream immediately.
+A saved codeplug still requires at least one FNE system. The owning zone is
+explicit. Moving a stream to another zone changes where its
 `web_streams` entry is written.
 
 Each stream has a name, URL, optional Basic Auth username and password, and idle
-color. Use a direct HTTP or HTTPS audio URL. HTTPS is preferred. Stream
+border color. Use a direct HTTP or HTTPS audio URL. HTTPS is preferred. Stream
 credentials are stored in the codeplug, so protect the file accordingly.
 
 Web streams are local monitor widgets. They cannot be patch or multi-select
@@ -199,6 +241,10 @@ Studio performs these checks before committing a revision:
 3. It writes a new immutable revision and atomically updates the catalog.
 4. It leaves every imported source file unchanged.
 
+For a new configuration, accept **Disconnect and load** after saving to use it
+immediately, or open it later from the Configuration Library. Reopening the
+console restores its last active managed configuration.
+
 Saving the active configuration does not change the running FNE session. The
 library marks the entry **Pending Reload**. Choose **Disconnect and reload** to
 activate that committed revision, or leave the current session on its earlier
@@ -220,13 +266,25 @@ authorization.
   non-secret placeholders so the support copy remains valid YAML that DVM
   Console can import for diagnosis.
 
-Exports use the platform's selected document handle. Companion files are
+Exports go to the location chosen in the file picker. Companion files are
 written beside the YAML with safe relative references, and DVM Console reads
 the exported bundle back before reporting success. Export never changes the
-current configuration ID, active revision, or Studio dirty baseline.
+current configuration ID, active revision, or which Studio edits count as unsaved.
 
 Review the sanitized copy before sharing it. Site-specific names may still be
 meaningful even after credentials and identifiers are removed.
+
+## Moving a configuration to another computer
+
+Export a full YAML copy and keep its companion files beside it. Import that
+YAML on the destination computer, then load the managed configuration. The
+YAML carries FNEs, zones, channels, stream definitions, and group definitions;
+card positions and receive on/off selections belong to operator settings.
+
+To transfer those selections and positions too, follow
+[Import and export settings](../04-Operations/02-Settings%20Reference.md#import-and-export-settings).
+Start web streams deliberately on the destination and check group membership,
+PTT selections, audio devices, and the recording location before operating.
 
 ## YAML interoperability
 

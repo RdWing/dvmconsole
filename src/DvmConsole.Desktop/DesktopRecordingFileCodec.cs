@@ -1,4 +1,9 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
+
+using DvmConsole.Core.Settings;
 
 namespace DvmConsole.Desktop;
 
@@ -73,13 +78,12 @@ internal static class DesktopRecordingFileCodec
             FileShare.Read,
             bufferSize: 16_384,
             useAsync: true);
-        await using var output = new FileStream(
+        await using var output = AppDataFileProtection.CreatePrivateFile(
             fullOutputPath,
-            FileMode.CreateNew,
             FileAccess.ReadWrite,
             FileShare.None,
             bufferSize: 16_384,
-            useAsync: false);
+            options: FileOptions.None);
 
         if (sampleCount is long rangeLength)
         {

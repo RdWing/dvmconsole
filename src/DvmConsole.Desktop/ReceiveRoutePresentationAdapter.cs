@@ -1,7 +1,11 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections.Frozen;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using DvmConsole.Core.Runtime;
+using DvmConsole.Application;
 using DvmConsole.FneClient;
 using DvmConsole.Operations;
 
@@ -219,8 +223,25 @@ internal sealed class ReceiveRoutePresentationAdapter
         FneTrafficFrame traffic,
         ReceiveIngressRoutingDecision ingressDecision,
         Func<ChannelViewModel, uint, bool> isTrackingStream)
+        => ResolveDispatchTargets(new DecodeChannelSelection(decodeChannels),
+            includeRecordingChannels, traffic, ingressDecision, isTrackingStream);
+
+    public ReceiveDispatchTargets ResolveDispatchTargetsById(
+        IReadOnlyList<ChannelId> decodeChannels,
+        bool includeRecordingChannels,
+        FneTrafficFrame traffic,
+        ReceiveIngressRoutingDecision ingressDecision,
+        Func<ChannelViewModel, uint, bool> isTrackingStream)
+        => ResolveDispatchTargets(new DecodeChannelSelection(decodeChannels),
+            includeRecordingChannels, traffic, ingressDecision, isTrackingStream);
+
+    private ReceiveDispatchTargets ResolveDispatchTargets(
+        DecodeChannelSelection decodeChannels,
+        bool includeRecordingChannels,
+        FneTrafficFrame traffic,
+        ReceiveIngressRoutingDecision ingressDecision,
+        Func<ChannelViewModel, uint, bool> isTrackingStream)
     {
-        ArgumentNullException.ThrowIfNull(decodeChannels);
         ArgumentNullException.ThrowIfNull(traffic);
         ArgumentNullException.ThrowIfNull(isTrackingStream);
 
@@ -375,7 +396,7 @@ internal sealed class ReceiveRoutePresentationAdapter
     }
 
     private ReceiveDispatchTargets ResolveTerminatorDispatchTargets(
-        IReadOnlyList<ChannelViewModel> decodeChannels,
+        DecodeChannelSelection decodeChannels,
         bool includeRecordingChannels,
         FneTrafficFrame traffic,
         ReceiveIngressRoutingDecision ingressDecision,
@@ -636,7 +657,7 @@ internal sealed class ReceiveRoutePresentationAdapter
             decisions ??= [];
             decisions.AddRange(routeDecisions);
         }
-        return decisions ?? [];
+        return decisions is null ? Array.Empty<ReceiveRouteProjectionDecision>() : decisions;
     }
 
     public bool IsActive(ChannelRouteKey routeKey, uint streamId)
@@ -692,7 +713,7 @@ internal sealed class ReceiveRoutePresentationAdapter
         {
             ReceiveRouteDecision decision = runtime.Advance(routeKey, now);
             if (decision.StreamDecision.Transition == ReceiveStreamTransition.None)
-                return decisions ?? [];
+                return decisions is null ? Array.Empty<ReceiveRouteProjectionDecision>() : decisions;
             decisions ??= [];
             decisions.Add(ToProjectionDecision(routeKey, decision));
         }
@@ -713,22 +734,41 @@ internal sealed class ReceiveRoutePresentationAdapter
             decision.StreamDecision,
             decision.State.StreamIds);
 
-    private static bool ContainsReference(
-        IReadOnlyList<ChannelViewModel> channels,
-        ChannelViewModel target)
+    // Packet dispatch only needs membership. Keep the existing snapshot instead
+    // of copying and deduplicating every active channel for every packet.
+    private readonly struct DecodeChannelSelection
     {
-        for (int index = 0; index < channels.Count; index++)
+        private readonly IReadOnlyList<ChannelViewModel>? channels;
+        private readonly IReadOnlyList<ChannelId>? ids;
+
+        public DecodeChannelSelection(IReadOnlyList<ChannelViewModel> channels)
+            => this.channels = channels ?? throw new ArgumentNullException(nameof(channels));
+
+        public DecodeChannelSelection(IReadOnlyList<ChannelId> ids)
+            => this.ids = ids ?? throw new ArgumentNullException(nameof(ids));
+
+        public bool Contains(ChannelViewModel target)
         {
-            if (ReferenceEquals(channels[index], target))
-                return true;
+            if (ids is not null)
+            {
+                for (int index = 0; index < ids.Count; index++)
+                    if (ids[index] == target.Id)
+                        return true;
+            }
+            else if (channels is not null)
+            {
+                for (int index = 0; index < channels.Count; index++)
+                    if (ReferenceEquals(channels[index], target))
+                        return true;
+            }
+            return false;
         }
-        return false;
     }
 
     private static bool IsDecodeEnabled(
         ChannelViewModel channel,
-        IReadOnlyList<ChannelViewModel> decodeChannels,
+        DecodeChannelSelection decodeChannels,
         bool includeRecordingChannels)
         => (includeRecordingChannels && channel.IsRecordingEnabled) ||
-           ContainsReference(decodeChannels, channel);
+           decodeChannels.Contains(channel);
 }

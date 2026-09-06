@@ -129,7 +129,7 @@ zones:
         # These are stored in the codeplug, so protect access to the file.
         #authUsername: "stream-user"
         #authPassword: "stream-password"
-        # Optional active-idle chip color. Connecting is amber, RX is green, and failed/down is red.
+        # Optional stopped-card border accent. Connecting is amber, RX is green, and failed/down is red.
         idleColor: "#150282"
 
   - name: "Secondary"

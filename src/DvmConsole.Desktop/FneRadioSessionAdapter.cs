@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.Core.Diagnostics;
 using DvmConsole.Core.Runtime;
@@ -13,7 +16,10 @@ internal sealed class FneRadioSessionAdapter : IFneRadioSession, IFneTrafficEndp
 {
     private readonly FneConnection connection;
     private readonly FneConnectionOptions options;
-    private readonly Func<IReadOnlyCollection<TransmitChannelDescriptor>> getChannels;
+    private readonly TransmitChannelDescriptor[] channels;
+    private readonly ChannelId[] channelIds;
+    private readonly IReadOnlyDictionary<(ChannelProtocol Protocol, uint DestinationId), ChannelId[]>
+        receiveRouteIndex;
     private readonly IClock clock;
 
     public FneRadioSessionAdapter(
@@ -22,7 +28,16 @@ internal sealed class FneRadioSessionAdapter : IFneRadioSession, IFneTrafficEndp
         IClock? clock = null)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
-        this.getChannels = getChannels ?? throw new ArgumentNullException(nameof(getChannels));
+        ArgumentNullException.ThrowIfNull(getChannels);
+        channels = getChannels().ToArray();
+        channelIds = channels.Select(static channel => channel.Id).ToArray();
+        receiveRouteIndex = channels
+            .GroupBy(static channel => (
+                channel.Definition.Protocol,
+                channel.Definition.DestinationId))
+            .ToDictionary(
+                static group => group.Key,
+                static group => group.Select(channel => channel.Id).ToArray());
         this.clock = clock ?? SystemClock.Instance;
         connection = new FneConnection(options);
         SystemId = SystemId.FromName(options.Name);
@@ -36,8 +51,8 @@ internal sealed class FneRadioSessionAdapter : IFneRadioSession, IFneTrafficEndp
 
     public SystemId SystemId { get; }
     public string Name => options.Name;
-    public IReadOnlyCollection<TransmitChannelDescriptor> ChannelDescriptors => getChannels();
-    public IReadOnlyCollection<ChannelId> ChannelIds => ChannelDescriptors.Select(channel => channel.Id).ToArray();
+    public IReadOnlyCollection<TransmitChannelDescriptor> ChannelDescriptors => channels;
+    public IReadOnlyCollection<ChannelId> ChannelIds => channelIds;
     public bool IsConnected => connection.Status.State == FneConnectionState.Connected;
     public bool IsConnectionActive => connection.Status.State is not (
         FneConnectionState.Disconnected or FneConnectionState.Faulted);
@@ -49,9 +64,7 @@ internal sealed class FneRadioSessionAdapter : IFneRadioSession, IFneTrafficEndp
     public event EventHandler<TalkgroupAuthorityRecord>? AuthorityChanged;
     public event EventHandler<FneConnectionStatus>? StatusChanged;
     public event EventHandler<FneLogEntry>? LogReceived;
-    public event EventHandler<FneTrafficFrame>? FneTrafficReceived;
     public event EventHandler<FneKeyResponse>? KeyResponseReceived;
-    public event EventHandler<FneTalkgroupAuthority>? FneTalkgroupAuthorityChanged;
 
     public ValueTask StartAsync(CancellationToken cancellationToken = default)
         => new(connection.StartOrReconnectAsync(cancellationToken));
@@ -61,6 +74,8 @@ internal sealed class FneRadioSessionAdapter : IFneRadioSession, IFneTrafficEndp
 
     public Task StopAsync(CancellationToken cancellationToken = default)
         => connection.StopAsync(cancellationToken);
+
+    public void Abort() => connection.Abort();
 
     public void SetVerboseLogging(bool enabled)
         => connection.SetVerboseLogging(enabled);
@@ -84,14 +99,14 @@ internal sealed class FneRadioSessionAdapter : IFneRadioSession, IFneTrafficEndp
 
     public void SendTraffic(
         FneTrafficProtocol protocol,
-        ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> payload,
         ushort packetSequence,
         uint streamId)
         => connection.SendTraffic(protocol, payload, packetSequence, streamId);
 
     public void SendTraffic(
         RadioMediaProtocol protocol,
-        ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> payload,
         ushort packetSequence,
         uint streamId)
         => SendTraffic(ToFneProtocol(protocol), payload, packetSequence, streamId);
@@ -120,16 +135,12 @@ internal sealed class FneRadioSessionAdapter : IFneRadioSession, IFneTrafficEndp
 
     private void HandleTrafficReceived(object? sender, FneTrafficFrame traffic)
     {
-        FneTrafficReceived?.Invoke(this, traffic);
-        ChannelId[] candidates = ChannelDescriptors
-            .Where(channel =>
-                channel.Definition.Protocol == FneTrafficProtocolMapper.ToChannelProtocol(traffic.Protocol) &&
-                channel.Definition.DestinationId == traffic.DestinationId)
-            .Select(channel => channel.Id)
-            .ToArray();
+        receiveRouteIndex.TryGetValue(
+            (FneTrafficProtocolMapper.ToChannelProtocol(traffic.Protocol), traffic.DestinationId),
+            out ChannelId[]? candidates);
         TrafficReceived?.Invoke(this, new RadioTrafficRecord(
             SystemId,
-            candidates,
+            candidates ?? [],
             traffic,
             clock.UtcNow,
             traffic.FneBoundaryTimestamp,
@@ -143,9 +154,8 @@ internal sealed class FneRadioSessionAdapter : IFneRadioSession, IFneTrafficEndp
         object? sender,
         FneTalkgroupAuthority authority)
     {
-        FneTalkgroupAuthorityChanged?.Invoke(this, authority);
         DateTimeOffset observedAt = clock.UtcNow;
-        TalkgroupAuthorityChannelRecord[] channels = ChannelDescriptors
+        TalkgroupAuthorityChannelRecord[] channelStates = channels
             .Select(channel =>
             {
                 TargetAuthorityState state = ToTargetAuthority(authority.GetAvailability(
@@ -162,7 +172,7 @@ internal sealed class FneRadioSessionAdapter : IFneRadioSession, IFneTrafficEndp
             .ToArray();
         AuthorityChanged?.Invoke(this, new TalkgroupAuthorityRecord(
             SystemId,
-            channels,
+            channelStates,
             observedAt));
     }
 

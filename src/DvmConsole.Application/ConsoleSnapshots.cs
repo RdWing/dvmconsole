@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Runtime;
 
 namespace DvmConsole.Application;
@@ -90,7 +93,7 @@ public sealed record ChannelControlSnapshot(
     bool TransmitEncryptionSelectable = false)
 {
     public bool HasSameContent(ChannelControlSnapshot? other)
-        => other is not null &&
+        => ReferenceEquals(this, other) || (other is not null &&
            Id == other.Id &&
            RuntimeState == other.RuntimeState &&
            string.Equals(StateText, other.StateText, StringComparison.Ordinal) &&
@@ -119,7 +122,7 @@ public sealed record ChannelControlSnapshot(
            string.Equals(Fault, other.Fault, StringComparison.Ordinal) &&
            RecordingPlayback == other.RecordingPlayback &&
            TransmitEncryptionConfigured == other.TransmitEncryptionConfigured &&
-           TransmitEncryptionSelectable == other.TransmitEncryptionSelectable;
+           TransmitEncryptionSelectable == other.TransmitEncryptionSelectable);
 }
 
 public sealed record ConsoleRuntimeSnapshot(
@@ -162,10 +165,12 @@ public sealed record ConsoleRuntimeSnapshot(
 
 public sealed class ConsoleSnapshotChangedEventArgs(
     ConsoleRuntimeSnapshot previous,
-    ConsoleRuntimeSnapshot current) : EventArgs
+    ConsoleRuntimeSnapshot current,
+    IReadOnlyCollection<ChannelId>? changedChannels = null) : EventArgs
 {
     public ConsoleRuntimeSnapshot Previous { get; } = previous;
     public ConsoleRuntimeSnapshot Current { get; } = current;
+    public IReadOnlyCollection<ChannelId>? ChangedChannels { get; } = changedChannels;
 }
 
 public sealed record ChannelMeterSample(

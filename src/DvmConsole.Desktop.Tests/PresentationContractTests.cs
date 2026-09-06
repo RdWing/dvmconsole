@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Operations;
@@ -8,6 +11,24 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class PresentationContractTests
 {
+    [Fact]
+    public void PttHoldTrackerRetainsOriginalChannelUntilReleaseOrLifecycleClear()
+    {
+        var tracker = new PttHoldTracker<object>();
+        var firstInput = new object();
+        var secondInput = new object();
+        var firstChannel = new ChannelId(new ChannelSessionId("First", ChannelProtocol.Dmr, 101, 1, "Dispatch"));
+        var secondChannel = new ChannelId(new ChannelSessionId("Second", ChannelProtocol.P25, 202, 0, "Operations"));
+
+        tracker.Track(firstInput, firstChannel);
+        tracker.Track(secondInput, secondChannel);
+
+        Assert.Equal(firstChannel, tracker.Take(firstInput));
+        Assert.Null(tracker.Take(firstInput));
+        tracker.Clear();
+        Assert.Null(tracker.Take(secondInput));
+    }
+
     [Fact]
     public async Task ListItemProjectsCollapsedAndExpandedFieldsAndSendsEachCommandOnce()
     {
@@ -115,6 +136,75 @@ public sealed class PresentationContractTests
     }
 
     [Fact]
+    public async Task FailedReleaseRemainsOwnedAndIsRetried()
+    {
+        ChannelId channel = CreateDescriptor().Id;
+        int stops = 0;
+        await using var controller = new ChannelPttController(
+            static (_, _) => ValueTask.FromResult(true),
+            (_, _) =>
+            {
+                stops++;
+                return stops == 1
+                    ? ValueTask.FromException(new InvalidOperationException("stop failed"))
+                    : ValueTask.CompletedTask;
+            });
+        await controller.ToggleAsync(channel);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => controller.ReleaseAllAsync().AsTask());
+        await controller.ReleaseAllAsync();
+        await controller.ReleaseAllAsync();
+
+        Assert.Equal(2, stops);
+    }
+
+    [Fact]
+    public async Task FailedStartRollsBackIntentSoTheNextPressCanRetry()
+    {
+        ChannelId channel = CreateDescriptor().Id;
+        int starts = 0;
+        await using var controller = new ChannelPttController(
+            (_, _) =>
+            {
+                starts++;
+                return starts == 1
+                    ? ValueTask.FromException<bool>(new InvalidOperationException("start failed"))
+                    : ValueTask.FromResult(true);
+            },
+            static (_, _) => ValueTask.CompletedTask);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => controller.PressAsync(channel).AsTask());
+        await controller.PressAsync(channel);
+
+        Assert.Equal(2, starts);
+    }
+
+    [Fact]
+    public async Task FailedExplicitUnkeyIsRetriedByReleaseAll()
+    {
+        ChannelId channel = CreateDescriptor().Id;
+        int stops = 0;
+        await using var controller = new ChannelPttController(
+            static (_, _) => ValueTask.FromResult(true),
+            (_, _) =>
+            {
+                stops++;
+                return stops == 1
+                    ? ValueTask.FromException(new InvalidOperationException("stop failed"))
+                    : ValueTask.CompletedTask;
+            });
+        await controller.PressAsync(channel);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => controller.UnkeyAsync(channel).AsTask());
+        await controller.ReleaseAllAsync();
+
+        Assert.Equal(2, stops);
+    }
+
+    [Fact]
     public async Task ExplicitUnkeyStopsATransmissionStartedByAnotherPttSource()
     {
         ChannelId channel = CreateDescriptor().Id;
@@ -147,7 +237,8 @@ public sealed class PresentationContractTests
         int afterFirstMeter = changed.Count;
         item.ApplyMeter(new ChannelMeterSample(descriptor.Id, 25.005, 40.005, DateTimeOffset.UtcNow));
 
-        Assert.Equal(3, afterFirstMeter);
+        Assert.Equal(1, afterFirstMeter);
+        Assert.Equal([nameof(ChannelListItemViewModel.Meter)], changed);
         Assert.Equal(afterFirstMeter, changed.Count);
     }
 

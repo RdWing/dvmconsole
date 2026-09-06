@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
 
@@ -71,12 +74,16 @@ public static class RadioReceiveTrafficClassifier
         ArgumentNullException.ThrowIfNull(traffic);
         if (IsTerminator(traffic))
             return ReceiveJitterPacketKind.Terminator;
-        if (CarriesEncodedVoicePayload(traffic))
-            return ReceiveJitterPacketKind.Voice;
+        bool carriesVoice = CarriesVoicePayload(traffic);
+        if (carriesVoice)
+        {
+            return traffic.Protocol == RadioMediaProtocol.Nxdn &&
+                   RadioFrameEncryptionResolver.TryResolveNxdnCallMetadata(traffic, out _)
+                ? ReceiveJitterPacketKind.Metadata
+                : ReceiveJitterPacketKind.Voice;
+        }
         if (IsDefinitiveStart(traffic) ||
-            IsDmrPrivacyHeader(traffic) ||
-            (traffic.Protocol == RadioMediaProtocol.Nxdn &&
-             NxdnVoicePacketCodec.TryExtractCallMetadata(traffic.Payload, out _)))
+            IsDmrPrivacyHeader(traffic))
         {
             return ReceiveJitterPacketKind.Metadata;
         }
@@ -88,7 +95,7 @@ public static class RadioReceiveTrafficClassifier
     public static bool CarriesEncodedVoicePayload(IRadioMediaFrame traffic)
         => CarriesVoicePayload(traffic) &&
            (traffic.Protocol != RadioMediaProtocol.Nxdn ||
-            !NxdnVoicePacketCodec.TryExtractCallMetadata(traffic.Payload, out _));
+            !RadioFrameEncryptionResolver.TryResolveNxdnCallMetadata(traffic, out _));
 
     private static bool IsDmrVoiceCallStart(IRadioMediaFrame traffic)
         => traffic.Protocol == RadioMediaProtocol.Dmr &&

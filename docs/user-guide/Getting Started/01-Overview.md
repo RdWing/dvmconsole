@@ -1,15 +1,34 @@
 # Overview
 
-DVM Console NEO is an open-source DVM FNE operator console for macOS and
-Windows. It puts live channels, patches, tones, recordings, and diagnostics in
-one workspace. The Avalonia application runs on Apple Silicon and Intel Macs as
-well as Windows x64.
+DVM Console NEO is an open-source DVM FNE operator console for macOS, Windows,
+and Linux. It puts live channels, patches, tones, recordings, and diagnostics
+in one workspace. Version 0.7.0 covers Apple Silicon and Intel Macs, Windows x64
+and ARM64, and Linux x64 and ARM64. macOS 14 and newer is officially supported;
+macOS 12 and 13 remain best-effort compatibility targets.
+
+NEO stores its data separately from the earlier WPF application. If the new
+store is empty and an earlier shared DVM Console folder exists, first launch
+offers a selective import assistant. Nothing is selected by default, and the
+old folder is never modified.
 
 This project is an independently maintained downstream version of
 [DVMProject/dvmconsole](https://github.com/DVMProject/dvmconsole).
 
 DVM Console NEO is for amateur and educational use. It is not for public- or
 life-safety operation.
+
+---
+
+# Starting without a codeplug
+
+Choose **File > New Configuration** to open Configuration Studio. Add an FNE
+system and its first channel, then add aliases, encryption keys, web streams,
+and group definitions as needed. **Review & Save** stores the configuration;
+accept **Disconnect and load** to use it in the console. You can also import an
+existing YAML file with **File > Import Codeplug**.
+
+See [Configuration Studio and codeplugs](03-Configurations/01-Codeplug%20Creation.md)
+for the complete first-time setup sequence.
 
 ---
 
@@ -59,12 +78,13 @@ Membership is saved separately from whether a patch is active.
 
 ## Operator workspace
 
-The main console offers two renderers under **View > Channel view**:
+Choose how channels appear under **View > Channel view**:
 
-- **Cards** is the desktop default. It keeps the established freeform channel
-  cards, geometry, colors, and saved positions.
+- **Cards** is the desktop default. Arrange channel cards freely, with their
+  configured sizes, colors, and saved positions.
 - **List** is a compact, virtualized view grouped by system and zone. Select a
-  non-control part of a row to expand its volume and detailed state.
+  row title, or Tab to it and press Enter, to expand its volume and detailed
+  state.
 
 Below 600 logical pixels DVM Console temporarily uses List so controls remain
 reachable. Returning to a wider window restores the saved desktop preference;
@@ -89,17 +109,18 @@ The bottom row contains:
 - `ALERT`: include the channel in alert tones, DTMF, and custom alert audio.
 - `TAR`: enable or disable Talkgroup Audio Recorder capture for the channel.
 
-Purple means a route or recorder is enabled. Gray means it is disabled.
+Armed controls use different colors: purple for `TX`, orange for `PAGE`, pink
+for `ALERT`, and red for `TAR`. Gray means the control is disabled.
 
 By default, the Activity sidebar shows recent calls from RX-enabled channel
 cards. Use **Active** / **All** to exclude or include channels with RX disabled.
 The separate **Zone Wide** / **System Wide** control limits the selection to the
 current zone or expands it to the whole system. Use the arrow at the edge to
 collapse the sidebar. Double-click the Activity heading to open Event History
-in Console Settings. Double-click a call with a TAR recording to select that
-file in Finder or File Explorer. New calls do not move the entry being read when
-the sidebar is scrolled away from the top. At the top, the sidebar continues to
-follow new calls.
+in Console Settings. Double-click a call with a TAR recording to show its
+folder; Finder and File Explorer also select the file. New calls do not move the
+entry being read when the sidebar is scrolled away from the top. At the top, the
+sidebar continues to follow new calls.
 
 Enabled clocks sit immediately to the left of **Keep Mic Warm** and the three
 output-mute controls. As the window narrows, the flexible space after **Help**
@@ -171,7 +192,10 @@ View > Debug Logs
 ```
 
 The viewer captures FNE messages, searches each entry for all entered terms, and
-exports redacted logs for troubleshooting. **Clear Text** clears the search but
+exports redacted logs for troubleshooting. Patch forwarding warnings use the
+source `PATCH`; search for that term when a forwarded call is skipped or cut
+short. Review exports before sharing them because operator-entered names and
+other context can still identify a site. **Clear Text** clears the search but
 does not delete captured entries. Logs last for the current application session
 and share a 100 MB in-memory limit. When the log reaches that limit, DVM Console
 discards the oldest entries first. If the viewer is scrolled away from the
@@ -180,8 +204,10 @@ newest entry, new traffic does not move the line being read.
 If the application closes without an error dialog, inspect `LastCrash.log`
 before restarting:
 
-- macOS: `~/Library/Application Support/DVMProject/dvmconsole/`
-- Windows: `%APPDATA%\DVMProject\dvmconsole\`
+- macOS: `~/Library/Application Support/DVMProject/dvmconsole-neo/`
+- Windows: `%APPDATA%\DVMProject\dvmconsole-neo\`
+- Linux: `$XDG_CONFIG_HOME/DVMProject/dvmconsole-neo/`, normally
+  `~/.config/DVMProject/dvmconsole-neo/`
 
 ---
 

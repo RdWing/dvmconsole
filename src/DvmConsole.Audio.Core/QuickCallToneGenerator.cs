@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Audio;
 
 // Builds the fixed-duration two-tone sequence used by a Quick Call II page.

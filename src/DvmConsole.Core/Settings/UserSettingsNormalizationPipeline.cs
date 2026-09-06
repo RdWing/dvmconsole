@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Core.Settings;
 
 internal sealed class UserSettingsNormalizationPipeline
@@ -45,8 +48,9 @@ internal sealed class UserSettingsNormalizationPipeline
         settings.QuickCallToneBFrequencyHz = UserSettingsNormalizationRules.NormalizeToneFrequency(settings.QuickCallToneBFrequencyHz, 1200);
         settings.DtmfPresets = UserSettingsNormalizationRules.NormalizeDtmfPresets(settings.DtmfPresets);
         settings.TonePresets = UserSettingsNormalizationRules.NormalizeTonePresets(settings.TonePresets);
+        settings.ToolbarToneAssignments = UserSettingsNormalizationRules.NormalizeToolbarToneAssignments(settings.ToolbarToneAssignments);
         settings.AlertTones = UserSettingsNormalizationRules.NormalizeAlertTones(settings.AlertTones);
-        settings.RecordingRetentionDays = Math.Max(0, settings.RecordingRetentionDays);
+        settings.RecordingRetentionDays = Math.Clamp(settings.RecordingRetentionDays, 0, 3650);
         settings.RecordingRootPath = UserSettingsNormalizationRules.NormalizeRecordingRootPath(settings.RecordingRootPath);
 
         var channelVolumes = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
@@ -141,6 +145,7 @@ internal sealed class UserSettingsNormalizationPipeline
         settings.SchemaVersion = UserSettings.CurrentSchemaVersion;
         settings.DtmfPresets = UserSettingsNormalizationRules.NormalizeDtmfPresets(settings.DtmfPresets);
         settings.TonePresets = UserSettingsNormalizationRules.NormalizeTonePresets(settings.TonePresets);
+        settings.ToolbarToneAssignments = UserSettingsNormalizationRules.NormalizeToolbarToneAssignments(settings.ToolbarToneAssignments);
         settings.MainWindowPlacement = UserSettingsNormalizationRules.NormalizeWindowPlacement(
             settings.MainWindowPlacement,
             defaultWidth: 1260,
@@ -160,6 +165,7 @@ internal sealed class UserSettingsNormalizationPipeline
         settings.ChannelStereoBalances = UserSettingsNormalizationRules.NormalizeChannelStereoBalances(settings.ChannelStereoBalances);
         settings.WebStreamOutputDeviceIds = UserSettingsNormalizationRules.NormalizeChannelOutputDevices(settings.WebStreamOutputDeviceIds);
         settings.WebStreamVolumes = UserSettingsNormalizationRules.NormalizeWebStreamVolumes(settings.WebStreamVolumes);
+        settings.RecordingRetentionDays = Math.Clamp(settings.RecordingRetentionDays, 0, 3650);
         settings.RecordingRootPath = UserSettingsNormalizationRules.NormalizeRecordingRootPath(settings.RecordingRootPath);
         settings.RecordingEnabledChannelKeys = UserSettingsNormalizationRules.NormalizeNames(settings.RecordingEnabledChannelKeys);
         settings.SelectedWebStreams = UserSettingsNormalizationRules.NormalizeNames(settings.SelectedWebStreams);

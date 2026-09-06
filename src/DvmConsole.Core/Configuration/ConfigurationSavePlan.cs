@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Core.Configuration;
 
 using System.Text.Json;
@@ -33,14 +36,11 @@ public static class ConfigurationSaveTransaction
         if (!plan.CanSave)
             throw new InvalidOperationException("The configuration contains errors or no files are scheduled to be saved.");
 
-        StringComparer pathComparer = OperatingSystem.IsWindows()
-            ? StringComparer.OrdinalIgnoreCase
-            : StringComparer.Ordinal;
         ConfigurationFileChange[] changes = plan.Files
             .Select(change => change with { Path = Path.GetFullPath(change.Path) })
             .ToArray();
         string? duplicatePath = changes
-            .GroupBy(change => change.Path, pathComparer)
+            .GroupBy(change => change.Path, FileSystemPathIdentity.Comparer)
             .FirstOrDefault(group => group.Count() > 1)?
             .Key;
         if (duplicatePath is not null)
@@ -140,17 +140,7 @@ public static class ConfigurationSaveTransaction
     }
 
     private static void TryRestrictDirectory(string path)
-    {
-        if (OperatingSystem.IsWindows())
-            return;
-        try
-        {
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        }
-        catch (PlatformNotSupportedException)
-        {
-        }
-    }
+        => DvmConsole.Core.Settings.AppDataFileProtection.EnsureDirectory(path);
 
     private static void ValidateStagedContent(IEnumerable<ConfigurationFileChange> changes)
     {
@@ -185,15 +175,5 @@ public static class ConfigurationSaveTransaction
     }
 
     private static void TryRestrictFile(string path)
-    {
-        if (OperatingSystem.IsWindows())
-            return;
-        try
-        {
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
-        catch (PlatformNotSupportedException)
-        {
-        }
-    }
+        => DvmConsole.Core.Settings.AppDataFileProtection.EnsureFile(path);
 }

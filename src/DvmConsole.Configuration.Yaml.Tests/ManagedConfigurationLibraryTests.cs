@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Runtime.CompilerServices;
 using System.Text;
 using DvmConsole.Application;
@@ -54,6 +57,24 @@ public sealed class ManagedConfigurationLibraryTests : IDisposable
 
         Assert.Null(failure);
         Assert.True(thread.Join(TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
+    public async Task ConcurrentLibraryInstancesMergeCatalogUpdates()
+    {
+        var first = new ManagedConfigurationLibrary(root);
+        var second = new ManagedConfigurationLibrary(root);
+
+        await Task.WhenAll(
+            first.RegisterLegacyCandidatesAsync([
+                new LegacyConfigurationCandidate("First", "origin:first")]).AsTask(),
+            second.RegisterLegacyCandidatesAsync([
+                new LegacyConfigurationCandidate("Second", "origin:second")]).AsTask());
+
+        List<ConfigurationSummary> entries = await ReadAllAsync(first.ListAsync());
+        Assert.Equal(2, entries.Count);
+        Assert.Contains(entries, entry => entry.Name == "First");
+        Assert.Contains(entries, entry => entry.Name == "Second");
     }
 
     [Fact]
@@ -558,6 +579,39 @@ public sealed class ManagedConfigurationLibraryTests : IDisposable
     }
 
     [Fact]
+    public async Task DirtyStudioBundleExportUsesHostIndependentPortableCompanionNames()
+    {
+        const string yaml = """
+            keyFile: './CON?.clear. '
+            systems:
+              - name: Test
+                identity: Console
+                address: 127.0.0.1
+                port: 62031
+                peerId: 1
+                rid: "1001"
+                aliasPath: './dispatch:aliases?.yml'
+            zones: []
+            groups: []
+            """;
+        var source = new MemoryDocumentSet("draft.yml", "draft-origin", yaml);
+        source.AddCompanion("./CON?.clear. ", "[]\n");
+        source.AddCompanion("./dispatch:aliases?.yml", "- id: 1001\n  name: Dispatch\n");
+        var destination = new MemoryDocumentSet("portable.yml", "export-origin", string.Empty);
+
+        await ConfigurationBundleExporter.ExportAsync(
+            yaml,
+            source,
+            destination,
+            new ConfigurationExportOptions(Sanitized: false));
+
+        Assert.Contains("keyFile: ./_CON.clear", destination.PrimaryDocument.Text, StringComparison.Ordinal);
+        Assert.Contains("aliasPath: ./dispatchaliases.yml", destination.PrimaryDocument.Text, StringComparison.Ordinal);
+        Assert.Equal("[]\n", destination.GetCompanion("_CON.clear").Text);
+        Assert.Contains("Dispatch", destination.GetCompanion("dispatchaliases.yml").Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task SanitizedDirtyStudioExportDoesNotCopyCompanionsOrCredentials()
     {
         const string yaml = """
@@ -589,6 +643,79 @@ public sealed class ManagedConfigurationLibraryTests : IDisposable
         Assert.DoesNotContain("tgid: '101'", destination.PrimaryDocument.Text, StringComparison.Ordinal);
         ConfigurationDocument reparsed = ConfigurationDocument.Parse(destination.PrimaryDocument.Text);
         Assert.DoesNotContain(reparsed.Validate(), issue => issue.IsError);
+    }
+
+    [Fact]
+    public async Task SanitizedExportPseudonymizesNamesIdentifiersEncryptionAndColorsConsistently()
+    {
+        const string yaml = """
+            patchSourceIdPassthrough: true
+            systems:
+              - name: EXAMPLE SYSTEM
+                identity: EXAMPLE-CONSOLE
+                address: 192.0.2.40
+                port: 62031
+                peerId: 1000001
+                rid: "1000002"
+                encrypted: true
+                transportEncryptionMode: cbc
+                password: DEMO_ONLY
+                presharedKey: DEMO_ONLY
+                kmfPresharedKey: DEMO_ONLY
+                aliasPath: ./example-aliases.yml
+            zones:
+              - name: Zone Alpha
+                tabColor: '#112233'
+                tabTextColor: '#FFFFFF'
+                channels:
+                  - name: Dispatch Primary
+                    system: EXAMPLE SYSTEM
+                    tgid: '101'
+                    algo: aes
+                    keyId: '0x001'
+                    selectableEncryption: true
+                    resourceColor: '#445566'
+                  - name: Dispatch Backup
+                    system: EXAMPLE SYSTEM
+                    tgid: '101'
+                web_streams:
+                  - name: Example Stream
+                    url: https://audio.example/live/101
+                    authUsername: DEMO_ONLY
+                    authPassword: DEMO_ONLY
+                    idleColor: '#778899'
+            groups:
+              - name: Example Patch
+                type: patch
+            """;
+        var source = new MemoryDocumentSet("draft.yml", "draft-origin", yaml);
+        var destination = new MemoryDocumentSet("support.yml", "support-origin", string.Empty);
+
+        await ConfigurationBundleExporter.ExportAsync(
+            yaml,
+            source,
+            destination,
+            new ConfigurationExportOptions(Sanitized: true));
+
+        string exported = destination.PrimaryDocument.Text;
+        foreach (string sentinel in new[]
+                 {
+                     "EXAMPLE SYSTEM", "EXAMPLE-CONSOLE", "192.0.2.40", "1000001", "1000002",
+                     "DEMO_ONLY", "example-aliases", "Zone Alpha", "Dispatch Primary", "101",
+                     "0x001", "#112233", "#445566", "Example Stream", "audio.example",
+                     "#778899", "Example Patch"
+                 })
+        {
+            Assert.DoesNotContain(sentinel, exported, StringComparison.OrdinalIgnoreCase);
+        }
+
+        ConfigurationDocument reparsed = ConfigurationDocument.Parse(exported);
+        Assert.DoesNotContain(reparsed.Validate(), issue => issue.IsError);
+        Assert.Equal("System 1", reparsed.Configuration.Systems[0].Name);
+        Assert.Equal("Zone 1", reparsed.Configuration.Zones[0].Name);
+        Assert.Equal(
+            reparsed.Configuration.Zones[0].Channels[0].Tgid,
+            reparsed.Configuration.Zones[0].Channels[1].Tgid);
     }
 
     [Fact]

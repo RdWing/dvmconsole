@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -13,6 +16,7 @@ using DvmConsole.Application;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Operations;
 using DvmConsole.Presentation;
+using Markdown.Avalonia;
 using System.Windows.Input;
 using Xunit;
 
@@ -20,6 +24,29 @@ namespace DvmConsole.Desktop.RenderTests;
 
 public sealed class PresentationRenderTests
 {
+    [AvaloniaFact]
+    public void PackagedDocumentationViewerLoadsWithTheMinimalMarkdownDependencyGraph()
+    {
+        var window = new DocumentationWindow();
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+
+            MarkdownScrollViewer viewer = Assert.Single(
+                window.GetVisualDescendants().OfType<MarkdownScrollViewer>());
+            Assert.False(string.IsNullOrWhiteSpace(viewer.Markdown));
+            Assert.DoesNotContain(
+                "Documentation unavailable",
+                viewer.Markdown,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     [AvaloniaTheory]
     [InlineData(880, false)]
     [InlineData(390, true)]
@@ -170,11 +197,28 @@ public sealed class PresentationRenderTests
     }
 
     [AvaloniaTheory]
-    [InlineData(880)]
-    [InlineData(600)]
-    [InlineData(599)]
-    [InlineData(390)]
-    public async Task VirtualizedListHasNoHorizontalOverflowAtOnePointFiveUiScale(double width)
+    [InlineData(360, 1.0)]
+    [InlineData(360, 1.5)]
+    [InlineData(360, 2.0)]
+    [InlineData(390, 1.0)]
+    [InlineData(390, 1.5)]
+    [InlineData(390, 2.0)]
+    [InlineData(599, 1.0)]
+    [InlineData(599, 1.5)]
+    [InlineData(599, 2.0)]
+    [InlineData(600, 1.0)]
+    [InlineData(600, 1.5)]
+    [InlineData(600, 2.0)]
+    [InlineData(880, 1.0)]
+    [InlineData(880, 1.5)]
+    [InlineData(880, 2.0)]
+    [InlineData(1180, 1.0)]
+    [InlineData(1180, 1.5)]
+    [InlineData(1180, 2.0)]
+    [InlineData(1488, 1.0)]
+    [InlineData(1488, 1.5)]
+    [InlineData(1488, 2.0)]
+    public async Task VirtualizedListHasNoHorizontalOverflowAtSupportedUiScales(double width, double scale)
     {
         await using ConsoleApplicationSession session = CreateSession(channelCount: 34);
         await using var ptt = new ChannelPttController(
@@ -184,7 +228,7 @@ public sealed class PresentationRenderTests
         list.Attach(session, ptt);
         var scaled = new LayoutTransformControl
         {
-            LayoutTransform = new ScaleTransform(1.5, 1.5),
+            LayoutTransform = new ScaleTransform(scale, scale),
             Child = list
         };
         var host = new Window { Width = width, Height = 760, Content = scaled };
@@ -405,7 +449,7 @@ public sealed class PresentationRenderTests
     }
 
     [AvaloniaFact]
-    public async Task ListGroupsChannelsAndClipsTheMeterAtFixedColorThresholds()
+    public async Task ListGroupsChannelsAndUsesOneRenderOnlyMeterAtFixedColorThresholds()
     {
         await using ConsoleApplicationSession session = CreateSession(channelCount: 4);
         await using var ptt = new ChannelPttController(
@@ -445,6 +489,7 @@ public sealed class PresentationRenderTests
             Assert.Equal(1, volume.Maximum);
             Assert.Equal(0, volume.NeutralValue);
             Assert.Equal(0, volume.Value);
+            AssertHorizontalSliderTrackIsCentered(volume);
 
             string[] visibleText = list.GetVisualDescendants().OfType<TextBlock>()
                 .Where(text => text.IsEffectivelyVisible)
@@ -457,12 +502,16 @@ public sealed class PresentationRenderTests
             Assert.DoesNotContain("Authority available", visibleText);
             Assert.DoesNotContain("Authority pending", visibleText);
 
-            Border clip = list.GetVisualDescendants().OfType<Border>()
-                .First(border => border.Classes.Contains("list-meter-fill-clip"));
-            Border gradient = Assert.IsType<Border>(clip.Child);
-            Assert.Contains("list-meter-gradient", gradient.Classes);
-            Assert.Equal(50, clip.Bounds.Width, precision: 1);
-            Assert.Equal(100, gradient.Bounds.Width, precision: 1);
+            AudioLevelMeter meter = Assert.Single(
+                list.GetVisualDescendants().OfType<AudioLevelMeter>(),
+                candidate => ReferenceEquals(candidate.DataContext, model.Items[0]));
+            Assert.Equal(100, meter.Bounds.Width, precision: 1);
+            Assert.Equal(new AudioMeterState(50, 65), meter.Meter);
+            Assert.False(meter.ColorizePeak);
+            Assert.Equal(Color.Parse("#F5F7FA"), AudioLevelMeter.GetPeakColor(75.99, colorize: true));
+            Assert.Equal(Color.Parse("#F2B134"), AudioLevelMeter.GetPeakColor(76, colorize: true));
+            Assert.Equal(Color.Parse("#E5484D"), AudioLevelMeter.GetPeakColor(88, colorize: true));
+            Assert.Equal(Color.Parse("#F5F7FA"), AudioLevelMeter.GetPeakColor(100, colorize: false));
         }
         finally
         {
@@ -488,6 +537,7 @@ public sealed class PresentationRenderTests
         try
         {
             host.Show();
+            host.UpdateLayout();
             slider.Focus();
             slider.RaiseEvent(new KeyEventArgs
             {
@@ -503,6 +553,107 @@ public sealed class PresentationRenderTests
         {
             host.Close();
         }
+    }
+
+    [AvaloniaFact]
+    public void ChannelCardSliderTrackAndThumbAreCenteredAndFullyVisible()
+    {
+        var card = new ChannelCardContent();
+        var host = new Window { Width = 352, Height = 165, Content = card };
+
+        try
+        {
+            host.Show();
+            host.UpdateLayout();
+
+            NeutralSnapSlider slider = Assert.Single(
+                card.GetVisualDescendants().OfType<NeutralSnapSlider>());
+            AssertHorizontalSliderTrackIsCentered(slider);
+        }
+        finally
+        {
+            host.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task ListUpdatesOnlyChangedPropertiesAndSuspendsHiddenPresentation()
+    {
+        await using ConsoleApplicationSession session = CreateSession(500);
+        await using var ptt = new ChannelPttController(
+            static (_, _) => ValueTask.FromResult(true), static (_, _) => ValueTask.CompletedTask);
+        await using var model = new ConsoleListViewModel(session, ptt);
+        var notifications = new List<(ChannelId, string)>();
+        foreach (ChannelListItemViewModel item in model.Items)
+            item.PropertyChanged += (_, e) => notifications.Add((item.Id, e.PropertyName ?? string.Empty));
+        ChannelId id = model.Items[0].Id;
+        var channels = session.Snapshot.Channels.ToDictionary(pair => pair.Key, pair => pair.Value);
+        channels[id] = channels[id] with { Gain = 0.5 };
+        session.PublishSnapshot(session.Snapshot with { Channels = channels });
+        Assert.Equal(new[] { (id, nameof(ChannelListItemViewModel.VolumeText)),
+            (id, nameof(ChannelListItemViewModel.VolumeSliderValue)) }, notifications);
+        notifications.Clear();
+        session.PublishSnapshot(session.Snapshot with { StatusText = "Updated status" });
+        session.PublishSnapshot(session.Snapshot);
+        Assert.Empty(notifications);
+        model.Items[0].ToggleExpansion();
+        notifications.Clear();
+        model.SetPresentationActive(false);
+        channels = channels.ToDictionary(pair => pair.Key, pair => pair.Value);
+        channels[id] = channels[id] with { Gain = 0.75 };
+        session.PublishSnapshot(session.Snapshot with { Channels = channels });
+        session.PublishMeterSample(new ChannelMeterSample(id, 50, 65, DateTimeOffset.UtcNow));
+        await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+        Assert.Empty(notifications);
+        model.SetPresentationActive(true);
+        Assert.Equal("Volume 0.75×", model.Items[0].VolumeText);
+        Assert.True(model.Items[0].IsExpanded);
+        Assert.Equal(2, notifications.Count);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ListKeyboardDisclosureAndPttIgnoreRepeatedKeyDown(bool toggle)
+    {
+        var commands = new RecordingConsoleCommands();
+        await using ConsoleApplicationSession session = CreateSession(1, commands);
+        await using var ptt = new ChannelPttController(commands.BeginPttAsync, commands.EndPttAsync);
+        var list = new ChannelListView();
+        list.Attach(session, ptt, () => toggle);
+        var host = new Window { Width = 880, Height = 500, Content = list };
+        try
+        {
+            host.Show();
+            host.UpdateLayout();
+            var model = Assert.IsType<ConsoleListViewModel>(list.DataContext);
+            Button title = Assert.Single(list.GetVisualDescendants().OfType<Button>(),
+                button => button.Classes.Contains("row-disclosure"));
+            Assert.Single(list.GetVisualDescendants().OfType<Button>(),
+                button => button.Classes.Contains("list-rx")).Focus();
+            host.KeyPressQwerty(PhysicalKey.Tab, RawInputModifiers.None);
+            host.KeyReleaseQwerty(PhysicalKey.Tab, RawInputModifiers.None);
+            Assert.True(title.IsFocused, $"Focus after Tab: {host.FocusManager?.GetFocusedElement()} {string.Join(",", (host.FocusManager?.GetFocusedElement() as Control)?.Classes ?? [])}");
+            Assert.NotEqual(Colors.Transparent, Assert.IsAssignableFrom<ISolidColorBrush>(title.BorderBrush).Color);
+            host.KeyPressQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+            host.KeyReleaseQwerty(PhysicalKey.Enter, RawInputModifiers.None);
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            Assert.True(model.Items[0].IsExpanded);
+            Button button = FindListPttButton(list);
+            host.KeyPressQwerty(PhysicalKey.Tab, RawInputModifiers.None);
+            host.KeyReleaseQwerty(PhysicalKey.Tab, RawInputModifiers.None);
+            Assert.True(button.IsFocused, $"Focus after Tab: {host.FocusManager?.GetFocusedElement()} {string.Join(",", (host.FocusManager?.GetFocusedElement() as Control)?.Classes ?? [])}");
+            host.KeyPressQwerty(PhysicalKey.Space, RawInputModifiers.None);
+            host.KeyPressQwerty(PhysicalKey.Space, RawInputModifiers.None);
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            Assert.Equal(1, commands.PttStarts);
+            Assert.Equal(0, commands.PttStops);
+            host.KeyReleaseQwerty(PhysicalKey.Space, RawInputModifiers.None);
+            title.Focus();
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            Assert.Equal(toggle ? 0 : 1, commands.PttStops);
+        }
+        finally { await list.DetachAsync(); host.Close(); }
     }
 
     [AvaloniaFact]
@@ -522,14 +673,15 @@ public sealed class PresentationRenderTests
         session.PublishMeterSample(new ChannelMeterSample(channelId, 50, 60, DateTimeOffset.UtcNow));
         await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
 
-        Assert.Equal(3, propertyChanges);
+        Assert.Equal(1, propertyChanges);
         Assert.Equal(50, model.Items[0].MeterRmsWidth);
         await model.DisposeAsync();
     }
 
     [AvaloniaTheory]
+    [InlineData(1180, false)]
     [InlineData(880, false)]
-    [InlineData(599, true)]
+    [InlineData(719, true)]
     [InlineData(390, false)]
     [InlineData(360, true)]
     public void SharedHistoryPageWrapsWithoutHorizontalOverflow(double width, bool dark)
@@ -569,16 +721,39 @@ public sealed class PresentationRenderTests
             WrapPanel actions = Assert.Single(
                 history.GetVisualDescendants().OfType<WrapPanel>(),
                 panel => panel.Classes.Contains("history-actions"));
-            Grid row = Assert.IsType<Grid>(actions.Parent);
-            if (width >= 600)
+            ResponsiveCallHistoryRow row = Assert.IsType<ResponsiveCallHistoryRow>(actions.Parent);
+            Grid wideDetails = Assert.Single(
+                row.GetVisualDescendants().OfType<Grid>(),
+                grid => grid.Classes.Contains("history-wide-details"));
+            WrapPanel narrowDetails = Assert.Single(
+                row.GetVisualDescendants().OfType<WrapPanel>(),
+                panel => panel.Classes.Contains("history-narrow-details"));
+            if (width >= 720)
             {
                 Assert.Equal(2, Grid.GetColumn(actions));
                 Assert.True(actions.Bounds.Right <= row.Bounds.Width + 1);
+                Assert.True(wideDetails.IsEffectivelyVisible);
+                Assert.False(narrowDetails.IsEffectivelyVisible);
+                TextBlock encryption = Assert.Single(
+                    wideDetails.GetVisualDescendants().OfType<TextBlock>(),
+                    text => text.Classes.Contains("history-encryption"));
+                TextBlock duration = Assert.Single(
+                    wideDetails.GetVisualDescendants().OfType<TextBlock>(),
+                    text => text.Classes.Contains("history-duration"));
+                Assert.True(
+                    encryption.Bounds.Left >= duration.Bounds.Right,
+                    $"History encryption did not follow duration at {width} logical pixels.");
+                Assert.True(
+                    encryption.TranslatePoint(default, row)!.Value.X + encryption.Bounds.Width <=
+                    actions.TranslatePoint(default, row)!.Value.X,
+                    $"History metadata overlapped recording actions at {width} logical pixels.");
             }
             else
             {
                 Assert.Equal(3, Grid.GetRow(actions));
                 Assert.Equal(0, Grid.GetColumn(actions));
+                Assert.False(wideDetails.IsEffectivelyVisible);
+                Assert.True(narrowDetails.IsEffectivelyVisible);
             }
             Assert.All(
                 history.GetVisualDescendants().OfType<Button>()
@@ -628,14 +803,86 @@ public sealed class PresentationRenderTests
             Assert.Equal(0m, audio.FindControl<NumericUpDown>("MicrophoneMidGain")!.Value);
             Assert.Equal(-1m, audio.FindControl<NumericUpDown>("MicrophoneHighGain")!.Value);
             Assert.Equal(-25m, audio.FindControl<NumericUpDown>("MicrophoneAgcTarget")!.Value);
+            Border[] processingRows = audio.GetVisualDescendants().OfType<Border>()
+                .Where(border => border.Classes.Contains("rx-processing-mode-row"))
+                .ToArray();
+            Assert.Equal(2, processingRows.Length);
+            Assert.All(
+                processingRows,
+                row => Assert.True(
+                    row.Bounds.Right <= audio.Bounds.Width + 1,
+                    $"RX processing row exceeded the page width at {width} logical pixels."));
+            string[] processingLabels = processingRows
+                .SelectMany(row => row.GetVisualDescendants().OfType<TextBlock>())
+                .Select(text => text.Text ?? string.Empty)
+                .ToArray();
+            Assert.Contains(":1", processingLabels);
+            Assert.Contains("dBFS", processingLabels);
+            Assert.All(
+                processingRows,
+                row => Assert.Equal(6, row.GetVisualDescendants().OfType<NumericUpDown>().Count()));
+            Assert.All(
+                processingRows.SelectMany(row => row.GetVisualDescendants().OfType<NumericUpDown>()),
+                input =>
+                {
+                    Assert.False(input.ShowButtonSpinner);
+                    Assert.True(
+                        input.Bounds.Height <= 32,
+                        $"RX processing input was unexpectedly tall at {input.Bounds.Height} pixels.");
+                });
             if (width >= 880)
             {
+                Assert.All(
+                    processingRows,
+                    row => Assert.True(
+                        row.Bounds.Height <= 110,
+                        $"Desktop RX processing row was unexpectedly tall at {row.Bounds.Height} pixels."));
                 Border[] routeRows = audio.GetVisualDescendants().OfType<Border>()
                     .Where(border => border.Classes.Contains("audio-route-row"))
                     .ToArray();
                 Assert.NotEmpty(routeRows);
-                Assert.All(routeRows, routeRow => Assert.True(routeRow.Bounds.Height <= 60,
+                Slider[] routeSliders = routeRows
+                    .SelectMany(row => row.GetVisualDescendants().OfType<Slider>())
+                    .ToArray();
+                Assert.NotEmpty(routeSliders);
+                Assert.All(routeSliders, slider =>
+                {
+                    Assert.Equal(160, slider.Bounds.Width);
+                    Assert.Equal(32, slider.Bounds.Height);
+                    AssertHorizontalSliderTrackIsCentered(slider);
+                });
+                foreach (Border routeRow in routeRows)
+                {
+                    Slider slider = Assert.Single(routeRow.GetVisualDescendants().OfType<Slider>());
+                    Thumb thumb = Assert.Single(slider.GetVisualDescendants().OfType<Thumb>());
+                    Point sliderOrigin = Assert.NotNull(slider.TranslatePoint(default, routeRow));
+                    Point thumbOrigin = Assert.NotNull(thumb.TranslatePoint(default, routeRow));
+                    double rowCenter = routeRow.Bounds.Height / 2;
+                    double sliderCenter = sliderOrigin.Y + (slider.Bounds.Height / 2);
+                    double thumbCenter = thumbOrigin.Y + (thumb.Bounds.Height / 2);
+                    Assert.True(
+                        Math.Abs(rowCenter - sliderCenter) <= 1,
+                        $"Route slider center {sliderCenter} did not match row center {rowCenter}.");
+                    Assert.True(
+                        Math.Abs(rowCenter - thumbCenter) <= 1,
+                        $"Route thumb center {thumbCenter} did not match row center {rowCenter}.");
+                    Assert.True(
+                        thumbOrigin.Y >= 1 && thumbOrigin.Y + thumb.Bounds.Height <= routeRow.Bounds.Height - 1,
+                        $"Route thumb occupied {thumbOrigin.Y}..{thumbOrigin.Y + thumb.Bounds.Height} " +
+                        $"inside the {routeRow.Bounds.Height}-pixel row.");
+                }
+                Assert.All(
+                    routeRows.SelectMany(row => row.GetVisualDescendants().OfType<Control>())
+                        .Where(control => control.GetType() == typeof(Button) || control is ComboBox),
+                    control => Assert.Equal(32, control.Bounds.Height));
+                Assert.All(routeRows, routeRow => Assert.True(routeRow.Bounds.Height <= 38,
                     $"Desktop audio route row was unexpectedly tall at {routeRow.Bounds.Height} pixels."));
+                Border[] presetRows = audio.GetVisualDescendants().OfType<Border>()
+                    .Where(border => border.Classes.Contains("audio-preset-row"))
+                    .ToArray();
+                Assert.NotEmpty(presetRows);
+                Assert.All(presetRows, presetRow => Assert.True(presetRow.Bounds.Height <= 36,
+                    $"Desktop microphone preset row was unexpectedly tall at {presetRow.Bounds.Height} pixels."));
             }
             Assert.All(
                 audio.GetVisualDescendants().OfType<Button>()
@@ -677,6 +924,15 @@ public sealed class PresentationRenderTests
                 scroller.Extent.Width <= scroller.Viewport.Width + 1,
                 $"General settings extent {scroller.Extent.Width} exceeded viewport {scroller.Viewport.Width} at {width} logical pixels.");
             Assert.Equal(4, general.GetVisualDescendants().OfType<ComboBox>().Count());
+            Slider[] sliders = general.GetVisualDescendants().OfType<Slider>().ToArray();
+            Assert.Equal(2, sliders.Length);
+            Assert.All(
+                sliders,
+                slider =>
+                {
+                    Assert.Equal(width < 400 ? 44 : 32, slider.Bounds.Height);
+                    AssertHorizontalSliderTrackIsCentered(slider);
+                });
             Assert.All(
                 general.GetVisualDescendants().OfType<Button>()
                     .Where(button => button.GetType() == typeof(Button)),
@@ -698,6 +954,35 @@ public sealed class PresentationRenderTests
         finally
         {
             host.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void AboutWindowFitsItsAttributionWithoutGrowingTheDefaultWindow()
+    {
+        var window = new AboutWindow();
+
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+
+            Assert.Equal(560, window.Bounds.Width);
+            Assert.Equal(450, window.Bounds.Height);
+            ScrollViewer attributionScroller = Assert.Single(
+                window.GetVisualDescendants().OfType<ScrollViewer>());
+            Assert.True(
+                attributionScroller.Extent.Height <= attributionScroller.Viewport.Height + 1,
+                $"About attribution extent {attributionScroller.Extent.Height} exceeded its " +
+                $"{attributionScroller.Viewport.Height}-pixel viewport.");
+            Button close = Assert.Single(
+                window.GetVisualDescendants().OfType<Button>(),
+                button => string.Equals(button.Content as string, "Close", StringComparison.Ordinal));
+            Assert.True(close.Bounds.Height > 0);
+        }
+        finally
+        {
+            window.Close();
         }
     }
 
@@ -738,6 +1023,9 @@ public sealed class PresentationRenderTests
             Assert.NotEmpty(interactive);
             Assert.All(interactive, control =>
                 Assert.False(string.IsNullOrWhiteSpace(AutomationProperties.GetName(control))));
+            Assert.All(
+                streams.GetVisualDescendants().OfType<Slider>(),
+                AssertHorizontalSliderTrackIsCentered);
 
             if (width < 400)
             {
@@ -1054,9 +1342,10 @@ public sealed class PresentationRenderTests
     [InlineData(360, true)]
     public void SharedConnectionsPageWrapsAndRevealsKeyStatusWithoutHorizontalOverflow(double width, bool dark)
     {
+        var viewModel = new TestConnectionsSettingsViewModel();
         var connections = new ConnectionsSettingsView
         {
-            DataContext = new TestConnectionsSettingsViewModel()
+            DataContext = viewModel
         };
         var host = new Window
         {
@@ -1076,9 +1365,17 @@ public sealed class PresentationRenderTests
                 $"Connections extent {scroller.Extent.Width} exceeded viewport {scroller.Viewport.Width} at {width} logical pixels.");
             Assert.True(connections.TryBringKeyStatusIntoView());
             Assert.True(scroller.Offset.Y > 0);
+            CheckBox strictDmrKeyMatch = Assert.Single(
+                connections.GetVisualDescendants().OfType<CheckBox>(),
+                checkBox => AutomationProperties.GetName(checkBox) ==
+                    "Require channel key match for DMR receive");
+            strictDmrKeyMatch.IsChecked = true;
+            Assert.True(viewModel.RequireConfiguredDmrReceiveKey);
             Control[] interactive = connections.GetVisualDescendants().OfType<Control>()
                 .Where(control => control.IsEffectivelyVisible)
-                .Where(control => control.GetType() == typeof(Button) || control is ComboBox)
+                .Where(control =>
+                    control.GetType() == typeof(Button) ||
+                    control is ComboBox or CheckBox)
                 .ToArray();
             Assert.NotEmpty(interactive);
             Assert.All(interactive, control =>
@@ -1155,6 +1452,28 @@ public sealed class PresentationRenderTests
         => Assert.Single(
             list.GetVisualDescendants().OfType<Button>(),
             button => button.Classes.Contains("ptt"));
+
+    private static void AssertHorizontalSliderTrackIsCentered(Slider slider)
+    {
+        Track track = Assert.Single(slider.GetVisualDescendants().OfType<Track>());
+        Thumb thumb = Assert.Single(slider.GetVisualDescendants().OfType<Thumb>());
+        Point trackOrigin = Assert.NotNull(track.TranslatePoint(default, slider));
+        Point thumbOrigin = Assert.NotNull(thumb.TranslatePoint(default, slider));
+        double sliderCenter = slider.Bounds.Height / 2;
+        double trackCenter = trackOrigin.Y + (track.Bounds.Height / 2);
+        double thumbCenter = thumbOrigin.Y + (thumb.Bounds.Height / 2);
+
+        Assert.True(
+            Math.Abs(sliderCenter - trackCenter) <= 1,
+            $"Slider track center {trackCenter} did not match control center {sliderCenter}.");
+        Assert.True(
+            Math.Abs(sliderCenter - thumbCenter) <= 1,
+            $"Slider thumb center {thumbCenter} did not match control center {sliderCenter}.");
+        Assert.True(
+            thumbOrigin.Y >= 1 && thumbOrigin.Y + thumb.Bounds.Height <= slider.Bounds.Height - 1,
+            $"Slider thumb occupied {thumbOrigin.Y}..{thumbOrigin.Y + thumb.Bounds.Height} " +
+            $"inside the {slider.Bounds.Height}-pixel control.");
+    }
 
     private static ConsoleApplicationSession CreateSession(
         int channelCount,
@@ -1322,7 +1641,14 @@ public sealed class PresentationRenderTests
         bool HasRecording,
         bool HasPlayableRecording,
         string RecordingFileName,
-        string RecordingDetailsText) : ICallHistoryItemViewModel;
+        string RecordingDetailsText) : ICallHistoryItemViewModel
+    {
+        public bool IsRecordingPlaying => false;
+        public string RecordingPlaybackActionText => "Play";
+        public string RecordingPlaybackHelpText => HasPlayableRecording
+            ? "Play this validated TAR recording"
+            : "Playback is unavailable because the TAR recording is missing or invalid";
+    }
 
     private sealed class TestAudioSettingsViewModel : IAudioSettingsViewModel
     {
@@ -1361,8 +1687,7 @@ public sealed class PresentationRenderTests
         public bool IsMicrophonePermissionRequestAvailable => true;
         public System.Collections.IEnumerable RxAudioProcessingModes => Modes;
         public ICommand ApplyRxAudioProcessingOptionsCommand => NoOp;
-        public bool IsAppleVoiceProcessingPlatformAvailable => false;
-        public IReadOnlyList<string> AudioProcessingModeOptions => ["DVM Console processing", "Apple Voice Processing"];
+        public IReadOnlyList<string> AudioProcessingModeOptions => ["DVM Console processing"];
         public string SelectedAudioProcessingMode { get; set; } = "DVM Console processing";
         public string AudioProcessingDescription => "Portable microphone processing with operator-controlled gain and equalization.";
         public bool IsDvmConsoleProcessingSelected => true;
@@ -1377,6 +1702,9 @@ public sealed class PresentationRenderTests
         public ICommand ApplyAudioInputSettingsCommand => NoOp;
         public string AudioInputPresetNameText { get; set; } = "Dispatch microphone";
         public System.Collections.IEnumerable AudioInputPresets => Presets;
+        public string AudioInputPresetFilterText { get; set; } = string.Empty;
+        public bool IsAudioInputPresetFilterVisible => false;
+        public System.Collections.IEnumerable FilteredAudioInputPresets => Presets;
         public System.Collections.IEnumerable AudioRouteSystems => RouteSystems;
     }
 
@@ -1564,6 +1892,10 @@ public sealed class PresentationRenderTests
 
     private sealed class TestToneSettingsViewModel : IToneSettingsViewModel
     {
+        public string AlertTargetSummary => "ALERT: 2 armed";
+        public string AlertTargetDetails => "Regional / Dispatch\nRegional / Fire";
+        public string PageTargetSummary => "PAGE: 1 armed";
+        public string PageTargetDetails => "Regional / Dispatch";
         private static readonly IDtmfPresetViewModel[] DtmfPresetItems =
         [
             new TestDtmfPreset("Regional paging access: 1/0.25s 2/0.25s hold/0.5s")
@@ -1592,15 +1924,24 @@ public sealed class PresentationRenderTests
         public ICommand SendDtmfCommand { get; } = new TestCommand();
         public ICommand SaveDtmfPresetCommand { get; } = new TestCommand();
         public System.Collections.IEnumerable DtmfPresets => DtmfPresetItems;
+        public string DtmfPresetFilterText { get; set; } = string.Empty;
+        public bool IsDtmfPresetFilterVisible => false;
+        public System.Collections.IEnumerable FilteredDtmfPresets => DtmfPresetItems;
         public System.Collections.IEnumerable ToneSequenceSteps => ToneSteps;
         public string TonePresetName { get; set; } = "Station alert";
         public ICommand SendToneCommand { get; } = new TestCommand();
         public ICommand SaveTonePresetCommand { get; } = new TestCommand();
         public System.Collections.IEnumerable TonePresets => TonePresetItems;
+        public string TonePresetFilterText { get; set; } = string.Empty;
+        public bool IsTonePresetFilterVisible => false;
+        public System.Collections.IEnumerable FilteredTonePresets => TonePresetItems;
         public string QuickCallToneAText { get; set; } = "600";
         public string QuickCallToneBText { get; set; } = "900";
         public string AlertToneNameText { get; set; } = "Evacuation announcement";
         public System.Collections.IEnumerable AlertTones => AlertItems;
+        public string AlertToneFilterText { get; set; } = string.Empty;
+        public bool IsAlertToneFilterVisible => false;
+        public System.Collections.IEnumerable FilteredAlertTones => AlertItems;
     }
 
     private sealed record TestDtmfPreset(string DisplayText) : IDtmfPresetViewModel;
@@ -1714,6 +2055,7 @@ public sealed class PresentationRenderTests
 
         public System.Collections.IEnumerable ConnectionSystems => Systems;
         public System.Collections.IEnumerable KeyStatusItems => Keys;
+        public bool RequireConfiguredDmrReceiveKey { get; set; }
     }
 
     private sealed class TestConnectionSystem : IConnectionSystemViewModel

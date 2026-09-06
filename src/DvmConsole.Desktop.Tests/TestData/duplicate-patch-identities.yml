@@ -1,16 +1,16 @@
 systems:
   - name: "Source FNE"
     identity: "Source Console"
-    address: "127.0.0.1"
+    address: "192.0.2.10"
     port: 62031
-    peerId: 1000001
-    rid: "3222223"
+    peerId: 1001
+    rid: "1200001"
   - name: "Destination FNE"
     identity: "Destination Console"
-    address: "127.0.0.2"
+    address: "192.0.2.20"
     port: 62032
-    peerId: 1000002
-    rid: "890"
+    peerId: 1002
+    rid: "1200002"
 
 groups:
   - name: "Cross Mode"
@@ -21,7 +21,7 @@ zones:
     channels:
       - name: "P25 Source"
         system: "Source FNE"
-        tgid: "747"
+        tgid: "3101"
         mode: "p25"
       - name: "P25 99"
         system: "Destination FNE"

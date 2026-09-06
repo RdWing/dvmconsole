@@ -1,5 +1,7 @@
-#nullable enable
+// SPDX-FileCopyrightText: 2025-2026 RdWing
 // SPDX-License-Identifier: AGPL-3.0-only
+
+#nullable enable
 
 namespace fnecore;
 
@@ -117,12 +119,21 @@ internal static class FneInboundFramePolicy
         return true;
     }
 
+    public static bool IsApplicationOwnedTalkgroupAnnouncement(ReadOnlySpan<byte> message)
+        => message.Length >= HeaderLength &&
+           message[18] == Constants.NET_FUNC_MASTER &&
+           message[19] is Constants.NET_MASTER_SUBFUNC_ACTIVE_TGS or
+               Constants.NET_MASTER_SUBFUNC_DEACTIVE_TGS;
+
     private static bool HasSafeTalkgroupPayload(ReadOnlySpan<byte> payload)
     {
+        const uint maximumTrackedTalkgroups = 4096;
         if (payload.Length < 11)
             return false;
 
         uint entries = ReadUInt32(payload.Slice(6, 4));
+        if (entries > maximumTrackedTalkgroups)
+            return false;
         ulong requiredLength = 11UL + (ulong)entries * 5UL;
         return requiredLength <= (ulong)payload.Length;
     }

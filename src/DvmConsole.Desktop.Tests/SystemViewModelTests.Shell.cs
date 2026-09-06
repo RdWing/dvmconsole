@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Media;
 using DvmConsole.Core.Settings;
 using DvmConsole.Desktop;
@@ -34,24 +37,6 @@ public sealed partial class SystemViewModelTests
         {
             CleanupSettingsPath(settingsPath);
         }
-    }
-
-    [Theory]
-    [InlineData("duplex", true, "duplex", false, true)]
-    [InlineData("input-default", true, "output-default", true, true)]
-    [InlineData("input", false, "output", false, false)]
-    [InlineData("input-default", true, "output", false, false)]
-    public void IdentifiesAppleVoiceProcessingCompatibleDevicePairs(
-        string inputId,
-        bool inputIsDefault,
-        string outputId,
-        bool outputIsDefault,
-        bool expected)
-    {
-        var input = new AudioDeviceOptionViewModel(inputId, "Input", inputIsDefault);
-        var output = new AudioDeviceOptionViewModel(outputId, "Output", outputIsDefault);
-
-        Assert.Equal(expected, MainWindowViewModel.IsAppleVoiceProcessingDevicePairCompatible(input, output));
     }
 
     [Fact]
@@ -131,7 +116,7 @@ public sealed partial class SystemViewModelTests
 
     [Fact]
     public void ReportsUnreleasedSemanticVersion()
-        => Assert.StartsWith("0.6.2", MainWindow.ApplicationVersion, StringComparison.Ordinal);
+        => Assert.StartsWith("0.7.0", MainWindow.ApplicationVersion, StringComparison.Ordinal);
 
     [Theory]
     [InlineData("0.1.0-alpha.1+abcdef123456", "0.1.0-alpha.1 (abcdef1)")]

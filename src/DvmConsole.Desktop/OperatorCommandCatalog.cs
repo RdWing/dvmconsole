@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Desktop;
 
 internal static class OperatorCommandIds
@@ -36,6 +39,20 @@ internal sealed class OperatorCommandDefinition
     }
 
     public string Id { get; }
+
+    public static OperatorCommandDefinition BindCurrent<TTarget>(
+        string id,
+        Func<TTarget> getTarget,
+        Func<TTarget, Task> executeAsync,
+        Func<TTarget, bool>? canExecute = null)
+    {
+        ArgumentNullException.ThrowIfNull(getTarget);
+        ArgumentNullException.ThrowIfNull(executeAsync);
+        return new OperatorCommandDefinition(
+            id,
+            () => executeAsync(getTarget()),
+            canExecute is null ? null : () => canExecute(getTarget()));
+    }
 
     public Task ExecuteAsync()
         => canExecute() ? executeAsync() : Task.CompletedTask;

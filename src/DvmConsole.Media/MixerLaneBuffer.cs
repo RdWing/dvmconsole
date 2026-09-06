@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Media;
 
 internal sealed class MixerLaneBuffer(
@@ -10,6 +13,7 @@ internal sealed class MixerLaneBuffer(
     public string DiagnosticLabel { get; } = diagnosticLabel;
     public MixerLaneDiagnosticsAccumulator Diagnostics { get; } = diagnostics;
     public Queue<short[]> Frames { get; } = [];
+    public Queue<short[]> ReusableFrames { get; } = [];
     public short[] PartialFrame { get; set; } = new short[frameSamples];
     public int PartialCount { get; set; }
     public double Gain { get; set; } = 1.0;
@@ -25,6 +29,7 @@ internal sealed class MixerLaneBuffer(
     public long PresentedGapSamples { get; set; }
     public Action<ReadOnlyMemory<short>, TimeSpan>? PresentationObserver { get; set; }
     public Action<int, TimeSpan>? FrameHandedOff { get; set; }
+    public Action<short[]>? FrameReleased { get; set; }
     public long AcceptedSamples { get; set; }
     public long HandedOffSamples { get; set; }
     public long DrainedSamples { get; set; }

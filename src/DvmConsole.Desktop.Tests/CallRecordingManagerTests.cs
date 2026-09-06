@@ -1,11 +1,16 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Audio;
+using DvmConsole.Application;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
 using fnecore.DMR;
+using System.Buffers;
 using System.Text.Json;
 using Xunit;
 
@@ -13,6 +18,362 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class CallRecordingManagerTests
 {
+    [Fact]
+    public async Task CaptureStateDoesNotWaitForTheRecordingWorker()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-tests",
+            Guid.NewGuid().ToString("N"));
+        using var workerEntered = new ManualResetEventSlim();
+        using var releaseWorker = new ManualResetEventSlim();
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        channel.SetRecordingEnabled(true);
+        var manager = new CallRecordingManager(
+            root,
+            faultHandler: null,
+            retentionDays: CallRecordingManager.DefaultRetentionDays,
+            shouldRecordSource: null,
+            resolveSubscriberAlias: (_, _) =>
+            {
+                workerEntered.Set();
+                releaseWorker.Wait();
+                return string.Empty;
+            });
+
+        try
+        {
+            manager.WriteSamples(channel, streamId: 41, sourceId: 7, ActiveSamples());
+            Assert.True(workerEntered.Wait(TimeSpan.FromSeconds(2)));
+
+            Task<IReadOnlyDictionary<ChannelId, ChannelRecordingState>> capture = Task.Run(() =>
+                manager.CaptureState([(ChannelRecordingDescriptor)channel]));
+            IReadOnlyDictionary<ChannelId, ChannelRecordingState> state =
+                await capture.WaitAsync(TimeSpan.FromSeconds(1));
+
+            Assert.True(state.ContainsKey(new ChannelId(channel.SessionId)));
+        }
+        finally
+        {
+            releaseWorker.Set();
+            await manager.DisposeAsync();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CaptureStateTracksWorkerOwnedRecordingTransitions()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-tests",
+            Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        channel.SetRecordingEnabled(true);
+        using var manager = new CallRecordingManager(root);
+        ChannelId channelId = new(channel.SessionId);
+        var finalized = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        manager.RecordingFinalized += (_, _) => finalized.TrySetResult();
+
+        try
+        {
+            manager.WriteSamples(channel, streamId: 41, sourceId: 7, ActiveSamples());
+            _ = manager.ActivePaths;
+
+            Assert.True(manager.CaptureState([(ChannelRecordingDescriptor)channel])[channelId].IsRecording);
+
+            manager.StopStream(channel, streamId: 41);
+            _ = manager.ActivePaths;
+
+            Assert.False(manager.CaptureState([(ChannelRecordingDescriptor)channel])[channelId].IsRecording);
+
+            await finalized.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(manager.CaptureState([(ChannelRecordingDescriptor)channel])[channelId].IsFinalizing);
+        }
+        finally
+        {
+            manager.Dispose();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EveryAcceptedAndRejectedSampleBufferReturnsToItsPoolExactlyOnce()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        using var workerEntered = new ManualResetEventSlim();
+        using var releaseWorker = new ManualResetEventSlim();
+        var pool = new CountingShortPool();
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        channel.SetRecordingEnabled(true);
+        var manager = new CallRecordingManager(
+            root,
+            faultHandler: null,
+            retentionDays: CallRecordingManager.DefaultRetentionDays,
+            shouldRecordSource: null,
+            resolveSubscriberAlias: (_, _) =>
+            {
+                workerEntered.Set();
+                releaseWorker.Wait();
+                return string.Empty;
+            },
+            finalizationQueueCapacity: 4,
+            finalizeRecording: null,
+            recordingWorkCapacity: 1,
+            samplePool: pool);
+        try
+        {
+            manager.WriteSamples(channel, 41, 7, ActiveSamples());
+            Assert.True(workerEntered.Wait(TimeSpan.FromSeconds(2)));
+            manager.WriteSamples(channel, 41, 7, ActiveSamples());
+            manager.WriteSamples(channel, 41, 7, ActiveSamples());
+
+            Assert.Equal(3, pool.RentCount);
+            Assert.Equal(1, pool.ReturnCount);
+
+            releaseWorker.Set();
+            await manager.DisposeAsync();
+            Assert.Equal(pool.RentCount, pool.ReturnCount);
+            Assert.Equal(pool.ReturnCount, pool.ReturnedBuffers.Distinct(ReferenceEqualityComparer.Instance).Count());
+        }
+        finally
+        {
+            releaseWorker.Set();
+            await manager.DisposeAsync();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StopControlRemainsOrderedWhenTheSampleQueueIsFull()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-recording-tests",
+            Guid.NewGuid().ToString("N"));
+        using var workerEntered = new ManualResetEventSlim();
+        using var releaseWorker = new ManualResetEventSlim();
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        channel.SetRecordingEnabled(true);
+        var manager = new CallRecordingManager(
+            root,
+            faultHandler: null,
+            retentionDays: CallRecordingManager.DefaultRetentionDays,
+            shouldRecordSource: null,
+            resolveSubscriberAlias: (_, _) =>
+            {
+                workerEntered.Set();
+                releaseWorker.Wait();
+                return string.Empty;
+            },
+            finalizationQueueCapacity: 4,
+            finalizeRecording: null,
+            recordingWorkCapacity: 1);
+
+        try
+        {
+            manager.WriteSamples(channel, streamId: 41, sourceId: 7, ActiveSamples());
+            Assert.True(workerEntered.Wait(TimeSpan.FromSeconds(2)));
+
+            manager.WriteSamples(channel, streamId: 41, sourceId: 7, ActiveSamples());
+            Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
+            manager.StopStream(channel, streamId: 41);
+
+            releaseWorker.Set();
+            Assert.True((await finalized.WaitAsync(TimeSpan.FromSeconds(5))).IsPlayable);
+            Assert.Empty(manager.ActivePaths);
+        }
+        finally
+        {
+            releaseWorker.Set();
+            await manager.DisposeAsync();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ThrowingFaultObserverCannotStopTheQueueOrLeakRejectedSamples()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        using var workerEntered = new ManualResetEventSlim();
+        using var releaseWorker = new ManualResetEventSlim();
+        var pool = new CountingShortPool();
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        channel.SetRecordingEnabled(true);
+        var manager = new CallRecordingManager(
+            root,
+            faultHandler: (_, _) => throw new InvalidOperationException("observer failed"),
+            retentionDays: CallRecordingManager.DefaultRetentionDays,
+            shouldRecordSource: null,
+            resolveSubscriberAlias: (_, _) =>
+            {
+                workerEntered.Set();
+                releaseWorker.Wait();
+                return string.Empty;
+            },
+            finalizationQueueCapacity: 4,
+            finalizeRecording: null,
+            recordingWorkCapacity: 1,
+            samplePool: pool);
+        try
+        {
+            manager.WriteSamples(channel, 41, 7, ActiveSamples());
+            Assert.True(workerEntered.Wait(TimeSpan.FromSeconds(2)));
+            manager.WriteSamples(channel, 41, 7, ActiveSamples());
+
+            Exception? escaped = Record.Exception(() =>
+                manager.WriteSamples(channel, 41, 7, ActiveSamples()));
+
+            Assert.Null(escaped);
+            releaseWorker.Set();
+            await manager.DisposeAsync();
+            Assert.Equal(pool.RentCount, pool.ReturnCount);
+        }
+        finally
+        {
+            releaseWorker.Set();
+            await manager.DisposeAsync();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SlowStorageWorkDoesNotBlockAudioProducerAndQueueOverflowIsBounded()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        using var workerEntered = new ManualResetEventSlim();
+        using var releaseWorker = new ManualResetEventSlim();
+        Exception? reported = null;
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        channel.SetRecordingEnabled(true);
+        await using var manager = new CallRecordingManager(
+            root,
+            faultHandler: (_, exception) => reported = exception,
+            retentionDays: CallRecordingManager.DefaultRetentionDays,
+            shouldRecordSource: null,
+            resolveSubscriberAlias: (_, _) =>
+            {
+                workerEntered.Set();
+                releaseWorker.Wait();
+                return string.Empty;
+            },
+            finalizationQueueCapacity: 4,
+            finalizeRecording: null,
+            recordingWorkCapacity: 1);
+
+        try
+        {
+            Task producer = Task.Run(() =>
+                manager.WriteSamples(channel, streamId: 41, sourceId: 7, ActiveSamples()));
+            await producer.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(workerEntered.Wait(TimeSpan.FromSeconds(2)));
+
+            manager.WriteSamples(channel, streamId: 41, sourceId: 7, ActiveSamples());
+            manager.WriteSamples(channel, streamId: 41, sourceId: 7, ActiveSamples());
+
+            IOException overflow = Assert.IsType<IOException>(reported);
+            Assert.Contains("bounded recording write queue is full", overflow.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            releaseWorker.Set();
+            await manager.DisposeAsync();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ShutdownDrainsAcceptedRecordingWorkBeforeDisposingStorage()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-recording-tests", Guid.NewGuid().ToString("N"));
+        using var workerEntered = new ManualResetEventSlim();
+        using var releaseWorker = new ManualResetEventSlim();
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        channel.SetRecordingEnabled(true);
+        var manager = new CallRecordingManager(
+            root,
+            faultHandler: null,
+            retentionDays: CallRecordingManager.DefaultRetentionDays,
+            shouldRecordSource: null,
+            resolveSubscriberAlias: (_, _) =>
+            {
+                workerEntered.Set();
+                releaseWorker.Wait();
+                return string.Empty;
+            },
+            finalizationQueueCapacity: 4,
+            finalizeRecording: null,
+            recordingWorkCapacity: 1);
+
+        try
+        {
+            manager.WriteSamples(channel, streamId: 41, sourceId: 7, ActiveSamples());
+            Assert.True(workerEntered.Wait(TimeSpan.FromSeconds(2)));
+
+            Task dispose = manager.DisposeAsync().AsTask();
+            Assert.False(dispose.IsCompleted);
+            releaseWorker.Set();
+            await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.NotEmpty(Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories));
+        }
+        finally
+        {
+            releaseWorker.Set();
+            await manager.DisposeAsync();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task CompletingAnotherJobDoesNotFinalizeAnActiveTransmitRecording()
     {
@@ -56,13 +417,14 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
     }
 
     [Fact]
-    public void MissingTransmitSourceIsReportedWithoutEscapingPttShutdown()
+    public async Task MissingTransmitSourceIsReportedWithoutEscapingPttShutdown()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -87,12 +449,20 @@ public sealed class CallRecordingManagerTests
             File.Delete(Assert.Single(manager.ActivePaths));
 
             manager.StopTransmit(channel);
+            await manager.DrainAcceptedWorkAsync();
 
             Assert.IsType<InvalidDataException>(reported);
             Assert.Empty(manager.ActivePaths);
+            var channelId = new ChannelId(channel.SessionId);
+            Assert.NotNull(manager.CaptureState([(ChannelRecordingDescriptor)channel])[channelId].Fault);
+            manager.WriteTransmitSamples(channel, streamId: 91, sourceId: 7, ActiveSamples());
+            await manager.DrainAcceptedWorkAsync();
+            Assert.Null(manager.CaptureState([(ChannelRecordingDescriptor)channel])[channelId].Fault);
+            await manager.DisposeAsync();
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -135,6 +505,7 @@ public sealed class CallRecordingManagerTests
                 manager.WriteSamples(channel, streamId, sourceId: 7, ActiveSamples());
                 manager.StopStream(channel, streamId);
             }
+            await manager.DrainAcceptedWorkAsync();
 
             await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.Equal(3, manager.FinalizationHealth.PendingJobs);
@@ -148,8 +519,54 @@ public sealed class CallRecordingManagerTests
         finally
         {
             release.TrySetResult();
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CancellationIgnoringFinalizerRetainsRootUntilItsActualCompletion()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvmconsole-retiring-recorder-" + Guid.NewGuid().ToString("N"));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "analog"
+        });
+        channel.SetRecordingEnabled(true);
+        var manager = new CallRecordingManager(root, null, 0, null, null, 1,
+            async (descriptor, _, _) =>
+            {
+                entered.TrySetResult();
+                await release.Task;
+                return new RecordingFinalizationResult(null, descriptor.StreamId, null, null);
+            });
+        try
+        {
+            manager.WriteSamples(channel, 42, 7, ActiveSamples());
+            manager.StopStream(channel, 42);
+            await manager.DrainAcceptedWorkAsync();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await manager.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+            using (RecordingRootLease? other = RecordingRootLease.TryAcquire(root))
+                Assert.Null(other);
+            Assert.False(manager.OwnershipReleased.IsCompleted);
+            release.SetResult();
+            await manager.OwnershipReleased.WaitAsync(TimeSpan.FromSeconds(2));
+            using RecordingRootLease? recovered = RecordingRootLease.TryAcquire(root);
+            Assert.NotNull(recovered);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await manager.DisposeAsync();
+            await manager.OwnershipReleased.WaitAsync(TimeSpan.FromSeconds(2));
+            Directory.Delete(root, true);
         }
     }
 
@@ -175,6 +592,11 @@ public sealed class CallRecordingManagerTests
             string descriptorPath = Path.ChangeExtension(wavePath, ".finalize.json");
             Assert.True(File.Exists(wavePath));
             Assert.True(File.Exists(descriptorPath));
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(wavePath));
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(descriptorPath));
+            }
             RecordingFinalizationDescriptor descriptor = JsonSerializer.Deserialize<RecordingFinalizationDescriptor>(
                 File.ReadAllText(descriptorPath))!;
             Assert.Equal(wavePath, descriptor.WavePath);
@@ -183,12 +605,16 @@ public sealed class CallRecordingManagerTests
             Task<RecordingFinalizationResult> finalized = NextFinalizationAsync(manager);
             manager.StopStream(channel, 42);
 
-            Assert.True((await finalized).IsPlayable);
+            RecordingFinalizationResult result = await finalized;
+            Assert.True(result.IsPlayable);
+            if (!OperatingSystem.IsWindows())
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(descriptor.OutputPath));
             Assert.False(File.Exists(descriptorPath));
             Assert.False(File.Exists(wavePath));
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -246,7 +672,9 @@ public sealed class CallRecordingManagerTests
             new RecordingFinalizationSpool(root).PersistCaptureSnapshot(descriptor);
 
             await using var restarted = new CallRecordingManager(root);
-            await WaitForAsync(() => File.Exists(outputPath));
+            await WaitForAsync(() => File.Exists(outputPath)
+                && !File.Exists(wavePath)
+                && Directory.GetFiles(activeDirectory, "*.finalize.json").Length == 0);
 
             CallRecordingMetadata metadata = Assert.Single(restarted.LoadRecordings());
             Assert.True(metadata.IsPlayable);
@@ -291,6 +719,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -330,6 +759,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -376,6 +806,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -445,6 +876,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -478,6 +910,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -520,6 +953,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -590,6 +1024,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -625,6 +1060,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -648,6 +1084,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -680,6 +1117,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(testRoot))
                 Directory.Delete(testRoot, recursive: true);
         }
@@ -762,6 +1200,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -803,6 +1242,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -841,6 +1281,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -899,6 +1340,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             keyRing.Dispose();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
@@ -987,6 +1429,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1029,6 +1472,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1074,6 +1518,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1120,6 +1565,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1160,6 +1606,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1200,6 +1647,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1256,6 +1704,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1281,10 +1730,11 @@ public sealed class CallRecordingManagerTests
             manager.WriteSamples(channel, new short[] { 1, 2, 3 });
 
             Assert.Empty(manager.ActivePaths);
-            Assert.False(Directory.Exists(root));
+            Assert.Empty(Directory.EnumerateFiles(root, "*.wav", SearchOption.AllDirectories));
         }
         finally
         {
+            manager.Dispose();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1344,6 +1794,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
             if (Directory.Exists(nextRoot))
@@ -1370,6 +1821,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1397,6 +1849,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            manager.Dispose();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1437,6 +1890,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            manager.Dispose();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1495,6 +1949,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            await manager.DisposeAsync();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1527,6 +1982,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            manager.Dispose();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1569,6 +2025,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            manager.Dispose();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1601,6 +2058,7 @@ public sealed class CallRecordingManagerTests
         }
         finally
         {
+            manager.Dispose();
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
@@ -1694,7 +2152,7 @@ public sealed class CallRecordingManagerTests
                 new P25DfsiFrameCodec.P25EncryptionMetadata(
                     algorithmId,
                     keyId,
-                    [1, 2, 3, 4, 5, 6, 7, 8, 9])));
+                    new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 })));
 
     private static FneTrafficFrame P25ClearTraffic(uint streamId)
         => new(
@@ -1804,6 +2262,25 @@ public sealed class CallRecordingManagerTests
             if (DateTimeOffset.UtcNow >= deadline)
                 throw new TimeoutException("Timed out waiting for resumed TAR finalization.");
             await Task.Delay(20);
+        }
+    }
+
+    private sealed class CountingShortPool : ArrayPool<short>
+    {
+        public int RentCount { get; private set; }
+        public int ReturnCount { get; private set; }
+        public List<short[]> ReturnedBuffers { get; } = [];
+
+        public override short[] Rent(int minimumLength)
+        {
+            RentCount++;
+            return new short[minimumLength];
+        }
+
+        public override void Return(short[] array, bool clearArray = false)
+        {
+            ReturnCount++;
+            ReturnedBuffers.Add(array);
         }
     }
 }

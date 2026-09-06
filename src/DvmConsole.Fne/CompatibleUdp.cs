@@ -1,5 +1,7 @@
-#nullable enable
+// SPDX-FileCopyrightText: 2025-2026 RdWing
 // SPDX-License-Identifier: AGPL-3.0-only
+
+#nullable enable
 /**
 * Digital Voice Modem - Fixed Network Equipment Core Library
 * AGPLv3 Open Source. Use is subject to license terms.
@@ -299,7 +301,10 @@ public abstract class UdpBase
                 continue;
             if (wrapped && !replayWindow.TryRemember(result.Buffer))
                 continue;
-            if (talkgroupAnnouncementObserver is not null &&
+            bool applicationOwnedTalkgroupAnnouncement =
+                FneInboundFramePolicy.IsApplicationOwnedTalkgroupAnnouncement(message);
+            if (applicationOwnedTalkgroupAnnouncement &&
+                talkgroupAnnouncementObserver is not null &&
                 FneInboundFramePolicy.TryParseValidatedTalkgroupAnnouncement(
                     message,
                     out FneTalkgroupAnnouncement? announcement))
@@ -313,6 +318,12 @@ public abstract class UdpBase
                     // Authority observation must not interrupt the protocol receiver.
                 }
             }
+
+            // NEO owns and bounds talkgroup authority in FneConnection. Do not
+            // also feed these frames to the pinned peer's historical, unbounded
+            // AnnouncedTGs list.
+            if (applicationOwnedTalkgroupAnnouncement)
+                continue;
 
             return new UdpFrame
             {
@@ -358,7 +369,10 @@ public abstract class UdpBase
         receiveCancellation.Cancel();
         client.Dispose();
         receiveCancellation.Dispose();
+        encryptionState.Dispose();
     }
+
+    public void Close() => Stop();
 
     private static UdpFrame StoppedFrame()
         => new()

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Runtime.InteropServices;
 
 namespace DvmConsole.Audio;
@@ -13,7 +16,7 @@ public enum MacOsPermissionRequestResult
 
 // Keeps macOS privacy APIs behind a platform boundary so desktop UI code does
 // not need to know about CoreGraphics or the native Core Audio shim.
-public static class MacOsPrivacyPermissionRequester
+public static partial class MacOsPrivacyPermissionRequester
 {
     private const string CoreGraphicsFramework =
         "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics";
@@ -74,11 +77,11 @@ public static class MacOsPrivacyPermissionRequester
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int RequestMicrophonePermissionDelegate();
 
-    [DllImport(CoreGraphicsFramework)]
+    [LibraryImport(CoreGraphicsFramework)]
     [return: MarshalAs(UnmanagedType.I1)]
-    private static extern bool CGPreflightListenEventAccess();
+    private static partial bool CGPreflightListenEventAccess();
 
-    [DllImport(CoreGraphicsFramework)]
+    [LibraryImport(CoreGraphicsFramework)]
     [return: MarshalAs(UnmanagedType.I1)]
-    private static extern bool CGRequestListenEventAccess();
+    private static partial bool CGRequestListenEventAccess();
 }

@@ -1,4 +1,7 @@
-using YamlDotNet.Serialization;
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
+using System.ComponentModel;
 
 namespace DvmConsole.Core.Configuration;
 
@@ -6,7 +9,6 @@ namespace DvmConsole.Core.Configuration;
 // The YAML names intentionally match the legacy configuration contract.
 public sealed class ConsoleConfiguration
 {
-    [YamlMember(Alias = "keyFile")]
     public string? KeyFile { get; set; }
 
     public List<SystemConfiguration> Systems { get; set; } = [];
@@ -15,12 +17,10 @@ public sealed class ConsoleConfiguration
 
     public List<GroupConfiguration> Groups { get; set; } = [];
 
-    [YamlMember(Alias = "patchGroups")]
     public List<GroupConfiguration> LegacyPatchGroups { get; set; } = [];
 
     public bool PatchSourceIdPassthrough { get; set; }
 
-    [YamlIgnore]
     public string? SourcePath { get; internal set; }
 
     // Resolves current and legacy group keys using the same merge semantics as
@@ -56,11 +56,25 @@ public sealed class ConsoleConfiguration
     }
 }
 
-public sealed class SystemConfiguration
+public sealed class SystemConfiguration : INotifyPropertyChanged
 {
     private List<RadioAlias> ridAlias = [];
+    private string name = string.Empty;
 
-    public string Name { get; set; } = string.Empty;
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public string Name
+    {
+        get => name;
+        set
+        {
+            string next = value ?? string.Empty;
+            if (string.Equals(name, next, StringComparison.Ordinal))
+                return;
+            name = next;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Name)));
+        }
+    }
     public string Identity { get; set; } = string.Empty;
     public string Address { get; set; } = string.Empty;
     public int Port { get; set; }
@@ -77,7 +91,6 @@ public sealed class SystemConfiguration
     public string Rid { get; set; } = string.Empty;
     public string AliasPath { get; set; } = "./alias.yml";
 
-    [YamlIgnore]
     public List<RadioAlias> RidAlias
     {
         get => ridAlias;
@@ -88,7 +101,6 @@ public sealed class SystemConfiguration
         }
     }
 
-    [YamlIgnore]
     public RadioAliasIndex AliasIndex { get; internal set; } = RadioAliasIndex.Empty;
 
     public override string ToString() => Name;
@@ -101,14 +113,39 @@ public sealed class ZoneConfiguration
     public string? TabTextColor { get; set; }
     public List<ChannelConfiguration> Channels { get; set; } = [];
 
-    [YamlMember(Alias = "web_streams", ApplyNamingConventions = false)]
     public List<WebStreamConfiguration> WebStreams { get; set; } = [];
 }
 
-public sealed class GroupConfiguration
+public sealed class GroupConfiguration : INotifyPropertyChanged
 {
-    public string Name { get; set; } = string.Empty;
-    public string Type { get; set; } = "patch";
+    private string name = string.Empty;
+    private string type = "patch";
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public string Name
+    {
+        get => name;
+        set
+        {
+            if (string.Equals(name, value, StringComparison.Ordinal))
+                return;
+            name = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Name)));
+        }
+    }
+
+    public string Type
+    {
+        get => type;
+        set
+        {
+            if (string.Equals(type, value, StringComparison.Ordinal))
+                return;
+            type = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Type)));
+        }
+    }
 
     public bool IsPatchGroup()
         => string.IsNullOrWhiteSpace(Type) ||
@@ -129,13 +166,10 @@ public sealed class ChannelConfiguration
     public string Mode { get; set; } = "p25";
     public string? ResourceColor { get; set; }
 
-    [YamlMember(Alias = "rx_only", ApplyNamingConventions = false)]
     public bool RxOnly { get; set; }
 
-    [YamlMember(Alias = "selectable_encryption", ApplyNamingConventions = false)]
     public bool SelectableEncryption { get; set; }
 
-    [YamlMember(Alias = "card_size", ApplyNamingConventions = false)]
     public string CardSize { get; set; } = "normal";
 }
 

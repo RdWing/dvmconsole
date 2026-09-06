@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using NLayer;
 
 namespace DvmConsole.Audio;
@@ -45,6 +48,8 @@ public sealed class MpegPcmStreamReader : IAudioPcmStreamReader
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             ObserveCancelledOpen(openTask);
+            // WaitAsync cancellation may win before the source callback runs.
+            source.Dispose();
             throw;
         }
         catch
@@ -55,18 +60,20 @@ public sealed class MpegPcmStreamReader : IAudioPcmStreamReader
     }
 
     private static void ObserveCancelledOpen(Task<MpegPcmStreamReader> openTask)
+        => _ = ObserveCancelledOpenAsync(openTask);
+
+    private static async Task ObserveCancelledOpenAsync(Task<MpegPcmStreamReader> openTask)
     {
-        _ = openTask.ContinueWith(
-            static completed =>
-            {
-                if (completed.Status == TaskStatus.RanToCompletion)
-                    completed.Result.DisposeAsync().AsTask().GetAwaiter().GetResult();
-                else
-                    _ = completed.Exception;
-            },
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+        try
+        {
+            MpegPcmStreamReader reader = await openTask.ConfigureAwait(false);
+            await reader.DisposeAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // The caller already observed cancellation or the primary open
+            // failure. This continuation owns only late resource cleanup.
+        }
     }
 
     public async ValueTask<int> ReadSamplesAsync(

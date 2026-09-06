@@ -1,12 +1,13 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:presentation="using:DvmConsole.Presentation"
              x:Class="DvmConsole.Presentation.RecorderSettingsView"
              x:DataType="presentation:IRecorderSettingsViewModel">
   <UserControl.Styles>
-    <Style Selector="Button"><Setter Property="MinHeight" Value="44"/></Style>
-    <Style Selector="ToggleButton"><Setter Property="MinHeight" Value="44"/></Style>
-    <Style Selector="TextBox"><Setter Property="MinHeight" Value="44"/></Style>
+    <StyleInclude Source="avares://DvmConsole.Presentation/CompactSettingsStyles.axaml" />
     <Style Selector="Button.tar-select:pointerover" x:DataType="presentation:IRecorderChannelViewModel">
       <Setter Property="Background" Value="{Binding RecordingSelectionBrush}"/>
       <Setter Property="BorderBrush" Value="{Binding RecordingSelectionBorderBrush}"/>
@@ -44,6 +45,8 @@
   <ScrollViewer x:Name="RecorderScroller" Margin="10">
     <StackPanel Spacing="12">
       <TextBlock Classes="heading" Text="Talkgroup Audio Recorder"/>
+      <TextBlock Text="{Binding RecordingAvailabilityWarning}" IsVisible="{Binding IsRecordingUnavailable}"
+                 Foreground="#E5484D" TextWrapping="Wrap"/>
       <Border Classes="panel" IsVisible="{Binding IsExternalRecordingLocationAvailable}">
         <StackPanel Spacing="6">
           <TextBlock FontWeight="SemiBold" Text="Desktop recording location"/>
@@ -70,7 +73,7 @@
                    AutomationProperties.Name="Recording retention days"/>
         </StackPanel>
         <Button Content="Apply and prune"
-                Command="{Binding ApplyRecordingRetentionCommand}"
+                Click="HandleApplyRecordingRetentionClick"
                 VerticalAlignment="Bottom"
                 AutomationProperties.Name="Apply recording retention and prune"/>
         <TextBlock Width="300"
@@ -97,7 +100,7 @@
                             IsVisible="{Binding IsChecked, ElementName=SystemToggle}">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="presentation:IRecorderChannelViewModel">
-                    <Border Classes="panel recorder-channel-row" Margin="0,0,0,4" Padding="8,4">
+                    <Border Classes="panel recorder-channel-row" Margin="0,0,0,2" Padding="7,2">
                       <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                         <WrapPanel ItemSpacing="8" LineSpacing="6">
                           <StackPanel Width="200" VerticalAlignment="Center">

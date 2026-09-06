@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Threading;
 using DvmConsole.Application;
 
@@ -79,6 +82,11 @@ internal sealed class AvaloniaApplicationScheduler : IApplicationScheduler
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
             {
                 // Disposal owns scheduler cancellation.
+            }
+            catch (Exception exception)
+            {
+                timer.Stop();
+                DesktopCrashLog.Write("Avalonia scheduled work", exception);
             }
             finally
             {

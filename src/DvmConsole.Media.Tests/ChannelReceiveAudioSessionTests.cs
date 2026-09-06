@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
@@ -107,7 +110,8 @@ public sealed class ChannelReceiveAudioSessionTests
         await using var session = new ChannelReceiveAudioSession(
             definition,
             new FakeVocoderSession(),
-            playback);
+            playback,
+            dmrReceiveKeyPolicy: DmrReceiveKeyPolicy.ConfiguredChannel);
 
         await session.ProcessAsync(new FneTrafficFrame(
             FneTrafficProtocol.Dmr,
@@ -136,6 +140,183 @@ public sealed class ChannelReceiveAudioSessionTests
 
         Assert.Equal(3, playback.Frames.Count);
         Assert.Equal(3, session.FramesDecoded);
+    }
+
+    [Fact]
+    public async Task StrictDmrReceiveRejectsAnAdvertisedKeyThatDoesNotMatchTheChannel()
+    {
+        byte[] configuredKey = Enumerable.Range(0, 32).Select(value => (byte)value).ToArray();
+        byte[] otherKey = Enumerable.Range(32, 32).Select(value => (byte)value).ToArray();
+        var definition = new ChannelRuntimeDefinition(
+            "Dispatch",
+            "System 1",
+            "dmr",
+            100,
+            1,
+            encryptionAlgorithm: "aes",
+            encryptionKeyId: "0x45");
+        using DmrKeyRing keys = CreateDmrKeyRing(
+            (0x45, configuredKey),
+            (0x44, otherKey));
+        await using var session = new ChannelReceiveAudioSession(
+            definition,
+            new FakeVocoderSession(),
+            new FakePlayback(),
+            dmrKeyResolver: keys,
+            dmrReceiveKeyPolicy: DmrReceiveKeyPolicy.ConfiguredChannel);
+        byte[] privacyHeader = DmrVoicePacketCodec.CreatePrivacyIndicatorPacket(
+            sourceId: 1,
+            destinationId: 100,
+            slot: 1,
+            frameSequence: 1,
+            new DmrPrivacyOptions(
+                DmrPrivacyAlgorithms.Aes256,
+                keyId: 0x44,
+                otherKey,
+                Convert.FromHexString("12345678")));
+
+        NotSupportedException exception = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            session.ProcessAsync(new FneTrafficFrame(
+                FneTrafficProtocol.Dmr,
+                1,
+                2,
+                100,
+                1,
+                "GROUP",
+                "DATA_SYNC",
+                "VOICE_PI_HEADER",
+                1,
+                99,
+                privacyHeader)).AsTask());
+
+        Assert.Contains("does not match this channel's configured key", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, session.FramesDecoded);
+    }
+
+    [Fact]
+    public async Task StrictDmrReceiveAcceptsTheConfiguredAdvertisedKey()
+    {
+        byte[] key = Enumerable.Range(0, 32).Select(value => (byte)value).ToArray();
+        var definition = new ChannelRuntimeDefinition(
+            "Dispatch",
+            "System 1",
+            "dmr",
+            100,
+            1,
+            encryptionAlgorithm: "aes",
+            encryptionKeyId: "0x45");
+        using DmrKeyRing keys = CreateDmrKeyRing((0x45, key));
+        var vocoder = new FakeVocoderSession();
+        await using var session = new ChannelReceiveAudioSession(
+            definition,
+            vocoder,
+            new FakePlayback(),
+            dmrKeyResolver: keys,
+            dmrReceiveKeyPolicy: DmrReceiveKeyPolicy.ConfiguredChannel);
+        var privacy = new DmrPrivacyOptions(
+            DmrPrivacyAlgorithms.Aes256,
+            keyId: 0x45,
+            key,
+            Convert.FromHexString("12345678"));
+
+        await session.ProcessAsync(new FneTrafficFrame(
+            FneTrafficProtocol.Dmr,
+            1,
+            2,
+            100,
+            1,
+            "GROUP",
+            "DATA_SYNC",
+            "VOICE_PI_HEADER",
+            1,
+            99,
+            DmrVoicePacketCodec.CreatePrivacyIndicatorPacket(1, 100, 1, 1, privacy)));
+        await session.ProcessAsync(new FneTrafficFrame(
+            FneTrafficProtocol.Dmr,
+            1,
+            2,
+            100,
+            1,
+            "GROUP",
+            "VOICE",
+            "VOICE",
+            2,
+            99,
+            DmrVoicePacketCodec.CreateVoicePacket(
+                1,
+                100,
+                1,
+                voiceSync: false,
+                embeddedSequence: 1,
+                frameSequence: 2,
+                ambe: new byte[DmrVoicePacketCodec.AmbeBytes])));
+
+        Assert.Equal(3, session.FramesDecoded);
+        Assert.Equal(3, vocoder.DecodeParameterCalls);
+    }
+
+    [Fact]
+    public async Task OnAirDmrReceivePolicyUsesAnotherAdvertisedSystemKey()
+    {
+        byte[] configuredKey = Enumerable.Range(0, 32).Select(value => (byte)value).ToArray();
+        byte[] otherKey = Enumerable.Range(32, 32).Select(value => (byte)value).ToArray();
+        var definition = new ChannelRuntimeDefinition(
+            "Dispatch",
+            "System 1",
+            "dmr",
+            100,
+            1,
+            encryptionAlgorithm: "aes",
+            encryptionKeyId: "0x45");
+        using DmrKeyRing keys = CreateDmrKeyRing(
+            (0x45, configuredKey),
+            (0x44, otherKey));
+        var vocoder = new FakeVocoderSession();
+        await using var session = new ChannelReceiveAudioSession(
+            definition,
+            vocoder,
+            new FakePlayback(),
+            dmrKeyResolver: keys);
+        var advertisedPrivacy = new DmrPrivacyOptions(
+            DmrPrivacyAlgorithms.Aes256,
+            keyId: 0x44,
+            otherKey,
+            Convert.FromHexString("12345678"));
+
+        await session.ProcessAsync(new FneTrafficFrame(
+            FneTrafficProtocol.Dmr,
+            1,
+            2,
+            100,
+            1,
+            "GROUP",
+            "DATA_SYNC",
+            "VOICE_PI_HEADER",
+            1,
+            99,
+            DmrVoicePacketCodec.CreatePrivacyIndicatorPacket(1, 100, 1, 1, advertisedPrivacy)));
+        await session.ProcessAsync(new FneTrafficFrame(
+            FneTrafficProtocol.Dmr,
+            1,
+            2,
+            100,
+            1,
+            "GROUP",
+            "VOICE",
+            "VOICE",
+            2,
+            99,
+            DmrVoicePacketCodec.CreateVoicePacket(
+                1,
+                100,
+                1,
+                voiceSync: false,
+                embeddedSequence: 1,
+                frameSequence: 2,
+                ambe: new byte[DmrVoicePacketCodec.AmbeBytes])));
+
+        Assert.Equal(3, session.FramesDecoded);
+        Assert.Equal(3, vocoder.DecodeParameterCalls);
     }
 
     [Fact]
@@ -279,6 +460,7 @@ public sealed class ChannelReceiveAudioSessionTests
             99,
             new FakeVocoderSession(),
             (payload, _, _) => packets.Add(payload.ToArray()),
+            TestPacketCadence.NoDelayAsync,
             new NxdnPrivacyOptions(NxdnPrivacyAlgorithms.Ehr, 5, key)))
         {
             sender.Start();
@@ -585,6 +767,18 @@ public sealed class ChannelReceiveAudioSessionTests
         {
         }
     }
+
+    private static DmrKeyRing CreateDmrKeyRing(params (byte KeyId, byte[] Material)[] entries)
+        => new("System 1", new KeyContainer
+        {
+            Keys = entries.Select(entry => new KeyEntry
+            {
+                Protocol = "dmr",
+                AlgId = DmrPrivacyAlgorithms.Aes256,
+                KeyId = entry.KeyId,
+                Key = Convert.ToHexString(entry.Material)
+            }).ToList()
+        });
 
     private sealed class FakePlayback : IAudioPlayback
     {

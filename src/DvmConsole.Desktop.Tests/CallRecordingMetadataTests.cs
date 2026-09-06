@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Desktop;
 using Xunit;
 
@@ -95,12 +98,14 @@ public sealed class CallRecordingMetadataTests
         entry.SetRecordingPlaying(true);
 
         Assert.True(entry.IsRecordingPlaying);
+        Assert.Equal("Stop", entry.RecordingPlaybackActionText);
         Assert.Equal("Stop TAR recording playback", entry.RecordingPlaybackToolTip);
         Assert.Contains(nameof(CallHistoryEntry.IsRecordingPlaying), changed);
         Assert.Contains(nameof(CallHistoryEntry.RecordingPlaybackToolTip), changed);
 
         entry.SetRecordingPlaying(false);
         Assert.False(entry.IsRecordingPlaying);
+        Assert.Equal("Play", entry.RecordingPlaybackActionText);
         Assert.Equal("Play validated TAR recording", entry.RecordingPlaybackToolTip);
     }
 }

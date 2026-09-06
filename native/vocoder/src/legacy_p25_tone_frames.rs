@@ -1,5 +1,9 @@
-//! P25 Phase 1 single-tone frames retained from the original DVM Console
-//! `VocoderToneLookupTable`.
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-FileCopyrightText: 2025 Patrick McDonnell, W3AXL
+// SPDX-License-Identifier: AGPL-3.0-only
+
+//! P25 Phase 1 single-tone frames adapted from `W3AXL/rc2-dvm`'s `Audio.cs`:
+//! <https://github.com/W3AXL/rc2-dvm/blob/main/rc2-dvm/Audio.cs>
 //!
 //! The legacy table was captured from an EF Johnson VP8000. Keep the frame
 //! bytes and nearest-frequency behavior aligned with that implementation.

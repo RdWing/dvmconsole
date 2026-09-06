@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 use blip25_vocoder::fullrate::frame::{decode_frame as decode_full_rate_frame, INFO_WIDTHS};
 use blip25_vocoder::halfrate::dequantize::{
     encode_tone_frame_info, TONE_AMPLITUDE_EXPONENT_STEP, TONE_AMPLITUDE_PEAK,

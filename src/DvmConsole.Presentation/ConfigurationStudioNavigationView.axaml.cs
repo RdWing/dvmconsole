@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -17,7 +20,7 @@ public sealed partial class ConfigurationStudioNavigationView : UserControl
 
     public void SetCompactLayout(bool compact, bool phone)
     {
-        MaxHeight = compact ? 220 : double.PositiveInfinity;
+        MaxHeight = compact ? 170 : double.PositiveInfinity;
         if (this.FindControl<Border>("NavigationBorder") is { } border)
         {
             border.BorderThickness = compact

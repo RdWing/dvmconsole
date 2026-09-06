@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Buffers;
 using DvmConsole.Audio;
 
@@ -63,11 +66,13 @@ public static class GeneratedAudioMonitorSession
 /// </summary>
 public sealed class GeneratedAudioMonitor : IAsyncDisposable
 {
-    private const int PlaybackChunkSamples = 1_600;
+    private const int PlaybackPrefetchSamples = 1_600;
+    private const int PlaybackChunkSamples = 160;
     internal const double OutputGain = 0.70;
     private const int OutputRouteMaximumAttempts = 12;
     private static readonly TimeSpan OutputRouteRetryInterval = TimeSpan.FromMilliseconds(50);
     private readonly Func<IAudioBackend> createAudioBackend;
+    private readonly Func<PcmAudioFormat, IPcmPlaybackPacer> createPacer;
     private readonly Func<string?> getOutputDeviceId;
     private readonly Func<IAudioBackend, string?, CancellationToken, Task<AudioDeviceInfo>> resolveOutput;
     private readonly IApplicationDelay delay;
@@ -78,7 +83,8 @@ public sealed class GeneratedAudioMonitor : IAsyncDisposable
         Func<IAudioBackend> createAudioBackend,
         Func<string?> getOutputDeviceId,
         Func<IAudioBackend, string?, CancellationToken, Task<AudioDeviceInfo>>? resolveOutput = null,
-        IApplicationDelay? delay = null)
+        IApplicationDelay? delay = null,
+        Func<PcmAudioFormat, IPcmPlaybackPacer>? createPacer = null)
     {
         this.createAudioBackend = createAudioBackend ??
             throw new ArgumentNullException(nameof(createAudioBackend));
@@ -86,6 +92,7 @@ public sealed class GeneratedAudioMonitor : IAsyncDisposable
             throw new ArgumentNullException(nameof(getOutputDeviceId));
         this.delay = delay ?? SystemApplicationDelay.Instance;
         this.resolveOutput = resolveOutput ?? ResolveOutputAsync;
+        this.createPacer = createPacer ?? (format => new RealtimePcmPlaybackPacer(format));
     }
 
     public async Task PlayAsync(
@@ -109,14 +116,25 @@ public sealed class GeneratedAudioMonitor : IAsyncDisposable
                 output,
                 PcmAudioFormat.Voice8KhzMono16Bit);
 
-            var pacer = new RealtimePcmPlaybackPacer(playback.Format);
-            short[] outputBuffer = ArrayPool<short>.Shared.Rent(PlaybackChunkSamples);
+            IPcmPlaybackPacer pacer = createPacer(playback.Format);
+            short[] outputBuffer = ArrayPool<short>.Shared.Rent(PlaybackPrefetchSamples);
             try
             {
-                for (int offset = 0; offset < samples.Length; offset += PlaybackChunkSamples)
+                // Seed a 200 ms safety window, then replenish it at the 20 ms
+                // media cadence. This keeps scheduler jitter from creating
+                // audible silence gaps at coarse burst boundaries.
+                int prefetchCount = Math.Min(PlaybackPrefetchSamples, samples.Length);
+                await WriteAsync(0, prefetchCount, waitForPacer: false).ConfigureAwait(false);
+                for (int offset = prefetchCount; offset < samples.Length; offset += PlaybackChunkSamples)
                 {
-                    await pacer.WaitBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
                     int count = Math.Min(PlaybackChunkSamples, samples.Length - offset);
+                    await WriteAsync(offset, count, waitForPacer: true).ConfigureAwait(false);
+                }
+
+                async ValueTask WriteAsync(int offset, int count, bool waitForPacer)
+                {
+                    if (waitForPacer)
+                        await pacer.WaitBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
                     ApplyOutputGain(
                         samples.Span.Slice(offset, count),
                         outputBuffer.AsSpan(0, count));

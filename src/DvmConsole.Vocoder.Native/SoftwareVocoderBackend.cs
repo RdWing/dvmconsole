@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Vocoder;
 
 // Required built-in software vocoder. The native library is produced by the
@@ -46,10 +49,11 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
         return options;
     }
 
-    private sealed class SoftwareVocoderSession : IHalfRateVocoderSession, IP25GeneratedToneVocoderSession
+    private sealed class SoftwareVocoderSession : IHalfRateVocoderSession, IP25GeneratedToneVocoderSession, IReceiveAudioProcessingSession
     {
         private readonly NativeVocoderApi api;
         private readonly VocoderMode mode;
+        public bool HasReceiveAudioProcessing { get; }
         private SafeVocoderSessionHandle? handle;
 
         public SoftwareVocoderSession(
@@ -59,6 +63,9 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
         {
             this.api = api;
             this.mode = mode;
+            HasReceiveAudioProcessing =
+                (receiveAudioProcessingOptions.HighPassFilterEnabled && receiveAudioProcessingOptions.HighPassFrequencyHz > 0) ||
+                receiveAudioProcessingOptions.PeakingFilterEnabled || receiveAudioProcessingOptions.CompressorEnabled;
             try
             {
                 handle = api.CreateSession(mode);
@@ -73,6 +80,20 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
                 handle = null;
                 throw;
             }
+        }
+
+        public void DeferReceiveAudioProcessing()
+        {
+            if (api.DeferReceiveProcessing(SessionHandle) < 0)
+                throw Failure("defer receive processing");
+        }
+
+        public void ProcessReceiveAudio(Span<short> samples)
+        {
+            if (samples.IsEmpty || !HasReceiveAudioProcessing)
+                return;
+            if (api.ProcessReceivePresentation(SessionHandle, samples) != samples.Length)
+                throw Failure("receive presentation processing");
         }
 
         public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword)

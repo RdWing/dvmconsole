@@ -1,19 +1,25 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
+using System.Collections.Concurrent;
 
 namespace DvmConsole.Application;
 
 // Connects the platform-neutral patch router to immutable channel descriptors
 // and radio endpoints. Patch audio is sourced from channels that are already
 // decoded by the receive coordinator; no hidden audio device is opened.
-public sealed class PatchForwardingCoordinator : IDisposable
+public sealed class PatchForwardingCoordinator : IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan UnavailableDiagnosticInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan SynchronousDisposeWait = TimeSpan.FromMilliseconds(250);
 
     private readonly object sync = new();
     private readonly IReadOnlyList<IRadioTrafficEndpoint> systems;
     private readonly PatchTransmitChannelResolver memberResolver;
+    private readonly ConcurrentDictionary<ChannelId, PatchMemberAddress> memberAddresses = [];
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
@@ -21,14 +27,19 @@ public sealed class PatchForwardingCoordinator : IDisposable
     private readonly IClock clock;
     private readonly TimeProvider timeProvider;
     private readonly Action<PatchForwardingDiagnostic>? diagnosticObserver;
-    private readonly Dictionary<string, ActiveTarget> activeTargets = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, PatchTransmitPump> targetPumps = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> startingTargets = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<TargetStreamKey, ActiveTarget> activeTargets = [];
+    // Retain every retiring call. A canceled waiting call must never let its
+    // successor bypass a predecessor that is still finishing its wire tail.
+    private readonly Dictionary<PatchMemberIdentity, HashSet<PatchTransmitPump>> destinationPumps = [];
+    internal const int MaximumCallsPerDestination = 2;
+    internal static readonly TimeSpan MaximumQueuedAudioAge = TimeSpan.FromSeconds(1);
+    private readonly HashSet<PatchMemberIdentity> startingTargets = [];
     private readonly HashSet<PatchTransmitPump> transmitPumps = [];
-    private readonly Dictionary<string, DateTimeOffset> unavailableDiagnostics = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<UnavailableDiagnosticKey, DateTimeOffset> unavailableDiagnostics = [];
     private readonly PatchRoutingTable router;
     private IVocoderBackend? vocoderBackend;
-    private bool disposed;
+    private volatile bool disposed;
+    private Task? disposeTask;
 
     public PatchForwardingCoordinator(
         IEnumerable<IRadioTrafficEndpoint> systems,
@@ -51,10 +62,13 @@ public sealed class PatchForwardingCoordinator : IDisposable
                 "A vocoder backend factory is required for digital patch targets."));
         this.clock = clock ?? SystemClock.Instance;
         this.timeProvider = timeProvider ?? TimeProvider.System;
-        memberResolver = new PatchTransmitChannelResolver(
-            this.systems.SelectMany(system => system.ChannelDescriptors),
-            resolveCurrentChannel);
-        router = new PatchRoutingTable(BeginTarget, EndTarget, SendAudio, GetFallbackSourceId);
+        TransmitChannelDescriptor[] configuredChannels = this.systems
+            .SelectMany(system => system.ChannelDescriptors)
+            .ToArray();
+        memberResolver = new PatchTransmitChannelResolver(configuredChannels, resolveCurrentChannel);
+        foreach (TransmitChannelDescriptor channel in configuredChannels)
+            memberAddresses[channel.Id] = PatchTransmitChannelResolver.FromChannel(channel);
+        router = PatchRoutingTable.WithAdmission(BeginTarget, EndTarget, SendAudio, GetFallbackSourceId);
     }
 
     public bool SourceIdPassthrough
@@ -67,7 +81,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
     {
         PatchTransmitPump[] pumps;
         lock (sync)
-            pumps = targetPumps.Values.Distinct().ToArray();
+            pumps = transmitPumps.ToArray();
         if (pumps.Length == 0)
             return default;
 
@@ -116,7 +130,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
     public void ObserveTraffic(ChannelId sourceId, IRadioMediaFrame traffic)
     {
         ArgumentNullException.ThrowIfNull(traffic);
-        TransmitChannelDescriptor? source = memberResolver.Resolve(sourceId);
+        PatchMemberAddress? source = ResolveAddress(sourceId);
         if (source is null)
             return;
         if (traffic.StreamId == 0)
@@ -125,7 +139,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
         if (traffic.FrameType.Equals("VOICE", StringComparison.OrdinalIgnoreCase) ||
             traffic.FrameType.Equals("VOICE_SYNC", StringComparison.OrdinalIgnoreCase))
         {
-            router.HandleCallStart(ToAddress(source), traffic.StreamId, traffic.SourceId);
+            router.HandleCallStart(source, traffic.StreamId, traffic.SourceId);
         }
     }
 
@@ -135,11 +149,11 @@ public sealed class PatchForwardingCoordinator : IDisposable
         uint sourceId,
         ReadOnlyMemory<short> samples)
     {
-        TransmitChannelDescriptor? source = memberResolver.Resolve(sourceChannelId);
+        PatchMemberAddress? source = ResolveAddress(sourceChannelId);
         if (source is null)
             return;
         if (streamId != 0 && sourceId != 0)
-            router.HandleAudio(ToAddress(source), streamId, sourceId, samples);
+            router.HandleAudio(source, streamId, sourceId, samples);
     }
 
     // Callers end forwarding only at an ordered receive boundary or an accepted
@@ -147,11 +161,11 @@ public sealed class PatchForwardingCoordinator : IDisposable
     // safely follow a confirmed terminator.
     public void StopSource(ChannelId sourceChannelId, uint streamId)
     {
-        TransmitChannelDescriptor? source = memberResolver.Resolve(sourceChannelId);
+        PatchMemberAddress? source = ResolveAddress(sourceChannelId);
         if (source is null)
             return;
         if (streamId != 0)
-            router.HandleCallEnd(ToAddress(source), streamId);
+            router.HandleCallEnd(source, streamId);
     }
 
     public void StopAll()
@@ -193,37 +207,104 @@ public sealed class PatchForwardingCoordinator : IDisposable
 
     public void Dispose()
     {
-        if (disposed)
+        Task cleanup = BeginDispose();
+        if (!cleanup.Wait(SynchronousDisposeWait))
+        {
+            ObserveBackground(cleanup);
             return;
+        }
+        cleanup.GetAwaiter().GetResult();
+    }
 
-        StopAll();
+    public ValueTask DisposeAsync()
+        => new(BeginDispose());
+
+    public async ValueTask DisposeAsync(CancellationToken cancellationToken)
+        => await BeginDispose().WaitAsync(cancellationToken).ConfigureAwait(false);
+
+    private Task BeginDispose()
+    {
+        lock (sync)
+            return disposeTask ??= DisposeCoreAsync();
+    }
+
+    private async Task DisposeCoreAsync()
+    {
         PatchTransmitPump[] pumps;
+        IVocoderBackend? ownedVocoder;
         lock (sync)
         {
+            disposed = true;
             pumps = transmitPumps.ToArray();
-            foreach (PatchTransmitPump pump in pumps)
-                pump.Complete();
+            ownedVocoder = vocoderBackend;
+            vocoderBackend = null;
+        }
+
+        List<Exception>? failures = null;
+        try
+        {
+            StopAll();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+
+        foreach (PatchTransmitPump pump in pumps)
+        {
+            try
+            {
+                pump.DiscardPendingAudioAndComplete();
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
+        }
+
+        lock (sync)
+        {
             activeTargets.Clear();
-            targetPumps.Clear();
+            destinationPumps.Clear();
             startingTargets.Clear();
             unavailableDiagnostics.Clear();
         }
-        Task.WhenAll(pumps.Select(pump => pump.Completion)).GetAwaiter().GetResult();
-        lock (sync)
+
+        // Observe every destination independently so one fault cannot leave
+        // a later pump or its transmit session unobserved.
+        foreach (PatchTransmitPump pump in pumps)
         {
-            transmitPumps.Clear();
-            vocoderBackend?.Dispose();
-            vocoderBackend = null;
-            disposed = true;
+            try
+            {
+                await pump.Completion.ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                (failures ??= []).Add(exception);
+            }
         }
+
+        lock (sync)
+            transmitPumps.Clear();
+        try
+        {
+            ownedVocoder?.Dispose();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+
+        if (failures is { Count: > 0 })
+            throw new AggregateException("One or more patch resources failed to stop.", failures);
     }
 
-    private uint BeginTarget(PatchMemberAddress member, uint sourceId)
+    private PatchCallStartResult BeginTarget(PatchMemberAddress member, uint sourceId)
     {
         if (disposed)
         {
             ReportUnavailable(member, "the patch coordinator is stopping");
-            return 0;
+            return default;
         }
         TransmitChannelDescriptor? channel = memberResolver.Resolve(member);
         if (channel is null)
@@ -231,7 +312,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
             ReportUnavailable(member, member.HasConfiguredChannelIdentity
                 ? "the configured channel was not found"
                 : "the legacy system/talkgroup identity is missing or ambiguous");
-            return 0;
+            return default;
         }
 
         IRadioTrafficEndpoint? system = systems.FirstOrDefault(candidate =>
@@ -239,12 +320,12 @@ public sealed class PatchForwardingCoordinator : IDisposable
         if (system is null)
         {
             ReportUnavailable(member, "the configured FNE system was not found");
-            return 0;
+            return default;
         }
         if (!system.IsConnected)
         {
             ReportUnavailable(member, "the target FNE is disconnected");
-            return 0;
+            return default;
         }
         TargetAuthorityState availability =
             TransmitTargetPolicy.GetTalkgroupAvailability(channel, system);
@@ -255,43 +336,51 @@ public sealed class PatchForwardingCoordinator : IDisposable
                 ? channel.AuthorityUnavailableReason
                 : channel.ConfigurationUnavailableReason;
             ReportUnavailable(member, reason);
-            return 0;
+            return default;
         }
         if (sourceId == 0)
         {
             ReportUnavailable(member, "the target FNE has no usable source ID");
-            return 0;
+            return default;
         }
 
         string? unavailableReason = null;
         Task? startAfter = null;
+        bool backlogFull = false;
         lock (sync)
         {
-            if (targetPumps.TryGetValue(member.Key, out PatchTransmitPump? existingPump))
+            if (disposed)
+                unavailableReason = "the patch coordinator is stopping";
+            else if (destinationPumps.TryGetValue(member.Identity, out HashSet<PatchTransmitPump>? owned))
             {
-                if (!existingPump.Completion.IsCompleted)
+                PatchTransmitPump[] pending = owned.Where(pump => !pump.Completion.IsCompleted).ToArray();
+                if (activeTargets.Values.Any(target => target.Member.Identity == member.Identity &&
+                    !target.Pump.Completion.IsCompleted))
+                    unavailableReason = "the target is already active in another patch route";
+                else if (pending.Length >= MaximumCallsPerDestination)
                 {
-                    bool existingTargetIsActive = activeTargets.Values.Any(target =>
-                        ReferenceEquals(target.Pump, existingPump));
-                    if (existingTargetIsActive)
-                        unavailableReason = "the target is already active in another patch route";
-                    else
-                        startAfter = existingPump.Completion;
+                    backlogFull = true;
+                    unavailableReason = "the destination backlog is full; this incoming patch call was skipped";
                 }
-                else
-                {
-                    targetPumps.Remove(member.Key);
-                }
+                else if (pending.Length > 0)
+                    startAfter = Task.WhenAll(pending.Select(pump => pump.Completion));
             }
-            if (unavailableReason is null && !startingTargets.Add(member.Key))
+            if (unavailableReason is null && !startingTargets.Add(member.Identity))
             {
                 unavailableReason = "another target call is starting";
             }
         }
+        if (backlogFull)
+        {
+            Report(new PatchForwardingDiagnostic(clock.UtcNow,
+                PatchForwardingDiagnosticKind.TargetOverloaded, member, 0,
+                $"Patch call skipped on {FormatTarget(member)}: {unavailableReason}."));
+            return PatchCallStartResult.Skipped;
+        }
         if (unavailableReason is not null)
         {
             ReportUnavailable(member, unavailableReason);
-            return 0;
+            return default;
         }
 
         uint streamId = 0;
@@ -325,22 +414,26 @@ public sealed class PatchForwardingCoordinator : IDisposable
                 createdVocoderSession,
                 (payload, sequence, stream) => system.SendTraffic(
                     ChannelProtocolMediaMapper.ToTrafficProtocol(transmitDefinition.Protocol),
-                    payload.Span,
+                    payload,
                     sequence,
                     stream),
                 encryption,
                 dmrPrivacy,
                 nxdnPrivacy);
             createdVocoderSession = null;
-            pump = new PatchTransmitPump(session, startAfter, timeProvider: timeProvider);
+            pump = new PatchTransmitPump(session, startAfter, timeProvider: timeProvider,
+                maximumQueuedAge: MaximumQueuedAudioAge);
             session = null;
             var activeTarget = new ActiveTarget(member, channel.Id, streamId, pump);
             lock (sync)
             {
-                activeTargets[BuildStreamKey(member, streamId)] = activeTarget;
-                targetPumps[member.Key] = pump;
+                ObjectDisposedException.ThrowIf(disposed, this);
+                activeTargets[new TargetStreamKey(member.Identity, streamId)] = activeTarget;
+                if (!destinationPumps.TryGetValue(member.Identity, out HashSet<PatchTransmitPump>? owned))
+                    destinationPumps.Add(member.Identity, owned = []);
+                owned.Add(pump);
                 transmitPumps.Add(pump);
-                startingTargets.Remove(member.Key);
+                startingTargets.Remove(member.Identity);
                 ClearUnavailableDiagnostics(member);
             }
             ObserveBackground(ObserveTargetStartAsync(
@@ -350,7 +443,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
                 channel.Definition.Mode,
                 activeTarget));
             ObserveBackground(ObserveTargetCompletionAsync(member, streamId, activeTarget));
-            return streamId;
+            return new PatchCallStartResult(streamId);
         }
         catch (Exception exception)
         {
@@ -358,7 +451,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
             session?.Dispose();
             createdVocoderSession?.Dispose();
             lock (sync)
-                startingTargets.Remove(member.Key);
+                startingTargets.Remove(member.Identity);
             Report(new PatchForwardingDiagnostic(
                 clock.UtcNow,
                 PatchForwardingDiagnosticKind.TargetFailed,
@@ -366,7 +459,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
                 streamId,
                 $"Patch target could not start on {FormatTarget(member)}: {exception.Message}",
                 exception));
-            return 0;
+            return default;
         }
     }
 
@@ -375,7 +468,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
         ActiveTarget? target;
         lock (sync)
         {
-            if (!activeTargets.Remove(BuildStreamKey(member, streamId), out target))
+            if (!activeTargets.Remove(new TargetStreamKey(member.Identity, streamId), out target))
                 return;
         }
 
@@ -390,7 +483,7 @@ public sealed class PatchForwardingCoordinator : IDisposable
     {
         ActiveTarget? target;
         lock (sync)
-            activeTargets.TryGetValue(BuildStreamKey(member, streamId), out target);
+            activeTargets.TryGetValue(new TargetStreamKey(member.Identity, streamId), out target);
         if (target is null)
             return;
 
@@ -401,7 +494,10 @@ public sealed class PatchForwardingCoordinator : IDisposable
         catch (Exception exception)
         {
             EndTarget(member, streamId, sourceId);
-            router.ReportTargetFailure(member, streamId);
+            router.ReportTargetFailure(member, streamId, skipSourceCall: target.Pump.WasOverloaded);
+            // A pump-owned fault is reported once by its completion observer.
+            if (ReferenceEquals(target.Pump.Failure, exception))
+                return;
             Report(new PatchForwardingDiagnostic(
                 clock.UtcNow,
                 PatchForwardingDiagnosticKind.TargetFailed,
@@ -419,16 +515,23 @@ public sealed class PatchForwardingCoordinator : IDisposable
         return system?.SourceId ?? 0;
     }
 
-    private static PatchMemberAddress ToAddress(TransmitChannelDescriptor channel)
-        => PatchTransmitChannelResolver.FromChannel(channel);
+    private PatchMemberAddress? ResolveAddress(ChannelId channelId)
+    {
+        if (memberAddresses.TryGetValue(channelId, out PatchMemberAddress? address))
+            return address;
 
-    private static string BuildStreamKey(PatchMemberAddress member, uint streamId)
-        => $"{member.Key}|{streamId}";
+        TransmitChannelDescriptor? channel = memberResolver.Resolve(channelId);
+        return channel is null
+            ? null
+            : memberAddresses.GetOrAdd(
+                channelId,
+                _ => PatchTransmitChannelResolver.FromChannel(channel));
+    }
 
     private void ReportUnavailable(PatchMemberAddress member, string reason)
     {
         DateTimeOffset now = clock.UtcNow;
-        string key = $"{member.Key}|{reason}";
+        var key = new UnavailableDiagnosticKey(member.Identity, reason);
         lock (sync)
         {
             if (unavailableDiagnostics.TryGetValue(key, out DateTimeOffset lastReported) &&
@@ -449,9 +552,8 @@ public sealed class PatchForwardingCoordinator : IDisposable
 
     private void ClearUnavailableDiagnostics(PatchMemberAddress member)
     {
-        string prefix = $"{member.Key}|";
-        foreach (string key in unavailableDiagnostics.Keys
-            .Where(candidate => candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        foreach (UnavailableDiagnosticKey key in unavailableDiagnostics.Keys
+            .Where(candidate => candidate.Member == member.Identity)
             .ToArray())
         {
             unavailableDiagnostics.Remove(key);
@@ -481,23 +583,27 @@ public sealed class PatchForwardingCoordinator : IDisposable
         await target.Pump.Completion.ConfigureAwait(false);
         lock (sync)
         {
-            string key = BuildStreamKey(member, streamId);
+            var key = new TargetStreamKey(member.Identity, streamId);
             if (activeTargets.TryGetValue(key, out ActiveTarget? active) && ReferenceEquals(active, target))
                 activeTargets.Remove(key);
-            if (targetPumps.TryGetValue(member.Key, out PatchTransmitPump? memberPump) &&
-                ReferenceEquals(memberPump, target.Pump))
+            if (destinationPumps.TryGetValue(member.Identity, out HashSet<PatchTransmitPump>? owned))
             {
-                targetPumps.Remove(member.Key);
+                owned.Remove(target.Pump);
+                if (owned.Count == 0)
+                    destinationPumps.Remove(member.Identity);
             }
             transmitPumps.Remove(target.Pump);
         }
 
         if (target.Pump.Failure is Exception exception)
         {
-            router.ReportTargetFailure(member, streamId);
+            // Overload ends forwarding for this entire source call. Release
+            // transmit/echo state, but suppress a mid-call restart.
+            router.ReportTargetFailure(member, streamId, skipSourceCall: target.Pump.WasOverloaded);
             Report(new PatchForwardingDiagnostic(
                 clock.UtcNow,
-                PatchForwardingDiagnosticKind.TargetFailed,
+                exception is PatchBacklogException
+                    ? PatchForwardingDiagnosticKind.TargetOverloaded : PatchForwardingDiagnosticKind.TargetFailed,
                 member,
                 streamId,
                 $"Patch target failed on {FormatTarget(member)}, stream {streamId}: {exception.Message}",
@@ -537,6 +643,9 @@ public sealed class PatchForwardingCoordinator : IDisposable
         ChannelId ChannelId,
         uint StreamId,
         PatchTransmitPump Pump);
+
+    private readonly record struct TargetStreamKey(PatchMemberIdentity Member, uint StreamId);
+    private readonly record struct UnavailableDiagnosticKey(PatchMemberIdentity Member, string Reason);
 
     private static void ObserveBackground(Task task)
         => _ = ObserveBackgroundAsync(task);

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
+using System.Security;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Presentation;
 
@@ -78,8 +82,7 @@ internal sealed class DesktopConfigurationStudioCompanionSource : IConfiguration
                         AliasFileLoader.Serialize(loaded),
                         ConfigurationDocument.ComputeFileHash(identifier));
                 }
-                catch (Exception exception) when (
-                    exception is IOException or InvalidDataException or YamlDotNet.Core.YamlException)
+                catch (Exception exception) when (IsCompanionLoadFailure(exception))
                 {
                     errors.Add($"Alias file for system '{system.Name}' could not be opened: {exception.Message}");
                 }
@@ -119,8 +122,7 @@ internal sealed class DesktopConfigurationStudioCompanionSource : IConfiguration
                 null,
                 LoadIssueIsWarning: false);
         }
-        catch (Exception exception) when (
-            exception is IOException or InvalidDataException or FormatException or YamlDotNet.Core.YamlException)
+        catch (Exception exception) when (IsCompanionLoadFailure(exception))
         {
             return new ConfigurationStudioKeyCompanion(
                 document.Configuration.KeyFile!,
@@ -130,4 +132,14 @@ internal sealed class DesktopConfigurationStudioCompanionSource : IConfiguration
                 LoadIssueIsWarning: false);
         }
     }
+
+    private static bool IsCompanionLoadFailure(Exception exception)
+        => exception is IOException or
+            UnauthorizedAccessException or
+            SecurityException or
+            InvalidDataException or
+            FormatException or
+            ArgumentException or
+            NotSupportedException or
+            YamlDotNet.Core.YamlException;
 }

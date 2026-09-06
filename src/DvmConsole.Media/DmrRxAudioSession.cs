@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Vocoder;
@@ -8,6 +11,8 @@ namespace DvmConsole.Media;
 // playback device. Call/channel selection remains above this reusable session.
 public sealed class DmrRxAudioSession : IAsyncDisposable
 {
+    private const int MaximumConcealedPackets = 10;
+
     private enum UnknownPrivacyResolution
     {
         AwaitingMetadata,
@@ -21,7 +26,17 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
     private readonly IDmrKeyResolver? keyResolver;
     private readonly string systemName;
     private readonly bool privacyMayVary;
+    private readonly DmrReceiveKeyPolicy receiveKeyPolicy;
+    private readonly bool hasConfiguredPrivacyKey;
+    private readonly byte configuredPrivacyAlgorithm;
+    private readonly byte configuredPrivacyKeyId;
     private readonly DmrLateEntryMessageIndicator lateEntryCollector = new();
+    private readonly byte[] ambe = new byte[DmrVoicePacketCodec.AmbeBytes];
+    private readonly short[] packetSamples = new short[
+        DmrVoicePacketCodec.CodewordsPerPacket * VocoderFrameSizes.PcmSamplesPerFrame];
+    private readonly short[] concealmentSamples = new short[
+        MaximumConcealedPackets * DmrVoicePacketCodec.CodewordsPerPacket *
+        VocoderFrameSizes.PcmSamplesPerFrame];
     private DmrPrivacyProcessor? privacyProcessor;
     private uint activeStreamId;
     private bool privacyRequired;
@@ -34,7 +49,10 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         IAudioPlayback playback,
         IDmrKeyResolver? keyResolver = null,
         string systemName = "",
-        bool privacyMayVary = false)
+        bool privacyMayVary = false,
+        DmrReceiveKeyPolicy receiveKeyPolicy = DmrReceiveKeyPolicy.OnAirMetadata,
+        string? configuredAlgorithm = null,
+        string? configuredKeyId = null)
     {
         this.vocoder = vocoder ?? throw new ArgumentNullException(nameof(vocoder));
         decoder = new VoiceFrameDecoder(vocoder, VocoderMode.DmrAmbe);
@@ -42,6 +60,12 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         this.keyResolver = keyResolver;
         this.systemName = systemName ?? string.Empty;
         this.privacyMayVary = privacyMayVary;
+        if (!Enum.IsDefined(receiveKeyPolicy))
+            throw new ArgumentOutOfRangeException(nameof(receiveKeyPolicy));
+        this.receiveKeyPolicy = receiveKeyPolicy;
+        hasConfiguredPrivacyKey =
+            DmrKeyRing.TryParseAlgorithmId(configuredAlgorithm, out configuredPrivacyAlgorithm) &&
+            DmrKeyRing.TryParseKeyId(configuredKeyId, out configuredPrivacyKeyId);
         privacyStateKnown = !privacyMayVary;
     }
 
@@ -88,7 +112,6 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         if (!traffic.FrameType.Equals("VOICE", StringComparison.OrdinalIgnoreCase) &&
             !traffic.FrameType.Equals("VOICE_SYNC", StringComparison.OrdinalIgnoreCase))
             return 0;
-        byte[] ambe = new byte[DmrVoicePacketCodec.AmbeBytes];
         if (!DmrVoicePacketCodec.TryExtractAmbe(traffic.Payload, ambe))
         {
             MalformedPackets++;
@@ -133,8 +156,6 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
             return 0;
         }
         int errors = 0;
-        short[] packetSamples = new short[
-            DmrVoicePacketCodec.CodewordsPerPacket * VocoderFrameSizes.PcmSamplesPerFrame];
         Span<byte> parameters = stackalloc byte[VocoderFrameSizes.HalfRateParameterBytes];
         for (int index = 0; index < DmrVoicePacketCodec.CodewordsPerPacket; index++)
         {
@@ -180,21 +201,20 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
         if (!hasDecodedVoiceInActiveStream || lostPackets <= 0)
             return;
 
-        const int maximumConcealedPackets = 10;
-        int frameCount = checked((int)Math.Min(lostPackets, maximumConcealedPackets)) *
+        int frameCount = checked((int)Math.Min(lostPackets, MaximumConcealedPackets)) *
             DmrVoicePacketCodec.CodewordsPerPacket;
-        var concealedSamples = new short[
-            checked(frameCount * VocoderFrameSizes.PcmSamplesPerFrame)];
+        int sampleCount = checked(frameCount * VocoderFrameSizes.PcmSamplesPerFrame);
+        Memory<short> concealedSamples = concealmentSamples.AsMemory(0, sampleCount);
         for (int index = 0; index < frameCount; index++)
         {
-            decoder.ProcessLost(concealedSamples.AsSpan(
+            decoder.ProcessLost(concealedSamples.Span.Slice(
                 index * VocoderFrameSizes.PcmSamplesPerFrame,
                 VocoderFrameSizes.PcmSamplesPerFrame));
             FramesDecoded++;
         }
         await ConcealmentAudioWriter.WriteAsync(playback, concealedSamples, cancellationToken)
             .ConfigureAwait(false);
-        if (lostPackets > maximumConcealedPackets)
+        if (lostPackets > MaximumConcealedPackets)
             decoder.Reset();
     }
 
@@ -226,6 +246,18 @@ public sealed class DmrRxAudioSession : IAsyncDisposable
             DmrPrivacyAlgorithms.DesOfb or DmrPrivacyAlgorithms.Aes256))
         {
             throw new NotSupportedException($"Unsupported DMR privacy algorithm 0x{metadata.AlgorithmId:X2}.");
+        }
+        if (receiveKeyPolicy == DmrReceiveKeyPolicy.ConfiguredChannel &&
+            (!hasConfiguredPrivacyKey ||
+             configuredPrivacyAlgorithm != metadata.AlgorithmId ||
+             configuredPrivacyKeyId != metadata.KeyId))
+        {
+            privacyProcessor?.Dispose();
+            privacyProcessor = null;
+            privacyRequired = true;
+            throw new NotSupportedException(hasConfiguredPrivacyKey
+                ? $"DMR encrypted receive key 0x{metadata.KeyId:X2} for algorithm 0x{metadata.AlgorithmId:X2} does not match this channel's configured key."
+                : "DMR encrypted receive is blocked because this channel has no configured DMR key.");
         }
         if (keyResolver is null ||
             !keyResolver.TryResolve(systemName, metadata.AlgorithmId, metadata.KeyId, out ReadOnlyMemory<byte> key))

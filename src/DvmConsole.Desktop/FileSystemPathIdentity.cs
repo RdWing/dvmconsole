@@ -1,28 +1,20 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Desktop;
 
 internal static class FileSystemPathIdentity
 {
-    private static StringComparison Comparison => OperatingSystem.IsWindows()
-        ? StringComparison.OrdinalIgnoreCase
-        : StringComparison.Ordinal;
-
-    public static StringComparer Comparer => OperatingSystem.IsWindows()
-        ? StringComparer.OrdinalIgnoreCase
-        : StringComparer.Ordinal;
+    public static IEqualityComparer<string> Comparer
+        => Core.Configuration.FileSystemPathIdentity.Comparer;
 
     public static bool AreEquivalent(string first, string second)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(first);
-        ArgumentException.ThrowIfNullOrWhiteSpace(second);
-        return string.Equals(Path.GetFullPath(first), Path.GetFullPath(second), Comparison);
+        return Core.Configuration.FileSystemPathIdentity.AreEquivalent(first, second);
     }
 
     public static bool IsUnderRoot(string rootPath, string path)
     {
-        string normalizedPath = Path.GetFullPath(path);
-        string normalizedRoot = Path.GetFullPath(rootPath).TrimEnd(
-            Path.DirectorySeparatorChar,
-            Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        return normalizedPath.StartsWith(normalizedRoot, Comparison);
+        return Core.Configuration.FileSystemPathIdentity.IsUnderRoot(rootPath, path);
     }
 }

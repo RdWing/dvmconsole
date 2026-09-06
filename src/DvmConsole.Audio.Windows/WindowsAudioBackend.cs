@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using NAudio.CoreAudioApi;
 using System.Runtime.Versioning;
 
@@ -15,8 +18,6 @@ public sealed class WindowsAudioBackend : IAudioBackend, IDefaultAudioDeviceIden
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("WindowsAudioBackend requires Windows.");
-        if (processingMode == AudioProcessingMode.AppleVoiceProcessing)
-            throw new PlatformNotSupportedException("Apple voice processing requires an Apple audio backend.");
         if (processingMode is not AudioProcessingMode.DvmConsole and not AudioProcessingMode.WindowsCommunications)
             throw new ArgumentOutOfRangeException(nameof(processingMode));
 

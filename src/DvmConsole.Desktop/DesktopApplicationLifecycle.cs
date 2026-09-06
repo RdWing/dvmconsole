@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Controls;
 using DvmConsole.Application;
 
@@ -10,16 +13,29 @@ namespace DvmConsole.Desktop;
 internal sealed class DesktopApplicationLifecycle : IApplicationLifecycle, IDisposable
 {
     private readonly Window window;
+    private readonly ILinuxSleepMonitor? sleepMonitor;
     private int active;
     private int stopping;
     private int disposed;
 
     public DesktopApplicationLifecycle(Window window)
+        : this(window, OperatingSystem.IsLinux() ? new LinuxLogindSleepMonitor() : null)
+    {
+    }
+
+    internal DesktopApplicationLifecycle(Window window, ILinuxSleepMonitor? sleepMonitor)
     {
         this.window = window ?? throw new ArgumentNullException(nameof(window));
+        this.sleepMonitor = sleepMonitor;
         window.Activated += HandleActivated;
         window.Deactivated += HandleDeactivated;
+        window.Opened += HandleOpened;
         window.Closing += HandleClosing;
+        if (sleepMonitor is not null)
+        {
+            sleepMonitor.Suspending += HandleSuspending;
+            sleepMonitor.Resumed += HandleResumed;
+        }
     }
 
     public bool IsActive => Volatile.Read(ref active) != 0;
@@ -36,7 +52,14 @@ internal sealed class DesktopApplicationLifecycle : IApplicationLifecycle, IDisp
             return;
         window.Activated -= HandleActivated;
         window.Deactivated -= HandleDeactivated;
+        window.Opened -= HandleOpened;
         window.Closing -= HandleClosing;
+        if (sleepMonitor is not null)
+        {
+            sleepMonitor.Suspending -= HandleSuspending;
+            sleepMonitor.Resumed -= HandleResumed;
+            sleepMonitor.Dispose();
+        }
     }
 
     private void HandleActivated(object? sender, EventArgs args)
@@ -57,9 +80,26 @@ internal sealed class DesktopApplicationLifecycle : IApplicationLifecycle, IDisp
             Stopping?.Invoke(this, EventArgs.Empty);
     }
 
-    // Desktop has no ordinary application-suspension callback. These methods
-    // keep the mapping explicit for a future host/lifetime integration and
-    // provide one path for platform-specific desktop suspension if added.
+    private async void HandleOpened(object? sender, EventArgs args)
+    {
+        if (sleepMonitor is null)
+            return;
+        try
+        {
+            await sleepMonitor.StartAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            DesktopCrashLog.Write("Linux suspend/resume monitoring", exception);
+        }
+    }
+
+    private void HandleSuspending(object? sender, EventArgs args)
+        => NotifySuspending();
+
+    private void HandleResumed(object? sender, EventArgs args)
+        => NotifyResumed();
+
     internal void NotifySuspending()
         => Suspending?.Invoke(this, EventArgs.Empty);
 

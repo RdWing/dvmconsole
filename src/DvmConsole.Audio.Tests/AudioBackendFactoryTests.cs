@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using Xunit;
 
@@ -19,18 +22,6 @@ public sealed class AudioBackendFactoryTests
             .Single()
             .GetParameters(),
             parameter => parameter.Name == "highQualityBluetoothAudio");
-    }
-
-    [Fact]
-    public void RejectsAppleVoiceProcessingOutsideMacOS()
-    {
-        if (OperatingSystem.IsMacOS())
-            return;
-
-        PlatformNotSupportedException exception = Assert.Throws<PlatformNotSupportedException>(() =>
-            AudioBackendFactory.CreateDefault(processingMode: AudioProcessingMode.AppleVoiceProcessing));
-
-        Assert.Contains("Apple voice processing", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

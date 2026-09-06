@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -44,6 +47,34 @@ public sealed class SessionUiCallbackGateTests
     }
 
     [Fact]
+    public async Task PostingDoesNotWaitForAnExecutingUiCallback()
+    {
+        var dispatcher = new QueuedUiDispatcher();
+        var gate = new SessionUiCallbackGate(dispatcher);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        gate.Post(() => { entered.Set(); release.Wait(); });
+        Task ui = Task.Run(dispatcher.RunNext);
+        Task? producer = null;
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            producer = Task.Run(() => gate.Post(() => Assert.Fail("Queued callback must be fenced by close")));
+            await producer.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(dispatcher.HasPendingCallbacks);
+        }
+        finally
+        {
+            release.Set();
+            await ui;
+            if (producer is not null)
+                await producer;
+        }
+        gate.Close();
+        dispatcher.RunNext();
+    }
+
+    [Fact]
     public async Task CloseWaitsForAnExecutingCallback()
     {
         var dispatcher = new QueuedUiDispatcher();
@@ -77,7 +108,7 @@ public sealed class SessionUiCallbackGateTests
 
     private sealed class QueuedUiDispatcher : IUiDispatcher
     {
-        private readonly Queue<Action> callbacks = new();
+        private readonly System.Collections.Concurrent.ConcurrentQueue<Action> callbacks = new();
 
         public bool HasPendingCallbacks => callbacks.Count > 0;
 
@@ -93,6 +124,9 @@ public sealed class SessionUiCallbackGateTests
         }
 
         public void RunNext()
-            => Assert.IsType<Action>(callbacks.Dequeue())();
+        {
+            Assert.True(callbacks.TryDequeue(out Action? callback));
+            callback();
+        }
     }
 }

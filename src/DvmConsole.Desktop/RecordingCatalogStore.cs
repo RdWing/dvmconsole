@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -27,7 +30,8 @@ internal sealed class RecordingCatalogStore
         string rootPath,
         int retentionDays,
         DateTimeOffset now,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool deleteExpired = true)
     {
         if (retentionDays < 0)
             throw new ArgumentOutOfRangeException(nameof(retentionDays));
@@ -45,6 +49,7 @@ internal sealed class RecordingCatalogStore
             : now.ToUniversalTime().AddDays(-retentionDays);
         var recordingsByKey = new Dictionary<string, CallRecordingMetadata>(StringComparer.OrdinalIgnoreCase);
         int scannedFiles = 0;
+        int retentionCandidates = 0;
         int prunedFiles = 0;
         int damagedFiles = 0;
         int inaccessiblePaths = 0;
@@ -80,6 +85,9 @@ internal sealed class RecordingCatalogStore
                 retentionEvaluations++;
                 if (cutoff is not null && metadata.UtcEndTime <= cutoff.Value)
                 {
+                    retentionCandidates++;
+                    if (!deleteExpired)
+                        continue;
                     if (scanSource.TryDelete(opusPath, rootPath))
                         prunedFiles++;
                     else
@@ -111,6 +119,7 @@ internal sealed class RecordingCatalogStore
         return new RecordingCatalogScanResult(
             recordings,
             scannedFiles,
+            retentionCandidates,
             prunedFiles,
             damagedFiles,
             inaccessiblePaths,
@@ -398,6 +407,7 @@ internal sealed class FileRecordingCatalogScanSource(
 internal sealed record RecordingCatalogScanResult(
     IReadOnlyList<CallRecordingMetadata> Recordings,
     int ScannedFiles,
+    int RetentionCandidates,
     int PrunedFiles,
     int DamagedFiles,
     int InaccessiblePaths,
@@ -406,6 +416,7 @@ internal sealed record RecordingCatalogScanResult(
 {
     public static RecordingCatalogScanResult Empty { get; } = new(
         [],
+        0,
         0,
         0,
         0,

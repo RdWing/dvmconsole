@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
@@ -8,8 +11,8 @@ using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 using DvmConsole.Configuration.Yaml;
 using DvmConsole.Presentation;
-using System.Text;
 using System.ComponentModel;
+using System.Text;
 
 namespace DvmConsole.Desktop;
 
@@ -20,18 +23,19 @@ internal enum ConfigurationDraftReplacementChoice
     Discard
 }
 
+internal sealed record CompanionFileSelection(string Name, string Content);
+
 public sealed partial class ConfigurationStudioWindow : Window
 {
     private readonly MainWindowViewModel runtimeViewModel;
     private readonly UserSettingsStore settingsStore;
     private readonly ManagedConfigurationLibrary configurationLibrary;
     private readonly DesktopConfigurationMaterializer configurationMaterializer;
-    private readonly DesktopConfigurationStudioSavePlanner savePlanner;
-    private ConfigurationId? managedConfigurationId;
+    private readonly ConfigurationStudioSessionController sessionController;
+    private readonly ConfigurationStudioDocumentController documentController;
     private bool ready;
     private bool allowClose;
     private int saveOperationInProgress;
-    private int deleteSystemOperationInProgress;
 
     public ConfigurationStudioWindow()
     {
@@ -39,7 +43,8 @@ public sealed partial class ConfigurationStudioWindow : Window
         settingsStore = null!;
         configurationLibrary = null!;
         configurationMaterializer = null!;
-        savePlanner = null!;
+        sessionController = null!;
+        documentController = null!;
         InitializeComponent();
     }
 
@@ -56,7 +61,6 @@ public sealed partial class ConfigurationStudioWindow : Window
         this.settingsStore = settingsStore ?? throw new ArgumentNullException(nameof(settingsStore));
         this.configurationLibrary = configurationLibrary ?? throw new ArgumentNullException(nameof(configurationLibrary));
         this.configurationMaterializer = configurationMaterializer ?? throw new ArgumentNullException(nameof(configurationMaterializer));
-        this.managedConfigurationId = managedConfigurationId;
         InitializeComponent();
         UserSettings initialSettings = settingsStore.Load();
         CodeplugStudioState initialStudioState = managedConfigurationId is { } configurationId &&
@@ -86,7 +90,18 @@ public sealed partial class ConfigurationStudioWindow : Window
             new DesktopConfigurationStudioPreviewFactory(),
             initialState,
             initialSection);
-        savePlanner = new DesktopConfigurationStudioSavePlanner(viewModel, settingsStore);
+        var savePlanner = new DesktopConfigurationStudioSavePlanner(viewModel, settingsStore);
+        sessionController = new ConfigurationStudioSessionController(
+            viewModel,
+            new ConfigurationStudioRuntimePorts(
+                runtimeViewModel.FlushUserSettingsAsync,
+                () => runtimeViewModel.ConfigurationReference,
+                runtimeViewModel.AdoptUserSettingsSnapshotAsync),
+            settingsStore,
+            configurationLibrary,
+            savePlanner,
+            managedConfigurationId);
+        documentController = new ConfigurationStudioDocumentController(viewModel);
         foreach (PatchGroupEditorViewModel group in viewModel.OperationalGroups)
             group.PropertyChanged += HandleOperationalGroupPropertyChanged;
         Opened += HandleOpened;
@@ -103,18 +118,20 @@ public sealed partial class ConfigurationStudioWindow : Window
     private ConfigurationStudioViewModel viewModel
         => (ConfigurationStudioViewModel)DataContext!;
     internal ConfigurationStudioViewModel StudioViewModel => viewModel;
-    internal ConfigurationId? ManagedConfigurationId => managedConfigurationId;
+    internal ConfigurationId? ManagedConfigurationId => sessionController.ManagedConfigurationId;
     internal ConfigurationSavePlan CreateSavePlanForCapture(string destinationPath)
-        => savePlanner.CreatePlan(destinationPath);
+        => sessionController.CreatePlan(destinationPath);
     internal string BuildSaveReviewForCapture(ConfigurationSavePlan plan)
-        => savePlanner.BuildReviewText(plan);
+        => sessionController.BuildReviewText(plan);
     internal Func<string, string, string, Task<bool>>? EditMenuConfirmationOverride { get; set; }
     internal Func<Task<ConfigurationDraftReplacementChoice>>? DraftReplacementChoiceOverride { get; set; }
     internal Func<string, string, string, Task<bool>>? DialogConfirmationOverride { get; set; }
     internal Func<string, string, Task>? MessageOverride { get; set; }
-    internal Func<ConfigurationReference, ValueTask<string>>? ConfigurationMaterializationOverride { get; set; }
-    internal Func<string, FilePickerFileType, Task<IStorageFile?>>? CompanionFilePickerOverride { get; set; }
-    internal Func<string, string, Task<IStorageFile?>>? CodeplugSaveFilePickerOverride { get; set; }
+    internal Func<ConfigurationReference, ValueTask<IConfigurationMaterializationLease>>?
+        ConfigurationMaterializationOverride
+    { get; set; }
+    internal Func<string, FilePickerFileType, Task<CompanionFileSelection?>>? CompanionFilePickerOverride { get; set; }
+    internal Func<string, string, Task<string?>>? CodeplugSavePathOverride { get; set; }
     internal Task<bool> ReviewAndSaveForCaptureAsync(bool saveCopy = false, bool offerReload = true)
         => ReviewAndSaveAsync(saveCopy, offerReload);
     internal Task DeleteSelectedSystemForCaptureAsync()
@@ -193,58 +210,10 @@ public sealed partial class ConfigurationStudioWindow : Window
         IEnumerable<ChannelConfiguration>? selectedChannels = null)
     {
         confirm ??= ConfirmAsync;
-        switch (command)
-        {
-            case ConfigurationStudioEditCommand.AddChannel:
-                viewModel.AddChannel();
-                break;
-            case ConfigurationStudioEditCommand.DuplicateChannel:
-                viewModel.DuplicateChannel();
-                break;
-            case ConfigurationStudioEditCommand.DeleteChannel:
-                if (viewModel.SelectedChannel is { } channel &&
-                    await confirm(
-                        "Delete channel",
-                        $"Delete '{channel.Name}'? Saved widget and group references to this channel will be removed when the draft is saved.",
-                        "Delete"))
-                {
-                    viewModel.DeleteChannel();
-                }
-                break;
-            case ConfigurationStudioEditCommand.MoveChannelUp:
-                viewModel.MoveChannel(-1);
-                break;
-            case ConfigurationStudioEditCommand.MoveChannelDown:
-                viewModel.MoveChannel(1);
-                break;
-            case ConfigurationStudioEditCommand.ApplySelectedCardSize:
-                viewModel.ApplySelectedCardSize(selectedChannels ?? SelectedChannelRows());
-                break;
-            case ConfigurationStudioEditCommand.SetSelectedRowsRxOnly:
-                viewModel.SetChannelsRxOnly(selectedChannels ?? SelectedChannelRows(), rxOnly: true);
-                break;
-            case ConfigurationStudioEditCommand.SetSelectedRowsTxCapable:
-                viewModel.SetChannelsRxOnly(selectedChannels ?? SelectedChannelRows(), rxOnly: false);
-                break;
-            case ConfigurationStudioEditCommand.AddZone:
-                viewModel.AddZone();
-                break;
-            case ConfigurationStudioEditCommand.DuplicateZone:
-                viewModel.DuplicateZone();
-                break;
-            case ConfigurationStudioEditCommand.DeleteZone:
-                if (viewModel.SelectedZone is { } zone &&
-                    await confirm(
-                        "Delete zone",
-                        $"Delete '{zone.Name}' and its {zone.Channels.Count} channel(s) and {zone.WebStreams.Count} stream(s)?",
-                        "Delete"))
-                {
-                    viewModel.DeleteZone();
-                }
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(command), command, null);
-        }
+        await documentController.ExecuteAsync(
+            command,
+            (title, message, confirmLabel) => confirm(title, message, confirmLabel),
+            selectedChannels ?? SelectedChannelRows());
     }
     private async void HandleSharedDeleteSystemRequested(object? sender, EventArgs e)
     {
@@ -252,73 +221,28 @@ public sealed partial class ConfigurationStudioWindow : Window
     }
 
     private async Task DeleteSelectedSystemAsync()
-    {
-        if (Interlocked.Exchange(ref deleteSystemOperationInProgress, 1) != 0)
-            return;
-
-        try
-        {
-            if (viewModel.SelectedSystem is not { } system)
-                return;
-            if (await ConfirmAsync(
-                    "Delete system",
-                    $"Delete '{system.Name}'? Channels that reference it will be reported as errors until reassigned.",
-                    "Delete"))
-            {
-                viewModel.DeleteSystem(system);
-            }
-        }
-        finally
-        {
-            Volatile.Write(ref deleteSystemOperationInProgress, 0);
-        }
-    }
+        => await documentController.DeleteSelectedSystemAsync(ConfirmAsync);
     private IEnumerable<ChannelConfiguration> SelectedChannelRows()
         => this.FindControl<ConfigurationStudioView>("studioView")?.ZonesView.GetSelectedChannelRows() ?? [];
     private async void HandleSharedDeleteStreamRequested(object? sender, EventArgs e)
-    {
-        if (viewModel.SelectedStream is { } row &&
-            await ConfirmAsync("Delete web stream", $"Delete '{row.Stream.Name}' from zone '{row.Zone.Name}'?", "Delete"))
-            viewModel.DeleteStream();
-    }
+        => await documentController.DeleteSelectedStreamAsync(ConfirmAsync);
 
     private async void HandleSharedDeleteGroupRequested(object? sender, EventArgs e)
-    {
-        if (viewModel.SelectedGroup is { } group &&
-            await ConfirmAsync("Delete group", $"Delete '{group.Name}'? Its codeplug-scoped membership, direction, and enabled state will be removed when saved.", "Delete"))
-            viewModel.DeleteGroup();
-    }
+        => await documentController.DeleteSelectedGroupAsync(ConfirmAsync);
     private async void HandleSharedDeleteKeyRequested(object? sender, EventArgs e)
-    {
-        if (viewModel.SelectedKey is { } key &&
-            await ConfirmAsync("Delete encryption key", $"Delete {key.Protocol.ToUpperInvariant()} key {key.KeyId}? Channels that reference it may no longer decrypt or transmit securely.", "Delete"))
-        {
-            viewModel.DeleteKey();
-        }
-    }
+        => await documentController.DeleteSelectedKeyAsync(ConfirmAsync);
     private async void HandleSharedDeleteAliasRequested(object? sender, EventArgs e)
-    {
-        if (viewModel.SelectedAlias is { } row &&
-            await ConfirmAsync("Delete RID alias", $"Delete RID {row.Alias.Rid} ({row.Alias.Alias}) from its alias file?", "Delete"))
-        {
-            viewModel.DeleteAlias();
-        }
-    }
+        => await documentController.DeleteSelectedAliasAsync(ConfirmAsync);
 
     private async void HandleSharedBrowseKeyFileRequested(object? sender, EventArgs e)
     {
-        IStorageFile? file = await PickCompanionFileAsync(
+        await PickAndImportCompanionAsync(
             "Choose encryption key file",
             new FilePickerFileType("Encryption key file")
             {
                 Patterns = ["*.clear", "*.yml", "*.yaml"],
                 MimeTypes = ["application/yaml", "text/yaml", "text/plain"]
-            });
-        if (file is null)
-            return;
-
-        await ImportSelectedCompanionAsync(
-            file,
+            },
             (name, content) => viewModel.AttachKeyFile(name, content),
             "The key file could not be added to managed storage.");
     }
@@ -327,23 +251,18 @@ public sealed partial class ConfigurationStudioWindow : Window
         object? sender,
         ConfigurationStudioAliasFileEventArgs e)
     {
-        IStorageFile? file = await PickCompanionFileAsync(
+        await PickAndImportCompanionAsync(
             $"Choose RID alias file for {e.System.Name}",
             new FilePickerFileType("RID alias file")
             {
                 Patterns = ["*.yml", "*.yaml"],
                 MimeTypes = ["application/yaml", "text/yaml", "text/plain"]
-            });
-        if (file is null)
-            return;
-
-        await ImportSelectedCompanionAsync(
-            file,
+            },
             (name, content) => viewModel.AttachAliasFile(e.System, name, content),
             "The RID alias file could not be added to managed storage.");
     }
 
-    private async Task<IStorageFile?> PickCompanionFileAsync(
+    private async Task<CompanionFileSelection?> PickCompanionFileAsync(
         string title,
         FilePickerFileType fileType)
     {
@@ -365,21 +284,37 @@ public sealed partial class ConfigurationStudioWindow : Window
                 AllowMultiple = false,
                 FileTypeFilter = [fileType]
             });
-        return files.Count == 0 ? null : files[0];
-    }
+        if (files.Count == 0)
+            return null;
 
-    private async Task ImportSelectedCompanionAsync(
-        IStorageFile file,
-        Func<string, string, string> attach,
-        string failureMessage)
-    {
+        IStorageFile file = files[0];
         try
         {
             string displayName = await AvaloniaStorageThreading.Invoke(() => file.Name);
             await using Stream stream = await AvaloniaStorageThreading.InvokeAsync(file.OpenReadAsync);
             using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            string content = await reader.ReadToEndAsync();
-            string managedReference = await AvaloniaStorageThreading.Invoke(() => attach(displayName, content));
+            return new CompanionFileSelection(displayName, await reader.ReadToEndAsync());
+        }
+        finally
+        {
+            AvaloniaStorageThreading.Invoke(file.Dispose);
+        }
+    }
+
+    private async Task PickAndImportCompanionAsync(
+        string title,
+        FilePickerFileType fileType,
+        Func<string, string, string> attach,
+        string failureMessage)
+    {
+        try
+        {
+            CompanionFileSelection? selection = await PickCompanionFileAsync(title, fileType);
+            if (selection is null)
+                return;
+
+            string managedReference = await AvaloniaStorageThreading.Invoke(
+                () => attach(selection.Name, selection.Content));
             await AvaloniaStorageThreading.InvokeAsync(() => ShowMessageAsync(
                 "Managed companion added",
                 $"{managedReference} is now staged with this configuration. The selected original was not changed."));
@@ -392,10 +327,6 @@ public sealed partial class ConfigurationStudioWindow : Window
             await AvaloniaStorageThreading.InvokeAsync(() => ShowMessageAsync(
                 "Unable to add companion",
                 $"{failureMessage}\n\n{exception.Message}"));
-        }
-        finally
-        {
-            AvaloniaStorageThreading.Invoke(file.Dispose);
         }
     }
 
@@ -522,201 +453,52 @@ public sealed partial class ConfigurationStudioWindow : Window
 
     private async Task<bool> ReviewAndSaveCoreAsync(bool saveCopy, bool offerReload)
     {
-        try
-        {
-            await runtimeViewModel.FlushUserSettingsAsync();
-        }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or ObjectDisposedException)
-        {
-            await ShowMessageAsync(
-                "Unable to prepare save",
-                $"Current operator settings could not be saved.\n\n{exception.Message}");
-            return false;
-        }
-        ConfigurationSavePlan plan;
-        string planPath = viewModel.Document.SourcePath ?? Path.Combine(
-            Path.GetDirectoryName(settingsStore.Path) ?? AppContext.BaseDirectory,
-            "ConfigurationDraftPreview",
-            "codeplug.yml");
-        try
-        {
-            plan = savePlanner.CreatePlan(planPath);
-        }
-        catch (Exception exception) when (exception is IOException or InvalidOperationException or UnauthorizedAccessException)
-        {
-            await ShowMessageAsync("Unable to prepare save", exception.Message);
-            return false;
-        }
-
-        if (!plan.CanSave)
-        {
-            viewModel.OpenValidationDrawer();
-            return false;
-        }
-        string action = saveCopy ? "Save a copy" : "Save";
-        if (!await ConfirmAsync("Review & Save", savePlanner.BuildReviewText(plan), action))
-            return false;
-
-        ConfigurationCommit? committed = null;
-        try
-        {
-            string yaml = plan.Files.First(file => file.Category == "Codeplug").Content;
-            if (saveCopy)
-                yaml = ConfigurationCopyPolicy.RemoveTrustScopedWebAuthorization(yaml);
-            ConfigurationDraft draft;
-            bool currentConfigurationIsCatalogued = managedConfigurationId is ConfigurationId currentId &&
-                await ConfigurationExistsAsync(currentId);
-            if ((saveCopy && currentConfigurationIsCatalogued) || managedConfigurationId is null)
-            {
-                string name = saveCopy ? "Configuration Copy" : "Untitled Configuration";
-                draft = await configurationLibrary.CreateDraftAsync(name);
-            }
-            else
-            {
-                draft = await configurationLibrary.OpenDraftAsync(managedConfigurationId.Value);
-            }
-
-            var companions = new Dictionary<string, ReadOnlyMemory<byte>>(StringComparer.OrdinalIgnoreCase);
-            foreach (ConfigurationFileChange file in plan.Files.Where(file =>
-                         file.Category is not "Codeplug" and not "Operator settings"))
-            {
-                companions[Path.GetFileName(file.Path)] = Encoding.UTF8.GetBytes(file.Content);
-            }
-            draft = await configurationLibrary.StageDraftAsync(
-                draft with { Yaml = yaml, IsDirty = true },
-                companions);
-            committed = await configurationLibrary.CommitAsync(draft);
-
-            ConfigurationFileChange[] settingsChanges = plan.Files
-                .Where(file => file.Category == "Operator settings")
-                .ToArray();
-            string backupRoot = Path.Combine(
-                Path.GetDirectoryName(settingsStore.Path) ?? AppContext.BaseDirectory,
-                "ConfigurationBackups");
-            if (settingsChanges.Length > 0)
-                _ = ConfigurationSaveTransaction.Execute(new ConfigurationSavePlan(settingsChanges, []), backupRoot);
-
-            string managedPath = ConfigurationMaterializationOverride is { } materialize
-                ? await materialize(committed.Reference)
-                : await configurationMaterializer.MaterializeAsync(committed.Reference);
-            UserSettings committedSettings = settingsStore.Load();
-            if (saveCopy && runtimeViewModel.ConfigurationReference is { } sourceConfiguration)
-            {
-                ConfigurationOperatorStateStore.Copy(
-                    committedSettings,
-                    sourceConfiguration.Id.ToString(),
-                    committed.Reference.Id.ToString(),
-                    includeWebStreamAuthorization: false);
-            }
-            CodeplugGroupState copiedGroupState =
-                CodeplugGroupStateStore.CopyForSaveAs(committedSettings, planPath, managedPath);
-            CodeplugStudioState copiedStudioState =
-                CodeplugStudioStateStore.CopyForSaveAs(committedSettings, planPath, managedPath);
-            ConfigurationOperatorStateStore.UpdateDocumentState(
-                committedSettings,
-                committed.Reference.Id.ToString(),
-                copiedGroupState,
-                copiedStudioState);
-            settingsStore.Save(committedSettings);
-            Exception? settingsPersistenceFailure = null;
-            try
-            {
-                await runtimeViewModel.AdoptUserSettingsSnapshotAsync(
-                    settingsStore.CaptureSnapshot(committedSettings));
-            }
-            catch (Exception exception) when (
-                exception is IOException or UnauthorizedAccessException or ObjectDisposedException)
-            {
-                settingsPersistenceFailure = exception;
-            }
-            viewModel.AcceptSaved(managedPath, committed.Reference.Id, plan);
-            managedConfigurationId = committed.Reference.Id;
-            await ShowMessageAsync(
-                "Configuration saved",
-                saveCopy
-                    ? "Saved a managed copy with a new configuration ID." +
-                      DescribeSettingsPersistenceWarning(settingsPersistenceFailure)
-                    : "Committed a new immutable managed revision." +
-                      DescribeSettingsPersistenceWarning(settingsPersistenceFailure));
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
-            InvalidDataException or InvalidOperationException)
-        {
-            if (committed is null)
-            {
-                await ShowMessageAsync(
-                    "Configuration save failed",
-                    $"No managed revision was committed. Restricted backups remain available when originals were staged.\n\n{exception.Message}");
-                return false;
-            }
-
-            managedConfigurationId = committed.Reference.Id;
-            await ShowMessageAsync(
-                "Configuration committed with a follow-up failure",
-                $"Managed revision {committed.Reference.Revision} was committed and remains recoverable in the Configuration Library, " +
-                "but Studio could not finish materializing it or rebasing operator settings. Reopen the managed configuration before making more edits.\n\n" +
-                exception.Message);
-            return true;
-        }
-
-        ConfigurationCommit commit = committed;
-
-        bool updatesActiveConfiguration =
-            runtimeViewModel.ConfigurationReference?.Id == commit.Reference.Id;
-        if (offerReload &&
-            !saveCopy &&
-            await ConfirmAsync(
-                updatesActiveConfiguration
-                    ? "Reload active configuration?"
-                    : "Load saved configuration?",
-                updatesActiveConfiguration
-                    ? "The running FNE sessions still use the previous managed revision. Disconnect and reload now, or cancel to keep the new revision pending without changing the active session."
-                    : "This configuration is saved, but the console is still displaying a different configuration. Disconnect that configuration and load this one now, or cancel to leave this saved configuration in the library.",
-                updatesActiveConfiguration
-                    ? "Disconnect and reload"
-                    : "Disconnect and load"))
-        {
-            if (ReloadRequested is not { } reload)
-            {
-                await ShowMessageAsync(
-                    "Reload unavailable",
-                    "The managed revision was saved, but this Studio window is no longer attached to the running console. Reopen it from the active console and reload the pending revision.");
-                return false;
-            }
-
-            const string normalTitle = "DVM Console Configuration Studio";
-            Title = $"{normalTitle} — Disconnecting and reloading…";
-            ConfigurationStudioView? reloadingView = this.FindControl<ConfigurationStudioView>("studioView");
-            if (reloadingView is null)
-            {
-                await ShowMessageAsync(
-                    "Reload unavailable",
-                    "The managed revision was saved, but Configuration Studio is no longer attached to its editor view.");
-                return false;
-            }
-            reloadingView.IsEnabled = false;
-            try
-            {
-                await reload(commit.Reference);
-            }
-            finally
-            {
-                if (IsVisible)
-                {
-                    reloadingView.IsEnabled = true;
-                    Title = normalTitle;
-                }
-            }
-        }
-        return true;
+        var ports = new ConfigurationStudioSessionPorts(
+            ConfirmAsync,
+            ShowMessageAsync,
+            reference => ConfigurationMaterializationOverride is { } materialize
+                ? materialize(reference)
+                : configurationMaterializer.MaterializeAsync(reference),
+            ReloadSavedConfigurationAsync);
+        return await sessionController.ReviewAndSaveAsync(saveCopy, offerReload, ports);
     }
 
-    private static string DescribeSettingsPersistenceWarning(Exception? failure)
-        => failure is null
-            ? string.Empty
-            : "\n\nThe managed revision was committed and the live settings were rebased, " +
-              $"but the settings writer reported a failure and will retry after the next change.\n\n{failure.Message}";
+    private async Task<bool> ReloadSavedConfigurationAsync(ConfigurationReference reference)
+    {
+        if (ReloadRequested is not { } reload)
+        {
+            await ShowMessageAsync(
+                "Reload unavailable",
+                "The managed revision was saved, but this Studio window is no longer attached to the running console. Reopen it from the active console and reload the pending revision.");
+            return false;
+        }
+
+        const string normalTitle = "DVM Console Configuration Studio";
+        ConfigurationStudioView? reloadingView = this.FindControl<ConfigurationStudioView>("studioView");
+        if (reloadingView is null)
+        {
+            await ShowMessageAsync(
+                "Reload unavailable",
+                "The managed revision was saved, but Configuration Studio is no longer attached to its editor view.");
+            return false;
+        }
+
+        Title = $"{normalTitle} — Disconnecting and reloading…";
+        reloadingView.IsEnabled = false;
+        try
+        {
+            await reload(reference);
+            return true;
+        }
+        finally
+        {
+            if (IsVisible)
+            {
+                reloadingView.IsEnabled = true;
+                Title = normalTitle;
+            }
+        }
+    }
 
     private async void HandleExportFullClick(object? sender, RoutedEventArgs e)
     {
@@ -725,35 +507,55 @@ public sealed partial class ConfigurationStudioWindow : Window
                 "This copy includes FNE credentials, transport secrets, stream credentials, operational addresses, and references to local key material. Store and share it as a secret.",
                 "Choose destination"))
             return;
-        IStorageFile? file = await PickCodeplugSaveFileAsync("Export full interoperable copy");
-        if (file is not null)
-            await WriteExportAsync(file, sanitized: false);
+        await PickAndWriteExportAsync("Export full interoperable copy", "codeplug.yml", sanitized: false);
     }
 
     private async void HandleExportSanitizedClick(object? sender, RoutedEventArgs e)
     {
-        IStorageFile? file = await PickCodeplugSaveFileAsync(
+        await PickAndWriteExportAsync(
             "Export sanitized support copy",
-            "dvmconsole-support-sanitized.yml");
-        if (file is not null)
-            await WriteExportAsync(file, sanitized: true);
+            "dvmconsole-support-sanitized.yml",
+            sanitized: true);
     }
 
-    private async Task WriteExportAsync(IStorageFile file, bool sanitized)
+    private async Task PickAndWriteExportAsync(string title, string suggestedName, bool sanitized)
     {
+        if (CodeplugSavePathOverride is { } pickPath)
+        {
+            string? path = await pickPath(title, suggestedName);
+            if (path is null)
+                return;
+            var filesystemDestination = new DesktopConfigurationDocumentSet(path);
+            await WriteExportAsync(
+                filesystemDestination.Primary.DisplayName,
+                filesystemDestination,
+                sanitized);
+            return;
+        }
+
+        IStorageFile? file = await PickCodeplugSaveFileAsync(title, suggestedName);
+        if (file is null)
+            return;
         string displayName = await AvaloniaStorageThreading.Invoke(() => file.Name);
+        using AvaloniaStorageConfigurationDocumentSet destination = await AvaloniaStorageThreading.Invoke(
+            () => new AvaloniaStorageConfigurationDocumentSet(file));
+        await WriteExportAsync(displayName, destination, sanitized);
+    }
+
+    private async Task WriteExportAsync(
+        string displayName,
+        IExportDocumentSet destination,
+        bool sanitized)
+    {
+        viewModel.CommitPendingEdits();
         try
         {
-            string sourcePath = viewModel.Document.SourcePath ?? Path.Combine(
-                Path.GetDirectoryName(settingsStore.Path) ?? AppContext.BaseDirectory,
-                "ConfigurationDraftPreview",
-                "codeplug.yml");
-            var materializedSource = new DesktopConfigurationDocumentSet(sourcePath);
             var source = new ConfigurationStudioExportDocumentSet(
-                materializedSource,
+                viewModel.FullExportText,
+                viewModel.Document.SourcePath is { } sourcePath
+                    ? Path.GetFileName(sourcePath)
+                    : "codeplug.yml",
                 viewModel.CaptureExportCompanionContents());
-            using AvaloniaStorageConfigurationDocumentSet destination = await AvaloniaStorageThreading.Invoke(
-                () => new AvaloniaStorageConfigurationDocumentSet(file));
             ConfigurationBundleExportResult result = await ConfigurationBundleExporter.ExportAsync(
                 viewModel.FullExportText,
                 source,
@@ -782,9 +584,6 @@ public sealed partial class ConfigurationStudioWindow : Window
         string title,
         string suggestedName = "codeplug.yml")
     {
-        if (CodeplugSaveFilePickerOverride is { } pick)
-            return await pick(title, suggestedName);
-
         if (!StorageProvider.CanSave)
         {
             await ShowMessageAsync(
@@ -875,7 +674,7 @@ public sealed partial class ConfigurationStudioWindow : Window
 
     private async ValueTask DiscardManagedDraftAsync()
     {
-        if (managedConfigurationId is ConfigurationId id)
+        if (sessionController.ManagedConfigurationId is ConfigurationId id)
             await configurationLibrary.DiscardDraftAsync(id);
     }
 
@@ -890,16 +689,6 @@ public sealed partial class ConfigurationStudioWindow : Window
         {
             DesktopCrashLog.Write("Configuration Studio draft cleanup", exception);
         }
-    }
-
-    private async ValueTask<bool> ConfigurationExistsAsync(ConfigurationId id)
-    {
-        await foreach (ConfigurationSummary summary in configurationLibrary.ListAsync())
-        {
-            if (summary.Id == id)
-                return true;
-        }
-        return false;
     }
 
     private async Task ShowMessageAsync(string title, string message)
@@ -917,22 +706,34 @@ public sealed partial class ConfigurationStudioWindow : Window
 
     private async void HandleClosing(object? sender, WindowClosingEventArgs e)
     {
-        if (allowClose || !viewModel.IsDirty)
-            return;
-        e.Cancel = true;
-        ConfigurationDraftReplacementChoice choice = await ChooseCloseDraftAsync();
-        if (choice == ConfigurationDraftReplacementChoice.Save)
+        try
         {
-            if (!await ReviewAndSaveAsync(saveCopy: false))
+            if (!allowClose)
+                viewModel.CommitPendingEdits();
+            if (allowClose || !viewModel.IsDirty)
                 return;
-            allowClose = true;
-            Close();
+            e.Cancel = true;
+            ConfigurationDraftReplacementChoice choice = await ChooseCloseDraftAsync();
+            if (choice == ConfigurationDraftReplacementChoice.Save)
+            {
+                if (!await ReviewAndSaveAsync(saveCopy: false))
+                    return;
+                allowClose = true;
+                Close();
+            }
+            else if (choice == ConfigurationDraftReplacementChoice.Discard)
+            {
+                await DiscardManagedDraftAsync();
+                allowClose = true;
+                Close();
+            }
         }
-        else if (choice == ConfigurationDraftReplacementChoice.Discard)
+        catch (Exception exception)
         {
-            await DiscardManagedDraftAsync();
-            allowClose = true;
-            Close();
+            DesktopCrashLog.Write("Configuration Studio close", exception);
+            await ShowMessageAsync(
+                "Unable to close Configuration Studio",
+                $"The draft could not be saved or discarded. Configuration Studio will remain open.\n\n{exception.Message}");
         }
     }
 

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
@@ -27,6 +30,84 @@ public sealed class NxdnVoicePacketCodecTests
         Assert.Equal(NxdnVoicePacketCodec.DeclaredPacketBytes, packet[23]);
         Assert.Equal(0x01, packet[24]);
         Assert.Equal(0x00, packet[25]);
+    }
+
+    [Fact]
+    public void CallerOwnedVoiceWriterMatchesAllocatedPacketWithoutAllocating()
+    {
+        byte[] ambe = Enumerable.Range(0, NxdnVoicePacketCodec.AmbeBytes)
+            .Select(value => (byte)(0x40 + value))
+            .ToArray();
+        byte[] expected = NxdnVoicePacketCodec.CreateVoicePacket(1001, 2002, true, 7, ambe);
+        byte[] packet = new byte[NxdnVoicePacketCodec.PacketBytes];
+
+        NxdnVoicePacketCodec.WriteVoicePacket(packet, 1001, 2002, true, 7, ambe);
+        Assert.Equal(expected, packet);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int index = 0; index < 10_000; index++)
+            NxdnVoicePacketCodec.WriteVoicePacket(packet, 1001, 2002, true, 7, ambe);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void SinglePassVoiceParseMatchesCompatibilityExtractors()
+    {
+        byte[] expected = Enumerable.Range(0, NxdnVoicePacketCodec.AmbeBytes)
+            .Select(value => (byte)(0x40 + value))
+            .ToArray();
+        byte[] packet = NxdnVoicePacketCodec.CreateVoicePacket(
+            1001,
+            2002,
+            true,
+            7,
+            expected,
+            superframePart: 2);
+        byte[] compatibilityAmbe = new byte[NxdnVoicePacketCodec.AmbeBytes];
+        byte[] compatibilitySacch = new byte[3];
+        byte[] singlePassAmbe = new byte[NxdnVoicePacketCodec.AmbeBytes];
+        byte[] singlePassSacch = new byte[3];
+
+        Assert.True(NxdnVoicePacketCodec.TryExtractAmbe(packet, compatibilityAmbe, out int compatibilityCount));
+        Assert.True(NxdnVoicePacketCodec.TryExtractSacchFragment(packet, out byte compatibilityStructure, compatibilitySacch));
+        Assert.True(NxdnVoicePacketCodec.TryParseVoicePacket(
+            packet,
+            singlePassAmbe,
+            singlePassSacch,
+            out NxdnVoicePacketCodec.ParsedVoicePacket parsed));
+
+        Assert.Equal(compatibilityCount, parsed.AmbeCodewordCount);
+        Assert.Equal(compatibilityStructure, parsed.SacchStructure);
+        Assert.True(parsed.HasSacchFragment);
+        Assert.Equal(compatibilityAmbe, singlePassAmbe);
+        Assert.Equal(compatibilitySacch, singlePassSacch);
+    }
+
+    [Fact]
+    public void SinglePassControlParsePreservesBothFacchMessages()
+    {
+        byte[] messageIndicator = [1, 2, 3, 4, 5, 6, 7, 8];
+        byte[] packet = NxdnVoicePacketCodec.CreatePrivacyCallStartPacket(
+            1001,
+            2002,
+            true,
+            7,
+            NxdnPrivacyAlgorithms.Aes256,
+            5,
+            messageIndicator);
+
+        Assert.True(NxdnVoicePacketCodec.TryParseVoicePacket(
+            packet,
+            new byte[NxdnVoicePacketCodec.AmbeBytes],
+            new byte[3],
+            out NxdnVoicePacketCodec.ParsedVoicePacket parsed));
+
+        Assert.Equal(NxdnVoicePacketCodec.VoiceCallMessageType, parsed.FirstFacchMetadata?.MessageType);
+        Assert.Equal(NxdnVoicePacketCodec.VoiceCallIvMessageType, parsed.SecondFacchMetadata?.MessageType);
+        Assert.Equal(messageIndicator, parsed.SecondFacchMetadata?.MessageIndicator);
+        Assert.Equal(0, parsed.AmbeCodewordCount);
     }
 
     [Fact]
@@ -74,11 +155,12 @@ public sealed class NxdnVoicePacketCodecTests
             group: true,
             streamId: 99,
             new FakeVocoderSession(),
-            (payload, sequence, _) => sent.Add((payload.ToArray(), sequence)));
+            (payload, sequence, _) => sent.Add((payload.ToArray(), sequence)),
+            TestPacketCadence.NoDelayAsync);
 
         call.Start();
         call.Process(new short[VocoderFrameSizes.PcmSamplesPerFrame * NxdnVoicePacketCodec.CodewordsPerFrame]);
-        await call.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
+        await call.EndAsync();
 
         Assert.Equal(4, sent.Count);
         Assert.Equal(NxdnVoicePacketCodec.VoiceCallMessageType, sent[0].Payload[4]);

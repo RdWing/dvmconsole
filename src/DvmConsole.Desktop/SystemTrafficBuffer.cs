@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
@@ -23,6 +26,7 @@ internal readonly record struct SystemTrafficWorkItem(
     ReceiveDispatchTargets PreEnqueuedAudioChannels,
     ReceiveDispatchTargets PreEnqueuedPatchChannels)
 {
+    public long PresentationQueuedTimestamp { get; init; }
     public FneTrafficFrame Traffic => Decision.Traffic;
     public DateTimeOffset ReceivedAt => Decision.ReceivedAt;
     public long ReceivedTimestamp => Decision.ReceivedTimestamp;
@@ -202,9 +206,7 @@ internal sealed class SystemTrafficBuffer
             return true;
 
         if (traffic.Protocol == FneTrafficProtocol.Nxdn &&
-            NxdnVoicePacketCodec.TryExtractCallMetadata(
-                traffic.Payload,
-                out NxdnVoicePacketCodec.CallMetadata metadata) &&
+            RadioFrameEncryptionResolver.TryResolveNxdnCallMetadata(traffic, out var metadata) &&
             metadata.MessageType is NxdnVoicePacketCodec.VoiceCallMessageType or
                 NxdnVoicePacketCodec.VoiceCallIvMessageType or
                 NxdnVoicePacketCodec.TransmitReleaseMessageType)

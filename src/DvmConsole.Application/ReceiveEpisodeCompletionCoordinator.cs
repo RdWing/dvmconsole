@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Application;
 
 /// <summary>
@@ -25,6 +28,19 @@ public interface IReceiveEpisodeCompletionPort
     ChannelId? ResolveRecordingTarget(ChannelId channelId);
 
     void StopRecording(ChannelId channelId, long episodeId);
+}
+
+internal interface ICancellableReceiveEpisodeCompletionPort
+{
+    Task RunAfterStreamsAsync(
+        ChannelId channelId,
+        IReadOnlyCollection<uint> streamIds,
+        Func<CancellationToken, Task> continuation);
+
+    Task CompletePlaybackAsync(
+        ChannelId channelId,
+        long episodeId,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -60,10 +76,7 @@ public sealed class ReceiveEpisodeCompletionCoordinator
 
         ChannelId[] channels = episodeChannels.Distinct().ToArray();
         await Task.WhenAll(channels.Select(channelId =>
-            port.RunAfterStreamsAsync(
-                channelId,
-                streamIds,
-                () => port.CompletePlaybackAsync(channelId, episode.EpisodeId))))
+            CompletePlaybackAfterStreamsAsync(channelId, streamIds, episode.EpisodeId)))
             .ConfigureAwait(false);
 
         foreach (ChannelId target in channels
@@ -73,5 +86,27 @@ public sealed class ReceiveEpisodeCompletionCoordinator
         {
             port.StopRecording(target, episode.EpisodeId);
         }
+    }
+
+    private Task CompletePlaybackAfterStreamsAsync(
+        ChannelId channelId,
+        IReadOnlyCollection<uint> streamIds,
+        long episodeId)
+    {
+        if (port is ICancellableReceiveEpisodeCompletionPort cancellable)
+        {
+            return cancellable.RunAfterStreamsAsync(
+                channelId,
+                streamIds,
+                cancellationToken => cancellable.CompletePlaybackAsync(
+                    channelId,
+                    episodeId,
+                    cancellationToken));
+        }
+
+        return port.RunAfterStreamsAsync(
+            channelId,
+            streamIds,
+            () => port.CompletePlaybackAsync(channelId, episodeId));
     }
 }

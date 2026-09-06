@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2025-2026 RdWing
+# SPDX-License-Identifier: AGPL-3.0-only
+
 set -euo pipefail
 
 RID="${1:-}"
 OUTPUT_DIR="${2:-}"
 REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MACOS_DEPLOYMENT_TARGET="$(/usr/bin/tr -d '[:space:]' < "$REPOSITORY_ROOT/packaging/macos/deployment-target.txt")"
 
 verify_macos_deployment_target() {
     local description="$1"
     local library_path="$2"
+    local require_exact="${3:-false}"
     local build_information
     local minimum_version
 
@@ -17,95 +22,134 @@ verify_macos_deployment_target() {
     fi
 
     minimum_version=$(printf '%s\n' "$build_information" | /usr/bin/awk '$1 == "minos" { print $2; exit }')
-    if [[ "$minimum_version" != "14.0" ]]; then
-        printf '%s deployment target is not macOS 14.0: %s\n' "$description" "${minimum_version:-unknown}" >&2
+    if [[ -z "$minimum_version" ]]; then
+        printf '%s has no readable macOS deployment target.\n' "$description" >&2
+        exit 9
+    fi
+    if ! /usr/bin/awk \
+        -v actual="$minimum_version" \
+        -v maximum="$MACOS_DEPLOYMENT_TARGET" '
+            BEGIN {
+                split(actual, actual_parts, ".")
+                split(maximum, maximum_parts, ".")
+                for (component = 1; component <= 3; component++) {
+                    actual_part = actual_parts[component] + 0
+                    maximum_part = maximum_parts[component] + 0
+                    if (actual_part < maximum_part)
+                        exit 0
+                    if (actual_part > maximum_part)
+                        exit 1
+                }
+                exit 0
+            }
+        '; then
+        printf '%s requires macOS %s, newer than the %s bundle target.\n' \
+            "$description" "$minimum_version" "$MACOS_DEPLOYMENT_TARGET" >&2
+        exit 9
+    fi
+    if [[ "$require_exact" == true && "$minimum_version" != "$MACOS_DEPLOYMENT_TARGET" ]]; then
+        printf '%s deployment target is %s instead of macOS %s.\n' \
+            "$description" "$minimum_version" "$MACOS_DEPLOYMENT_TARGET" >&2
         exit 9
     fi
 }
 
+verify_macos_uuid() {
+    local description="$1"
+    local library_path="$2"
+
+    if ! /usr/bin/otool -l "$library_path" |
+        /usr/bin/awk '$1 == "cmd" && $2 == "LC_UUID" { found = 1 } END { exit(found ? 0 : 1) }'; then
+        printf '%s has no LC_UUID load command and cannot be loaded reliably by macOS.\n' \
+            "$description" >&2
+        exit 9
+    fi
+}
+
+verify_linux_glibc_ceiling() {
+    local output_directory="$1"
+    local maximum_version="$2"
+    local native_file
+    local required_symbol
+    local required_version
+    local newest_version
+
+    if ! command -v readelf >/dev/null 2>&1; then
+        printf 'Linux publish verification requires readelf from binutils.\n' >&2
+        exit 12
+    fi
+
+    while IFS= read -r -d '' native_file; do
+        if ! /usr/bin/file "$native_file" | /usr/bin/grep -q ELF; then
+            continue
+        fi
+
+        while IFS= read -r required_symbol; do
+            [[ -n "$required_symbol" ]] || continue
+            required_version="${required_symbol#GLIBC_}"
+            newest_version=$(
+                printf '%s\n%s\n' "$maximum_version" "$required_version" |
+                    /usr/bin/sort -V |
+                    /usr/bin/tail -n 1
+            )
+            if [[ "$newest_version" != "$maximum_version" ]]; then
+                printf '%s requires %s, newer than the Linux package ceiling GLIBC_%s.\n' \
+                    "$native_file" "$required_symbol" "$maximum_version" >&2
+                printf 'Build Linux packages with scripts/build-linux-portable.sh.\n' >&2
+                exit 12
+            fi
+        done < <(
+            readelf --version-info "$native_file" 2>/dev/null |
+                /usr/bin/grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' |
+                /usr/bin/sort -Vu || true
+        )
+    done < <(
+        /usr/bin/find "$output_directory" -type f \
+            \( -name DvmConsole -o -name '*.so' -o -name '*.so.*' \) \
+            -print0
+    )
+}
+
 if [[ -z "$RID" || -z "$OUTPUT_DIR" ]]; then
-    printf 'Usage: %s <osx-arm64|osx-x64|win-x64> <publish-directory>\n' "${0##*/}" >&2
+    printf 'Usage: %s <osx-arm64|osx-x64|win-x64|win-arm64|linux-x64|linux-arm64> <publish-directory>\n' "${0##*/}" >&2
     exit 2
 fi
 
 case "$RID" in
     osx-arm64)
         EXPECTED_MACOS_ARCHITECTURE="arm64"
-        MAXIMUM_PUBLISH_BYTES=$((200 * 1024 * 1024))
-        MAXIMUM_PUBLISH_FILES=800
         ;;
     osx-x64)
         EXPECTED_MACOS_ARCHITECTURE="x86_64"
-        MAXIMUM_PUBLISH_BYTES=$((200 * 1024 * 1024))
-        MAXIMUM_PUBLISH_FILES=800
         ;;
     win-x64)
         EXPECTED_MACOS_ARCHITECTURE=""
-        MAXIMUM_PUBLISH_BYTES=$((180 * 1024 * 1024))
-        MAXIMUM_PUBLISH_FILES=250
+        EXPECTED_LINUX_ARCHITECTURE=""
+        EXPECTED_WINDOWS_ARCHITECTURE="x64"
+        ;;
+    win-arm64)
+        EXPECTED_MACOS_ARCHITECTURE=""
+        EXPECTED_LINUX_ARCHITECTURE=""
+        EXPECTED_WINDOWS_ARCHITECTURE="ARM64"
+        ;;
+    linux-x64)
+        EXPECTED_MACOS_ARCHITECTURE=""
+        EXPECTED_LINUX_ARCHITECTURE="x86-64"
+        MAXIMUM_LINUX_GLIBC_VERSION="2.34"
+        ;;
+    linux-arm64)
+        EXPECTED_MACOS_ARCHITECTURE=""
+        EXPECTED_LINUX_ARCHITECTURE="ARM aarch64"
+        MAXIMUM_LINUX_GLIBC_VERSION="2.34"
         ;;
     *)
-        printf 'Supported runtime identifiers: osx-arm64, osx-x64, win-x64\n' >&2
+        printf 'Supported runtime identifiers: osx-arm64, osx-x64, win-x64, win-arm64, linux-x64, linux-arm64\n' >&2
         exit 2
         ;;
 esac
 
-if [[ ! -d "$OUTPUT_DIR" ]]; then
-    printf 'Publish directory does not exist: %s\n' "$OUTPUT_DIR" >&2
-    exit 3
-fi
-
-publish_bytes=$(( $(/usr/bin/du -sk "$OUTPUT_DIR" | /usr/bin/awk '{ print $1 }') * 1024 ))
-publish_files=$(/usr/bin/find "$OUTPUT_DIR" -type f | /usr/bin/wc -l | /usr/bin/tr -d ' ')
-if ((publish_bytes > MAXIMUM_PUBLISH_BYTES)); then
-    printf 'Publish exceeds the %s byte size budget: %s bytes.\n' "$MAXIMUM_PUBLISH_BYTES" "$publish_bytes" >&2
-    exit 4
-fi
-if ((publish_files > MAXIMUM_PUBLISH_FILES)); then
-    printf 'Publish exceeds the %s file budget: %s files.\n' "$MAXIMUM_PUBLISH_FILES" "$publish_files" >&2
-    exit 4
-fi
-
-for legal_file in LICENSE; do
-    if [[ ! -f "$OUTPUT_DIR/$legal_file" ]]; then
-        printf 'Publish is missing required legal notice: %s\n' "$OUTPUT_DIR/$legal_file" >&2
-        exit 4
-    fi
-done
-
-if [[ -n "$EXPECTED_MACOS_ARCHITECTURE" ]]; then
-    for file_name in DvmConsole.dll DvmConsole.deps.json DvmConsole.runtimeconfig.json; do
-        if [[ ! -f "$OUTPUT_DIR/$file_name" ]]; then
-            printf 'Missing required publish file: %s\n' "$OUTPUT_DIR/$file_name" >&2
-            exit 4
-        fi
-    done
-fi
-
-if [[ -e "$OUTPUT_DIR/Docs" ]]; then
-    printf 'Publish contains the obsolete Docs directory; documentation pages belong under Documentation.\n' >&2
-    exit 4
-fi
-
-REQUIRED_DOCUMENTATION_FILES=(
-    "Getting Started/01-Overview.md"
-    "Getting Started/02-Building.md"
-    "Getting Started/03-Configurations/01-Codeplug Creation.md"
-    "Getting Started/03-Configurations/02-Encryption Keys.md"
-    "Getting Started/03-Configurations/03-RID Aliases.md"
-    "Getting Started/03-Configurations/04-Groups and Patching.md"
-    "Getting Started/03-Configurations/05-Talkgroup Audio Recorder.md"
-    "Getting Started/04-Operations/01-Console Operation.md"
-    "Getting Started/04-Operations/02-Settings Reference.md"
-    "Getting Started/04-Operations/03-Audio Settings.md"
-    "Getting Started/04-Operations/04-Alert Tones.md"
-)
-for relative_document in "${REQUIRED_DOCUMENTATION_FILES[@]}"; do
-    if [[ ! -f "$OUTPUT_DIR/Documentation/$relative_document" ]]; then
-        printf 'Publish is missing documentation: %s\n' "$relative_document" >&2
-        exit 4
-    fi
-done
+python3 "$REPOSITORY_ROOT/scripts/verify-package.py" \
+    --publish-only --publish-root "$OUTPUT_DIR" --rid "$RID"
 
 DEMO_CODEPLUG="$OUTPUT_DIR/Demo/codeplug.yml"
 EXPECTED_DEMO_CODEPLUG="$REPOSITORY_ROOT/configs/codeplug.demo.yml"
@@ -138,15 +182,113 @@ case "$RID" in
             printf 'macOS apphost is not %s: %s\n' "$EXPECTED_MACOS_ARCHITECTURE" "$apphost_description" >&2
             exit 4
         fi
+        while IFS= read -r -d '' native_file; do
+            if /usr/bin/file "$native_file" | /usr/bin/grep -q 'Mach-O'; then
+                native_description=$(/usr/bin/file "$native_file")
+                if [[ "$native_description" != *"$EXPECTED_MACOS_ARCHITECTURE"* ]]; then
+                    printf 'Published Mach-O is not %s: %s\n' "$EXPECTED_MACOS_ARCHITECTURE" "$native_description" >&2
+                    exit 9
+                fi
+                verify_macos_deployment_target "published Mach-O $native_file" "$native_file"
+                verify_macos_uuid "published Mach-O $native_file" "$native_file"
+            fi
+        done < <(/usr/bin/find "$OUTPUT_DIR" -type f -print0)
+        for manifest_and_library in \
+            "native/dvmaudio/managed-exports.txt:libdvmaudio.dylib:dvm_audio_" \
+            "native/vocoder/managed-exports.txt:libdvmconsole_vocoder.dylib:dvmconsole_vocoder_"; do
+            IFS=: read -r manifest library prefix <<< "$manifest_and_library"
+            actual_exports="$(mktemp "${TMPDIR:-/tmp}/dvmconsole-exports.XXXXXX")"
+            /usr/bin/nm -gU "$OUTPUT_DIR/$library" | /usr/bin/awk '{ print $NF }' |
+                /usr/bin/sed 's/^_//' | /usr/bin/grep "^$prefix" | /usr/bin/sort -u > "$actual_exports"
+            if ! /usr/bin/diff -u "$REPOSITORY_ROOT/$manifest" "$actual_exports"; then
+                printf '%s exports do not match %s.\n' "$library" "$manifest" >&2
+                rm -f "$actual_exports"
+                exit 9
+            fi
+            rm -f "$actual_exports"
+        done
         ;;
-    win-x64)
+    linux-x64|linux-arm64)
+        if [[ ! -x "$OUTPUT_DIR/DvmConsole" ]]; then
+            printf 'Linux publish is missing an executable apphost: %s\n' "$OUTPUT_DIR/DvmConsole" >&2
+            exit 4
+        fi
+        for file_name in DvmConsole.dll DvmConsole.deps.json DvmConsole.runtimeconfig.json; do
+            if [[ ! -f "$OUTPUT_DIR/$file_name" ]]; then
+                printf 'Missing required publish file: %s\n' "$OUTPUT_DIR/$file_name" >&2
+                exit 4
+            fi
+        done
+        apphost_description=$(/usr/bin/file "$OUTPUT_DIR/DvmConsole")
+        if [[ "$apphost_description" != *ELF* || "$apphost_description" != *"$EXPECTED_LINUX_ARCHITECTURE"* ]]; then
+            printf 'Linux apphost is not %s ELF: %s\n' "$EXPECTED_LINUX_ARCHITECTURE" "$apphost_description" >&2
+            exit 4
+        fi
+
+        while IFS= read -r -d '' native_file; do
+            native_description=$(/usr/bin/file "$native_file")
+            if [[ "$native_description" == *ELF* && "$native_description" != *"$EXPECTED_LINUX_ARCHITECTURE"* ]]; then
+                printf 'Published ELF is not %s: %s\n' "$EXPECTED_LINUX_ARCHITECTURE" "$native_description" >&2
+                exit 12
+            fi
+        done < <(/usr/bin/find "$OUTPUT_DIR" -type f -print0)
+
+        if [[ -e "$OUTPUT_DIR/libdvmaudio.dylib" || -e "$OUTPUT_DIR/dvmconsole_vocoder.dll" ]]; then
+            printf 'Linux publish contains a native library for another platform.\n' >&2
+            exit 11
+        fi
+
+        native_audio="$OUTPUT_DIR/libdvmaudio-pipewire.so"
+        native_vocoder="$OUTPUT_DIR/libdvmconsole_vocoder.so"
+        for native_library in "$native_audio" "$native_vocoder"; do
+            if [[ ! -f "$native_library" ]]; then
+                printf 'Missing required Linux native library: %s\n' "$native_library" >&2
+                exit 12
+            fi
+            native_description=$(/usr/bin/file "$native_library")
+            if [[ "$native_description" != *ELF* || "$native_description" != *"$EXPECTED_LINUX_ARCHITECTURE"* ]]; then
+                printf 'Linux native library is not %s ELF: %s\n' "$EXPECTED_LINUX_ARCHITECTURE" "$native_description" >&2
+                exit 12
+            fi
+        done
+
+        if ! readelf -d "$native_audio" | /usr/bin/grep -q 'libpipewire-0.3.so'; then
+            printf 'Linux audio shim does not declare its PipeWire runtime dependency.\n' >&2
+            exit 12
+        fi
+
+        for manifest_and_library in \
+            "native/dvmaudio-pipewire/managed-exports.txt:libdvmaudio-pipewire.so:dvm_audio_" \
+            "native/vocoder/managed-exports.txt:libdvmconsole_vocoder.so:dvmconsole_vocoder_"; do
+            IFS=: read -r manifest library prefix <<< "$manifest_and_library"
+            actual_exports="$(mktemp "${TMPDIR:-/tmp}/dvmconsole-exports.XXXXXX")"
+            nm -D --defined-only "$OUTPUT_DIR/$library" | /usr/bin/awk '{ print $NF }' |
+                /usr/bin/grep "^$prefix" | /usr/bin/sort -u > "$actual_exports"
+            if ! /usr/bin/diff -u "$REPOSITORY_ROOT/$manifest" "$actual_exports"; then
+                printf '%s exports do not match %s.\n' "$library" "$manifest" >&2
+                rm -f "$actual_exports"
+                exit 12
+            fi
+            rm -f "$actual_exports"
+        done
+
+        verify_linux_glibc_ceiling "$OUTPUT_DIR" "$MAXIMUM_LINUX_GLIBC_VERSION"
+        ;;
+    win-x64|win-arm64)
         if [[ ! -f "$OUTPUT_DIR/DvmConsole.exe" ]]; then
             printf 'Windows publish is missing an executable apphost: %s\n' "$OUTPUT_DIR/DvmConsole.exe" >&2
             exit 4
         fi
         apphost_description=$(/usr/bin/file "$OUTPUT_DIR/DvmConsole.exe")
-        if [[ "$apphost_description" != *x86-64* && "$apphost_description" != *x86_64* ]]; then
-            printf 'Windows apphost is not x64: %s\n' "$apphost_description" >&2
+        if [[ "$RID" == "win-x64" ]]; then
+            if [[ "$apphost_description" != *x86-64* && "$apphost_description" != *x86_64* ]]; then
+                printf 'Windows apphost is not x64: %s\n' "$apphost_description" >&2
+                exit 4
+            fi
+        elif [[ "$apphost_description" != *Aarch64* &&
+                "$apphost_description" != *aarch64* &&
+                "$apphost_description" != *ARM64* ]]; then
+            printf 'Windows apphost is not ARM64: %s\n' "$apphost_description" >&2
             exit 4
         fi
         if [[ -e "$OUTPUT_DIR/DvmConsole.dll" ||
@@ -189,7 +331,7 @@ case "$RID" in
             printf 'macOS audio shim is not %s: %s\n' "$EXPECTED_MACOS_ARCHITECTURE" "$native_description" >&2
             exit 8
         fi
-        verify_macos_deployment_target "macOS audio shim" "$native_library"
+        verify_macos_deployment_target "macOS audio shim" "$native_library" true
 
         native_vocoder="$OUTPUT_DIR/libdvmconsole_vocoder.dylib"
         if [[ ! -f "$native_vocoder" ]]; then
@@ -201,9 +343,9 @@ case "$RID" in
             printf 'macOS vocoder is not %s: %s\n' "$EXPECTED_MACOS_ARCHITECTURE" "$native_description" >&2
             exit 9
         fi
-        verify_macos_deployment_target "macOS vocoder" "$native_vocoder"
+        verify_macos_deployment_target "macOS vocoder" "$native_vocoder" true
         ;;
-    win-x64)
+    win-x64|win-arm64)
         if [[ -e "$OUTPUT_DIR/libdvmaudio.dylib" ]]; then
             printf 'Windows publish contains the macOS audio shim.\n' >&2
             exit 11
@@ -216,5 +358,4 @@ case "$RID" in
         ;;
 esac
 
-printf 'Publish verification passed: %s (%s, %s bytes, %s files)\n' \
-    "$OUTPUT_DIR" "$RID" "$publish_bytes" "$publish_files"
+printf 'Publish verification passed: %s (%s)\n' "$OUTPUT_DIR" "$RID"

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
@@ -36,7 +39,8 @@ public sealed class PatchTransmitSessionTests
             sourceId: 42,
             streamId: 77,
             vocoder: new FakeVocoderSession(),
-            send: (payload, _, _) => packets.Add(payload.ToArray()));
+            send: (payload, _, _) => packets.Add(payload.ToArray()),
+            waitForNextPacket: TestPacketCadence.NoDelayAsync);
 
         session.Start();
         Assert.Equal(1, session.Process(new short[480]));
@@ -50,7 +54,8 @@ public sealed class PatchTransmitSessionTests
             42,
             78,
             new FakeVocoderSession(),
-            (payload, _, _) => packets.Add(payload.ToArray()));
+            (payload, _, _) => packets.Add(payload.ToArray()),
+            TestPacketCadence.NoDelayAsync);
         nxdn.Start();
         Assert.Equal(1, nxdn.Process(new short[640]));
         await nxdn.EndAsync();
@@ -80,7 +85,7 @@ public sealed class PatchTransmitSessionTests
     }
 
     [Fact]
-    public void EncryptedDmrAndNxdnPatchTargetsUseTheirPrivacyHeaders()
+    public async Task EncryptedDmrAndNxdnPatchTargetsUseTheirPrivacyHeaders()
     {
         var dmrPackets = new List<byte[]>();
         using var dmr = new PatchTransmitSession(
@@ -89,12 +94,14 @@ public sealed class PatchTransmitSessionTests
             77,
             new FakeVocoderSession(),
             (payload, _, _) => dmrPackets.Add(payload.ToArray()),
+            TestPacketCadence.NoDelayAsync,
             dmrPrivacy: new DmrPrivacyOptions(
                 DmrPrivacyAlgorithms.Arc4,
                 1,
                 Convert.FromHexString("0102030405"),
                 Convert.FromHexString("12345678")));
         dmr.Start();
+        await dmr.EndAsync();
 
         Assert.True(DmrVoicePacketCodec.TryExtractEncryptionMetadata(dmrPackets[1], out var dmrMetadata));
         Assert.Equal(DmrPrivacyAlgorithms.Arc4, dmrMetadata.AlgorithmId);
@@ -106,6 +113,7 @@ public sealed class PatchTransmitSessionTests
             78,
             new FakeVocoderSession(),
             (payload, _, _) => nxdnPackets.Add(payload.ToArray()),
+            TestPacketCadence.NoDelayAsync,
             nxdnPrivacy: new NxdnPrivacyOptions(
                 NxdnPrivacyAlgorithms.Ehr,
                 3,

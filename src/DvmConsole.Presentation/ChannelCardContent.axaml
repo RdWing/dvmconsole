@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <UserControl
     x:Class="DvmConsole.Presentation.ChannelCardContent"
     x:Name="CardContentRoot"
@@ -5,6 +8,9 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:presentation="using:DvmConsole.Presentation"
     x:DataType="presentation:IChannelCardViewModel">
+  <UserControl.Styles>
+    <StyleInclude Source="avares://DvmConsole.Presentation/CompactSliderStyles.axaml" />
+  </UserControl.Styles>
   <Grid RowDefinitions="Auto,Auto,Auto,*,24" RowSpacing="3">
     <StackPanel Spacing="2">
       <TextBlock
@@ -25,58 +31,25 @@
         Text="{Binding LastCallerDisplayText}"
         TextTrimming="CharacterEllipsis"
         VerticalAlignment="Center" />
-    <Border
+    <presentation:AudioLevelMeter
         Grid.Row="2"
         Classes="channel-audio-meter"
         Width="{Binding AudioMeterWidth}"
         Height="4"
-        Background="#24303B"
-        CornerRadius="2"
-        ClipToBounds="True"
-        HorizontalAlignment="Center">
-      <Grid>
-        <Border
-            Classes="channel-audio-meter-fill-clip"
-            Width="{Binding AudioFillWidth}"
-            HorizontalAlignment="Left"
-            CornerRadius="2"
-            ClipToBounds="True">
-          <Border Width="{Binding AudioMeterWidth}" HorizontalAlignment="Left" CornerRadius="2">
-            <Border.Background>
-              <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
-                <GradientStop Color="#00BE5A" Offset="0" />
-                <GradientStop Color="#00BE5A" Offset="0.76" />
-                <GradientStop Color="#F2B134" Offset="0.76" />
-                <GradientStop Color="#F2B134" Offset="0.88" />
-                <GradientStop Color="#E5484D" Offset="0.88" />
-                <GradientStop Color="#E5484D" Offset="1" />
-              </LinearGradientBrush>
-            </Border.Background>
-          </Border>
-        </Border>
-        <Canvas IsHitTestVisible="False">
-          <Border
-              Canvas.Left="{Binding AudioPeakMarkerX}"
-              Width="2"
-              Height="4"
-              Background="{Binding AudioPeakMarkerBrush}"
-              IsVisible="{Binding IsAudioPeakVisible}" />
-        </Canvas>
-      </Grid>
-    </Border>
+        Meter="{Binding AudioMeter}"
+        HorizontalAlignment="Center"
+        AutomationProperties.Name="Channel audio level" />
     <Grid Grid.Row="3" MinHeight="23" ClipToBounds="False" ColumnDefinitions="*,Auto" ColumnSpacing="4">
       <presentation:NeutralSnapSlider
-          Height="36"
+          Classes="compact-slider"
           Minimum="-1"
           Maximum="1"
           NeutralValue="0"
           Value="{Binding VolumeSliderValue, Mode=TwoWay}"
           VerticalAlignment="Center"
-          ToolTip.Tip="Channel gain: center is 0 dB (1×)">
-        <presentation:NeutralSnapSlider.RenderTransform>
-          <TranslateTransform Y="-4" />
-        </presentation:NeutralSnapSlider.RenderTransform>
-      </presentation:NeutralSnapSlider>
+          ToolTip.Tip="Channel gain: center is 0 dB (1×)"
+          AutomationProperties.Name="{Binding VolumeAutomationName}"
+          AutomationProperties.HelpText="Channel gain; center is 0 decibels." />
       <Button
           Grid.Column="1"
           Classes="card-action channel-action encryption-select"
@@ -86,14 +59,20 @@
           Foreground="{Binding EncryptionSelectionTextBrush}"
           Command="{Binding EncryptionCommand}"
           IsVisible="{Binding CanToggleEncryption}"
-          IsEnabled="{Binding CanToggleEncryption}" />
+          IsEnabled="{Binding CanToggleEncryption}"
+          AutomationProperties.Name="{Binding EncryptionAutomationName}"
+          AutomationProperties.HelpText="{Binding EncryptionAutomationHelpText}" />
     </Grid>
     <Grid Grid.Row="4" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="2">
       <Border
           Classes="ptt-input-guard"
           Background="Transparent"
           ToolTip.Tip="Push to talk; unavailable while this channel is receiving">
-        <Button Classes="ptt" Content="{Binding PttButtonText}" IsEnabled="{Binding IsPttControlEnabled}" />
+        <Button Classes="ptt"
+                Content="{Binding PttButtonText}"
+                IsEnabled="{Binding IsPttControlEnabled}"
+                AutomationProperties.Name="{Binding PttAutomationName}"
+                AutomationProperties.HelpText="{Binding PttAutomationHelpText}" />
       </Border>
       <Button
           Grid.Column="1"
@@ -104,6 +83,8 @@
           BorderBrush="{Binding TransmitSelectionBorderBrush}"
           IsEnabled="{Binding CanTransmit}"
           ToolTip.Tip="Include this channel in global multi-select PTT"
+          AutomationProperties.Name="{Binding TransmitSelectionAutomationName}"
+          AutomationProperties.HelpText="Include or remove this channel from global multi-select push to talk."
           Click="HandleTransmitSelectionClick" />
       <Button
           Grid.Column="2"
@@ -114,6 +95,8 @@
           BorderBrush="{Binding PageSelectionBorderBrush}"
           IsEnabled="{Binding CanTransmit}"
           ToolTip.Tip="Include this channel when sending QCII pages"
+          AutomationProperties.Name="{Binding PageSelectionAutomationName}"
+          AutomationProperties.HelpText="Include or remove this channel from Quick Call paging."
           Click="HandlePageSelectionClick" />
       <Button
           Grid.Column="3"
@@ -124,6 +107,8 @@
           BorderBrush="{Binding AlertSelectionBorderBrush}"
           IsEnabled="{Binding CanTransmit}"
           ToolTip.Tip="Include this channel when sending DTMF or alert tones"
+          AutomationProperties.Name="{Binding AlertSelectionAutomationName}"
+          AutomationProperties.HelpText="Include or remove this channel from DTMF and alert-tone targets."
           Click="HandleAlertSelectionClick" />
       <Button
           Grid.Column="4"
@@ -134,7 +119,9 @@
           BorderBrush="{Binding RecordingSelectionBorderBrush}"
           Command="{Binding RecordingCommand}"
           IsEnabled="{Binding CanRecord}"
-          ToolTip.Tip="Toggle Talkgroup Audio Recording" />
+          ToolTip.Tip="Toggle Talkgroup Audio Recording"
+          AutomationProperties.Name="{Binding RecordingAutomationName}"
+          AutomationProperties.HelpText="{Binding RecordingAutomationHelpText}" />
     </Grid>
   </Grid>
 </UserControl>

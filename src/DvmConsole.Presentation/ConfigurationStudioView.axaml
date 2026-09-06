@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:presentation="using:DvmConsole.Presentation"
@@ -168,18 +171,6 @@
       <Setter Property="Background" Value="{DynamicResource StudioSelectionBrush}"/>
       <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}"/>
     </Style>
-    <Style Selector="ToggleButton.color-swatch">
-      <Setter Property="Width" Value="27"/>
-      <Setter Property="Height" Value="27"/>
-      <Setter Property="Padding" Value="0"/>
-      <Setter Property="CornerRadius" Value="14"/>
-      <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
-      <Setter Property="BorderThickness" Value="1"/>
-    </Style>
-    <Style Selector="ToggleButton.color-swatch:checked">
-      <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}"/>
-      <Setter Property="BorderThickness" Value="3"/>
-    </Style>
     <Style Selector="Button.ptt">
       <Setter Property="Height" Value="24"/>
       <Setter Property="HorizontalAlignment" Value="Stretch"/>
@@ -305,7 +296,8 @@
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="config:ConfigurationValidationIssue">
                 <Button Classes="issue-row" Tag="{Binding}" Click="HandleValidationIssueClick"
-                        AutomationProperties.Name="Open configuration validation issue">
+                        AutomationProperties.Name="{Binding AutomationName}"
+                        AutomationProperties.HelpText="Open the affected configuration field.">
                   <Grid ColumnDefinitions="82,150,210,*" ColumnSpacing="10">
                     <TextBlock FontWeight="SemiBold" Text="{Binding Severity}"/>
                     <TextBlock Grid.Column="1" Text="{Binding Domain}" TextTrimming="CharacterEllipsis"/>
@@ -328,17 +320,17 @@
               <TextBlock FontWeight="SemiBold" Text="{Binding ValidationStatusText}"/>
               <TextBlock Classes="caption" Text="Open validation details" IsVisible="{Binding HasValidationIssues}"/>
             </StackPanel>
-            <Border Width="1" Height="22" Background="{DynamicResource StudioLineBrush}"/>
-            <TextBlock VerticalAlignment="Center" Foreground="{DynamicResource StudioMutedBrush}" Text="Unknown YAML fields preserved"/>
+            <Border x:Name="UnknownFieldsDivider" Width="1" Height="22" Background="{DynamicResource StudioLineBrush}"/>
+            <TextBlock x:Name="UnknownFieldsLabel" VerticalAlignment="Center" Foreground="{DynamicResource StudioMutedBrush}" Text="Unknown YAML fields preserved"/>
           </StackPanel>
         </Button>
-        <StackPanel x:Name="FooterActions" Grid.Column="1" MinHeight="34" Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" VerticalAlignment="Center">
+        <WrapPanel x:Name="FooterActions" Grid.Column="1" MinHeight="34" Orientation="Horizontal" ItemSpacing="6" LineSpacing="6" HorizontalAlignment="Right" VerticalAlignment="Center">
           <Button Content="Undo" Click="HandleUndoClick" IsEnabled="{Binding CanUndo}" AutomationProperties.Name="Undo configuration edit"/>
           <Button Content="Redo" Click="HandleRedoClick" IsEnabled="{Binding CanRedo}" AutomationProperties.Name="Redo configuration edit"/>
           <Button Content="Save a Copy" Click="HandleSaveAsClick" IsEnabled="{Binding CanEdit}" AutomationProperties.Name="Save configuration copy"/>
           <Button Content="Export YAML" Click="HandleExportFullClick" AutomationProperties.Name="Export configuration YAML"/>
           <Button MinWidth="180" Content="{Binding ReviewSaveButtonText}" Click="HandleReviewAndSaveClick" IsEnabled="{Binding CanSaveDraft}" AutomationProperties.Name="Review and save configuration"/>
-        </StackPanel>
+        </WrapPanel>
       </Grid>
     </Border>
   </Grid>

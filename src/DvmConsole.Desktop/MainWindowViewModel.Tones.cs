@@ -1,14 +1,24 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Threading;
 using DvmConsole.Audio;
 using DvmConsole.Application;
+using DvmConsole.Core.Diagnostics;
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using System.Globalization;
 
 namespace DvmConsole.Desktop;
 
-public sealed partial class MainWindowViewModel
+public sealed partial class MainWindowViewModel : ITonePresentationSession
 {
+    void ITonePresentationSession.BeginUndoableAction(
+        string message,
+        Func<ValueTask> undo,
+        Func<ValueTask>? commit)
+        => BeginUndoableAction(message, undo, commit);
+
     private bool CanSendGeneratedAudio()
     {
         if (busy || toneTransmitCoordinator.IsSending || transmitCoordinator.ActiveChannel is not null)
@@ -28,181 +38,44 @@ public sealed partial class MainWindowViewModel
         });
     }
 
-    private void SaveDtmfPreset()
-    {
-        try
-        {
-            string digits = NormalizeDtmfInput(DtmfDigits);
-            string name = string.IsNullOrWhiteSpace(DtmfPresetName)
-                ? $"DTMF preset {dtmfPresets.Count + 1}"
-                : DtmfPresetName.Trim();
-            if (name.Length > 80)
-                throw new ArgumentException("Preset names must be 80 characters or fewer.", nameof(DtmfPresetName));
-
-            DtmfPresetViewModel next = new(new DtmfPresetSetting
-            {
-                Name = name,
-                Digits = digits,
-                Steps = digits
-                    .Select(digit => new DtmfPresetStepSetting
-                    {
-                        Kind = AudioPresetStepKinds.Digit,
-                        Digit = digit.ToString(),
-                        DurationSeconds = 0.25
-                    })
-                    .ToList()
-            });
-            int existingIndex = dtmfPresets
-                .Select((preset, index) => (preset, index))
-                .Where(item => item.preset.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-                .Select(item => item.index)
-                .DefaultIfEmpty(-1)
-                .First();
-            if (existingIndex >= 0 && existingIndex < dtmfPresets.Count)
-                dtmfPresets[existingIndex] = next;
-            else
-                dtmfPresets.Add(next);
-
-            userSettings.DtmfPresets = dtmfPresets
-                .Select(ToDtmfPresetSetting)
-                .ToList();
-            PersistUserSettings();
-            DtmfPresetName = string.Empty;
-            TransmitStatusText = $"DTMF preset '{name}' saved.";
-        }
-        catch (Exception exception)
-        {
-            TransmitStatusText = $"DTMF preset unavailable: {exception.Message}";
-        }
-    }
+    private void SaveDtmfPreset() => tonePresentation.SaveDtmfPreset();
 
 
-    private void SaveTonePreset()
-    {
-        if (!TryBuildToneSequence(out GeneratedToneSequence? sequence, out string? error))
-        {
-            TransmitStatusText = error!;
-            return;
-        }
-
-        ToneSequenceStepViewModel firstTone = toneSequenceSteps.First(step => !step.IsSilence);
-        double frequency = double.Parse(firstTone.FrequencyText, CultureInfo.InvariantCulture);
-        double durationSeconds = double.Parse(firstTone.DurationText, CultureInfo.InvariantCulture);
-
-        string name = string.IsNullOrWhiteSpace(TonePresetName)
-            ? $"Tone preset {tonePresets.Count + 1}"
-            : TonePresetName.Trim();
-        if (name.Length > 80)
-        {
-            TransmitStatusText = "Preset names must be 80 characters or fewer.";
-            return;
-        }
-
-        TonePresetViewModel next = new(new TonePresetSetting
-        {
-            Name = name,
-            FrequencyHz = frequency,
-            DurationSeconds = durationSeconds,
-            Steps = toneSequenceSteps.Select(step => new TonePresetStepSetting
-            {
-                Kind = step.IsSilence ? AudioPresetStepKinds.Hold : AudioPresetStepKinds.Tone,
-                FrequencyHz = step.IsSilence
-                    ? 0
-                    : double.Parse(step.FrequencyText, CultureInfo.InvariantCulture),
-                DurationSeconds = double.Parse(step.DurationText, CultureInfo.InvariantCulture)
-            }).ToList()
-        });
-        int existingIndex = tonePresets
-            .Select((preset, index) => (preset, index))
-            .Where(item => item.preset.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-            .Select(item => item.index)
-            .DefaultIfEmpty(-1)
-            .First();
-        if (existingIndex >= 0 && existingIndex < tonePresets.Count)
-            tonePresets[existingIndex] = next;
-        else
-            tonePresets.Add(next);
-
-        userSettings.TonePresets = tonePresets
-            .Select(ToTonePresetSetting)
-            .ToList();
-        PersistUserSettings();
-        TonePresetName = string.Empty;
-        TransmitStatusText = $"Tone preset '{name}' saved ({sequence!.Duration.TotalSeconds:0.##} sec).";
-    }
+    private void SaveTonePreset() => tonePresentation.SaveTonePreset();
 
     public void UseDtmfPreset(DtmfPresetViewModel preset)
     {
-        ArgumentNullException.ThrowIfNull(preset);
-        DtmfDigits = preset.Digits;
-        TransmitStatusText = $"DTMF preset '{preset.Name}' loaded.";
+        tonePresentation.LoadDtmfPreset(preset);
     }
 
     public void DeleteDtmfPreset(DtmfPresetViewModel preset)
     {
-        ArgumentNullException.ThrowIfNull(preset);
-        if (!dtmfPresets.Remove(preset))
-            return;
-        userSettings.DtmfPresets = dtmfPresets
-            .Select(ToDtmfPresetSetting)
-            .ToList();
-        PersistUserSettings();
-        TransmitStatusText = $"DTMF preset '{preset.Name}' deleted.";
+        tonePresentation.DeleteDtmfPreset(preset);
     }
 
     public void UseTonePreset(TonePresetViewModel preset)
     {
-        ArgumentNullException.ThrowIfNull(preset);
-        toneSequenceSteps.Clear();
-        foreach (TonePresetStepSetting step in preset.Steps)
-        {
-            bool isSilence = string.Equals(step.Kind, AudioPresetStepKinds.Hold, StringComparison.OrdinalIgnoreCase);
-            toneSequenceSteps.Add(new ToneSequenceStepViewModel(
-                isSilence ? GeneratedToneStep.MinimumSingleToneFrequencyHz : step.FrequencyHz,
-                step.DurationSeconds,
-                isSilence));
-        }
-        TransmitStatusText = $"Tone preset '{preset.Name}' loaded.";
+        tonePresentation.LoadTonePreset(preset);
     }
 
     public void AddToneSequenceStep(bool silence)
     {
-        toneSequenceSteps.Add(new ToneSequenceStepViewModel(
-            silence ? GeneratedToneStep.MinimumSingleToneFrequencyHz : userSettings.ToneFrequencyHz,
-            silence ? 0.2 : userSettings.ToneDurationSeconds,
-            silence));
+        tonePresentation.AddToneSequenceStep(silence);
     }
 
     public void RemoveToneSequenceStep(ToneSequenceStepViewModel step)
     {
-        ArgumentNullException.ThrowIfNull(step);
-        if (toneSequenceSteps.Count <= 1)
-        {
-            TransmitStatusText = "A custom tone pattern must retain at least one step.";
-            return;
-        }
-        toneSequenceSteps.Remove(step);
+        tonePresentation.RemoveToneSequenceStep(step);
     }
 
     public void MoveToneSequenceStep(ToneSequenceStepViewModel step, int offset)
     {
-        ArgumentNullException.ThrowIfNull(step);
-        int current = toneSequenceSteps.IndexOf(step);
-        int next = Math.Clamp(current + offset, 0, toneSequenceSteps.Count - 1);
-        if (current >= 0 && next != current)
-            toneSequenceSteps.Move(current, next);
+        tonePresentation.MoveToneSequenceStep(step, offset);
     }
 
     public void DeleteTonePreset(TonePresetViewModel preset)
     {
-        ArgumentNullException.ThrowIfNull(preset);
-        if (!tonePresets.Remove(preset))
-            return;
-        userSettings.TonePresets = tonePresets
-            .Select(ToTonePresetSetting)
-            .ToList();
-        PersistUserSettings();
-        TransmitStatusText = $"Tone preset '{preset.Name}' deleted.";
+        tonePresentation.DeleteTonePreset(preset);
     }
 
     private async Task SendDtmfAsync()
@@ -275,10 +148,7 @@ public sealed partial class MainWindowViewModel
         ArgumentNullException.ThrowIfNull(preset);
         try
         {
-            var sequence = new GeneratedToneSequence(preset.Steps.Select(step =>
-                string.Equals(step.Kind, AudioPresetStepKinds.Hold, StringComparison.OrdinalIgnoreCase)
-                    ? GeneratedToneStep.Silence(TimeSpan.FromSeconds(step.DurationSeconds))
-                    : GeneratedToneStep.Tone(step.FrequencyHz, TimeSpan.FromSeconds(step.DurationSeconds))));
+            var sequence = CreatePresetSequence(preset);
             await SendGeneratedToneAsync(sequence, $"Tone preset '{preset.Name}'");
         }
         catch (Exception exception)
@@ -353,6 +223,8 @@ public sealed partial class MainWindowViewModel
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
         ArgumentException.ThrowIfNullOrWhiteSpace(mediaType);
         ArgumentNullException.ThrowIfNull(content);
+        AssetDescriptor? imported = null;
+        AlertToneViewModel? addedTone = null;
         try
         {
             string name = string.IsNullOrWhiteSpace(AlertToneNameText)
@@ -361,25 +233,50 @@ public sealed partial class MainWindowViewModel
             if (string.IsNullOrWhiteSpace(name) || name.Length > 80)
                 throw new ArgumentException("Alert tone names must contain 1–80 characters.", nameof(displayName));
 
-            AssetDescriptor imported = await assetStore.ImportAsync(
+            imported = await assetStore.ImportAsync(
                 displayName,
                 mediaType,
                 content,
                 cancellationToken);
-            alertTones.Add(new AlertToneViewModel(new AlertToneSetting
+            addedTone = new AlertToneViewModel(new AlertToneSetting
             {
                 Name = name,
                 AssetId = imported.Id.ToString(),
                 FileName = Path.GetFileName(displayName)
-            }));
+            });
+            alertTones.Add(addedTone);
             userSettings.AlertTones = alertTones.Select(tone => tone.ToSetting()).ToList();
-            PersistUserSettings();
+            try
+            {
+                PersistUserSettings();
+            }
+            catch
+            {
+                alertTones.Remove(addedTone);
+                userSettings.AlertTones = alertTones.Select(tone => tone.ToSetting()).ToList();
+                throw;
+            }
             AlertToneNameText = string.Empty;
             TransmitStatusText = $"Alert asset '{name}' imported.";
             return true;
         }
         catch (Exception exception)
         {
+            if (imported is not null && (addedTone is null || !alertTones.Contains(addedTone)))
+            {
+                try
+                {
+                    await assetStore.DeleteIfUnreferencedAsync(imported.Id, [], CancellationToken.None);
+                }
+                catch (Exception cleanupException)
+                {
+                    AddDebugLog(
+                        DateTimeOffset.Now,
+                        "Assets",
+                        DebugLogSeverity.Warning,
+                        $"Could not roll back alert asset {imported.Id}: {cleanupException.Message}");
+                }
+            }
             TransmitStatusText = $"Alert asset unavailable: {exception.Message}";
             return false;
         }
@@ -388,11 +285,25 @@ public sealed partial class MainWindowViewModel
     public void DeleteAlertTone(AlertToneViewModel tone)
     {
         ArgumentNullException.ThrowIfNull(tone);
-        if (!alertTones.Remove(tone))
+        int index = alertTones.IndexOf(tone);
+        if (index < 0)
             return;
+        string? removedAssetId = tone.AssetId;
+        alertTones.RemoveAt(index);
         userSettings.AlertTones = alertTones.Select(item => item.ToSetting()).ToList();
         PersistUserSettings();
-        TransmitStatusText = $"Alert asset '{tone.Name}' removed.";
+        BeginUndoableAction(
+            $"Alert asset '{tone.Name}' deleted.",
+            () =>
+            {
+                alertTones.Insert(Math.Min(index, alertTones.Count), tone);
+                userSettings.AlertTones = alertTones.Select(item => item.ToSetting()).ToList();
+                PersistUserSettings();
+                TransmitStatusText = $"Alert asset '{tone.Name}' restored.";
+                return ValueTask.CompletedTask;
+            },
+            () => DeleteAssetIfUnreferencedAsync(removedAssetId));
+        TransmitStatusText = $"Alert asset '{tone.Name}' deleted. Undo is available for 8 seconds.";
     }
 
     public async Task SendAlertToneAsync(AlertToneViewModel tone)
@@ -429,7 +340,12 @@ public sealed partial class MainWindowViewModel
             tone.FileName,
             ResolveAlertMediaType(tone.FilePath),
             source);
+        BuiltInAlertToneViewModel[] migratedShortcuts = BuiltInAlertTones
+            .Where(button => ReferenceEquals(ResolveToolbarCustomAlert(button), tone))
+            .ToArray();
         tone.SetManagedAsset(imported.Id);
+        foreach (BuiltInAlertToneViewModel button in migratedShortcuts)
+            SetToolbarToneAssignment(button, CreateCustomAlertAssignment(tone), persist: false);
         userSettings.AlertTones = alertTones.Select(item => item.ToSetting()).ToList();
         PersistUserSettings();
         return await assetStore.OpenReadAsync(imported.Id);
@@ -445,9 +361,76 @@ public sealed partial class MainWindowViewModel
             _ => "application/octet-stream"
         };
 
+    public void AssignToolbarTone(BuiltInAlertToneViewModel button, TonePresetViewModel? preset)
+    {
+        if (preset is not null && !TonePresets.Contains(preset))
+            throw new ArgumentException("The pattern is no longer saved.", nameof(preset));
+        SetToolbarToneAssignment(button, preset is null ? null : new()
+        {
+            PresetName = preset.Name
+        });
+    }
+
+    public void AssignToolbarCustomAlert(BuiltInAlertToneViewModel button, AlertToneViewModel alert)
+    {
+        if (!AlertTones.Contains(alert))
+            throw new ArgumentException("The custom alert is no longer saved.", nameof(alert));
+        SetToolbarToneAssignment(button, CreateCustomAlertAssignment(alert));
+    }
+
+    private static ToolbarToneAssignmentSetting CreateCustomAlertAssignment(AlertToneViewModel alert)
+        => new()
+        {
+            PresetName = alert.Name,
+            IsCustomAudio = true,
+            AssetId = alert.AssetId,
+            FilePath = string.IsNullOrWhiteSpace(alert.AssetId) ? alert.FilePath : null
+        };
+
+    internal AlertToneViewModel? ResolveToolbarCustomAlert(BuiltInAlertToneViewModel button)
+        => button.IsCustomAudio
+            ? ToolbarCustomAlertResolver.Resolve(AlertTones, button.AssignedPresetName,
+                button.AssignedAssetId, button.AssignedFilePath)
+            : null;
+
+    private void SetToolbarToneAssignment(
+        BuiltInAlertToneViewModel button, ToolbarToneAssignmentSetting? assignment, bool persist = true)
+    {
+        if (!BuiltInAlertTones.Contains(button))
+            throw new ArgumentException("Unknown toolbar tone button.", nameof(button));
+        if (assignment is null)
+            userSettings.ToolbarToneAssignments.Remove((int)button.Tone);
+        else
+            userSettings.ToolbarToneAssignments[(int)button.Tone] = assignment;
+        button.Assign(assignment);
+        if (persist)
+            PersistUserSettings();
+    }
+
     public async Task SendBuiltInAlertToneAsync(BuiltInAlertToneViewModel tone)
     {
         ArgumentNullException.ThrowIfNull(tone);
+        if (tone.AssignedPresetName is string presetName)
+        {
+            if (tone.IsCustomAudio)
+            {
+                AlertToneViewModel? alert = ResolveToolbarCustomAlert(tone);
+                if (alert is null)
+                    TransmitStatusText = $"Custom alert '{presetName}' is unavailable or ambiguous. Right-click the tone button to assign another alert.";
+                else
+                    await SendAlertToneAsync(alert);
+                return;
+            }
+            TonePresetViewModel? preset = TonePresets.FirstOrDefault(candidate =>
+                candidate.Name.Equals(presetName, StringComparison.OrdinalIgnoreCase));
+            if (preset is null)
+            {
+                TransmitStatusText = $"Saved pattern '{presetName}' is unavailable. Right-click the tone button to assign another pattern.";
+                return;
+            }
+            await SendTonePresetAsync(preset);
+            return;
+        }
         try
         {
             await SendGeneratedToneAsync(
@@ -461,189 +444,56 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    private static DtmfPresetSetting ToDtmfPresetSetting(DtmfPresetViewModel preset)
-        => new()
-        {
-            Name = preset.Name,
-            Digits = preset.Digits,
-            Steps = preset.Steps
-                .Select(step => new DtmfPresetStepSetting
-                {
-                    Kind = step.Kind,
-                    Digit = step.Digit,
-                    DurationSeconds = step.DurationSeconds
-                })
-                .ToList()
-        };
-
-    private static TonePresetSetting ToTonePresetSetting(TonePresetViewModel preset)
-        => new()
-        {
-            Name = preset.Name,
-            FrequencyHz = preset.FrequencyHz,
-            DurationSeconds = preset.DurationSeconds,
-            Steps = preset.Steps
-                .Select(step => new TonePresetStepSetting
-                {
-                    Kind = step.Kind,
-                    FrequencyHz = step.FrequencyHz,
-                    DurationSeconds = step.DurationSeconds
-                })
-                .ToList()
-        };
+    private static GeneratedToneSequence CreatePresetSequence(TonePresetViewModel preset)
+        => new(preset.Steps.Select(step =>
+            string.Equals(step.Kind, AudioPresetStepKinds.Hold, StringComparison.OrdinalIgnoreCase)
+                ? GeneratedToneStep.Silence(TimeSpan.FromSeconds(step.DurationSeconds))
+                : GeneratedToneStep.Tone(step.FrequencyHz, TimeSpan.FromSeconds(step.DurationSeconds))));
 
     private bool TryBuildToneSequence(out GeneratedToneSequence? sequence, out string? error)
-    {
-        sequence = null;
-        error = null;
-        var steps = new List<GeneratedToneStep>(toneSequenceSteps.Count);
-        bool hasTone = false;
-        foreach ((ToneSequenceStepViewModel step, int index) in toneSequenceSteps.Select((step, index) => (step, index)))
-        {
-            if (!double.TryParse(
-                    step.DurationText,
-                    NumberStyles.Float,
-                    CultureInfo.InvariantCulture,
-                    out double durationSeconds) ||
-                durationSeconds <= 0 || durationSeconds > 10)
-            {
-                error = $"Step {index + 1} duration must be greater than 0 and no more than 10 seconds.";
-                return false;
-            }
-
-            if (step.IsSilence)
-            {
-                steps.Add(GeneratedToneStep.Silence(TimeSpan.FromSeconds(durationSeconds)));
-                continue;
-            }
-
-            if (!double.TryParse(
-                    step.FrequencyText,
-                    NumberStyles.Float,
-                    CultureInfo.InvariantCulture,
-                    out double frequency) ||
-                frequency < GeneratedToneStep.MinimumSingleToneFrequencyHz ||
-                frequency > GeneratedToneStep.MaximumSingleToneFrequencyHz)
-            {
-                error = $"Step {index + 1} frequency must be 300–2500 Hz.";
-                return false;
-            }
-
-            steps.Add(GeneratedToneStep.Tone(frequency, TimeSpan.FromSeconds(durationSeconds)));
-            hasTone = true;
-        }
-
-        if (!hasTone)
-        {
-            error = "A custom tone pattern must contain at least one tone step.";
-            return false;
-        }
-
-        sequence = new GeneratedToneSequence(steps);
-        if (sequence.Duration > TimeSpan.FromSeconds(30))
-        {
-            sequence = null;
-            error = "A custom tone pattern cannot exceed 30 seconds.";
-            return false;
-        }
-        return true;
-    }
+        => tonePresentation.TryBuildToneSequence(out sequence, out error);
 
     private static string NormalizeDtmfInput(string value)
-    {
-        string normalized = new string((value ?? string.Empty)
-            .Where(character => !char.IsWhiteSpace(character))
-            .Select(char.ToUpperInvariant)
-            .ToArray());
-        if (normalized.Length is 0 or > 64 || normalized.Any(character => !DtmfToneGenerator.IsDigit(character)))
-            throw new ArgumentException("DTMF must contain 1–64 digits from 0–9, *, #, or A–D.", nameof(value));
-        return normalized;
-    }
+        => TonePresentationController.NormalizeDtmfInput(value);
 
-    private async Task SendGeneratedToneAsync(
+    private Task SendGeneratedToneAsync(
         ReadOnlyMemory<short> samples,
         string label,
         IReadOnlyCollection<ChannelViewModel>? explicitTargets = null)
-    {
-        ChannelViewModel[] channels = explicitTargets?.ToArray() ?? ResolveGeneratedToneChannels();
-        if (channels.Length == 0)
-            throw new InvalidOperationException("Arm ALERT on one or more channel cards before sending DTMF or alert audio.");
+        => SendGeneratedAudioAsync(label, explicitTargets,
+            targets => generatedAudioOperation.SendAsync(targets, samples));
 
-        TransmitTarget[] targets = channels
-            .Distinct()
-            .Select(channel => new TransmitTarget(
-                channel.ToTransmitDescriptor(),
-                Systems.FirstOrDefault(candidate => candidate.Name.Equals(
-                    channel.Definition.SystemName,
-                    StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidOperationException(
-                        $"The system '{channel.Definition.SystemName}' was not found.")))
-            .ToArray();
-        if (transmitCoordinator.ActiveChannel is not null)
-            throw new InvalidOperationException("Release PTT before sending generated audio.");
-
-        await MuteReceiveAudioAsync("RX audio muted while sending generated audio.");
-
-        try
-        {
-            await toneTransmitCoordinator.SendAsync(targets, samples);
-            string targetText = FormatToneTargetText(
-                targets.Select(target => ResolveChannel(target.Channel.Id)));
-            await RunOnUiThreadAsync(() => TransmitStatusText = $"{label} sent on {targetText}.");
-        }
-        finally
-        {
-            await RestoreSuspendedAudioAsync();
-            await RunOnUiThreadAsync(RaiseGeneratedAudioCanExecuteChanged);
-        }
-    }
-
-    private async Task SendGeneratedToneAsync(
+    private Task SendGeneratedToneAsync(
         GeneratedToneSequence sequence,
         string label,
         IReadOnlyCollection<ChannelViewModel>? explicitTargets = null)
+        => SendGeneratedAudioAsync(label, explicitTargets,
+            targets => generatedAudioOperation.SendAsync(targets, sequence));
+
+    private async Task SendGeneratedAudioAsync(
+        string label,
+        IReadOnlyCollection<ChannelViewModel>? explicitTargets,
+        Func<TransmitTarget[], Task<Exception?>> send)
     {
-        ArgumentNullException.ThrowIfNull(sequence);
         ChannelViewModel[] channels = explicitTargets?.ToArray() ?? ResolveGeneratedToneChannels();
         if (channels.Length == 0)
             throw new InvalidOperationException("Arm ALERT on one or more channel cards before sending DTMF or alert audio.");
-
-        TransmitTarget[] targets = channels
-            .Distinct()
-            .Select(channel => new TransmitTarget(
-                channel.ToTransmitDescriptor(),
-                Systems.FirstOrDefault(candidate => candidate.Name.Equals(
-                    channel.Definition.SystemName,
-                    StringComparison.OrdinalIgnoreCase)) ?? throw new InvalidOperationException(
-                        $"The system '{channel.Definition.SystemName}' was not found.")))
+        TransmitTarget[] targets = channels.Distinct().Select(channel => new TransmitTarget(
+            channel.ToTransmitDescriptor(),
+            Systems.FirstOrDefault(system => system.Name.Equals(
+                channel.Definition.SystemName, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"The system '{channel.Definition.SystemName}' was not found.")))
             .ToArray();
-        if (transmitCoordinator.ActiveChannel is not null)
-            throw new InvalidOperationException("Release PTT before sending generated audio.");
-
-        await MuteReceiveAudioAsync("RX audio muted while sending generated audio.");
-
         try
         {
-            short[] monitorSamples = sequence.RenderPcm();
-            Exception? monitorFailure = await GeneratedAudioMonitorSession.RunAsync(
-                LocalToneMonitorEnabled,
-                cancellationToken => generatedAudioMonitor.PlayAsync(
-                    monitorSamples,
-                    cancellationToken),
-                () => toneTransmitCoordinator.SendAsync(
-                    targets,
-                    sequence,
-                    monitorSamples));
-            string targetText = FormatToneTargetText(
-                targets.Select(target => ResolveChannel(target.Channel.Id)));
+            Exception? monitorFailure = await send(targets);
             string monitorStatus = monitorFailure is null
-                ? string.Empty
-                : $" Local monitor unavailable: {monitorFailure.Message}";
+                ? string.Empty : $" Local monitor unavailable: {monitorFailure.Message}";
             await RunOnUiThreadAsync(() =>
-                TransmitStatusText = $"{label} sent on {targetText}.{monitorStatus}");
+                TransmitStatusText = $"{label} sent on {FormatToneTargetText(channels)}.{monitorStatus}");
         }
         finally
         {
-            await RestoreSuspendedAudioAsync();
             await RunOnUiThreadAsync(RaiseGeneratedAudioCanExecuteChanged);
         }
     }
@@ -651,13 +501,23 @@ public sealed partial class MainWindowViewModel
     private async Task RunOnUiThreadAsync(Action action)
     {
         ArgumentNullException.ThrowIfNull(action);
+        if (terminalFence.IsClosed)
+            return;
         if (uiDispatcher.CheckAccess())
         {
-            action();
+            terminalFence.TryRun(action);
             return;
         }
 
-        await uiDispatcher.InvokeAsync(action);
+        await uiDispatcher.InvokeAsync(() => terminalFence.TryRun(action));
+    }
+
+    private void PostToUi(Action action, bool background = false)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        if (terminalFence.IsClosed)
+            return;
+        uiDispatcher.Post(() => terminalFence.TryRun(action), background);
     }
 
     internal ChannelViewModel[] ResolveGeneratedToneChannels()
@@ -690,4 +550,9 @@ public sealed partial class MainWindowViewModel
 
     private static FneTrafficProtocol ProtocolFor(ChannelViewModel channel)
         => FneTrafficProtocolMapper.FromChannelProtocol(channel.Definition.Protocol);
+
+    void ITonePresentationSession.PersistUserSettings() => PersistUserSettings();
+
+    void ITonePresentationSession.SetTransmitStatus(string status)
+        => TransmitStatusText = status;
 }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.Core.Diagnostics;
 using DvmConsole.FneClient;
@@ -16,11 +19,10 @@ internal interface IFneRadioSession : IRadioSession
 
     event EventHandler<FneConnectionStatus>? StatusChanged;
     event EventHandler<FneLogEntry>? LogReceived;
-    event EventHandler<FneTrafficFrame>? FneTrafficReceived;
     event EventHandler<FneKeyResponse>? KeyResponseReceived;
-    event EventHandler<FneTalkgroupAuthority>? FneTalkgroupAuthorityChanged;
 
     Task StopAsync(CancellationToken cancellationToken = default);
+    void Abort();
     void SetVerboseLogging(bool enabled);
     FneTalkgroupAvailability GetTalkgroupAvailability(
         FneTrafficProtocol protocol,
@@ -28,9 +30,15 @@ internal interface IFneRadioSession : IRadioSession
         byte runtimeSlot);
     void SendTraffic(
         FneTrafficProtocol protocol,
-        ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> payload,
         ushort packetSequence,
         uint streamId);
     void RequestP25Key(byte algorithmId, ushort keyId);
     void SendP25SubscriberCommand(P25SubscriberCommand command, uint destinationId);
+}
+
+internal interface IFneRadioSessionFactory
+{
+    RadioSystemDescriptor Descriptor { get; }
+    IFneRadioSession Create();
 }

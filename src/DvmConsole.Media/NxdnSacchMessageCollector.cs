@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Media;
 
 // Reassembles the four 18-bit SACCH fragments carried by consecutive NXDN
@@ -16,6 +19,21 @@ internal sealed class NxdnSacchMessageCollector
         metadata = default;
         Span<byte> fragment = stackalloc byte[3];
         if (!NxdnVoicePacketCodec.TryExtractSacchFragment(packet, out byte structure, fragment))
+        {
+            Reset();
+            return false;
+        }
+
+        return TryAccept(structure, fragment, out metadata);
+    }
+
+    public bool TryAccept(
+        byte structure,
+        ReadOnlySpan<byte> fragment,
+        out NxdnVoicePacketCodec.CallMetadata metadata)
+    {
+        metadata = default;
+        if (fragment.Length < 3)
         {
             Reset();
             return false;

@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:config="using:DvmConsole.Core.Configuration"
@@ -19,27 +22,31 @@
       <Border Classes="panel" Padding="0">
         <Grid RowDefinitions="Auto,*">
           <Border Classes="dense-row" Background="{DynamicResource ShellHeaderBrush}">
-            <Grid ColumnDefinitions="1.4*,2.1*,0.5*,0.55*,0.6*" ColumnSpacing="12">
-              <TextBlock FontWeight="SemiBold" Text="Protocol"/>
-              <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="Algorithm"/>
-              <TextBlock Grid.Column="2" HorizontalAlignment="Right" FontWeight="SemiBold" Text="Key ID"/>
-              <TextBlock Grid.Column="3" HorizontalAlignment="Right" FontWeight="SemiBold" Text="Required"/>
-              <TextBlock Grid.Column="4" HorizontalAlignment="Center" FontWeight="SemiBold" Text="Material"/>
+            <Grid ColumnDefinitions="1.1*,1.1*,0.9*,1.5*,0.5*,0.55*,0.6*" ColumnSpacing="12">
+              <TextBlock FontWeight="SemiBold" Text="Name"/>
+              <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="FNE System"/>
+              <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="Protocol"/>
+              <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="Algorithm"/>
+              <TextBlock Grid.Column="4" HorizontalAlignment="Right" FontWeight="SemiBold" Text="Key ID"/>
+              <TextBlock Grid.Column="5" HorizontalAlignment="Right" FontWeight="SemiBold" Text="Length" AutomationProperties.Name="Required key length"/>
+              <TextBlock Grid.Column="6" HorizontalAlignment="Center" FontWeight="SemiBold" Text="Material"/>
             </Grid>
           </Border>
           <ListBox Grid.Row="1" Classes="dense-list" ItemsSource="{Binding KeyEntries}" SelectedItem="{Binding SelectedKey, Mode=TwoWay}">
             <ListBox.ItemTemplate>
               <DataTemplate x:DataType="config:KeyEntry">
                 <Border Classes="dense-row">
-                  <Grid ColumnDefinitions="1.4*,2.1*,0.5*,0.55*,0.6*" ColumnSpacing="12">
-                    <TextBlock Text="{Binding ProtocolDisplayName}"/>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                  <Grid ColumnDefinitions="1.1*,1.1*,0.9*,1.5*,0.5*,0.55*,0.6*" ColumnSpacing="12">
+                    <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Grid.Column="1" Text="{Binding SystemDisplayName}" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Grid.Column="2" Text="{Binding ProtocolDisplayName}"/>
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6">
                       <TextBlock Text="{Binding AlgorithmDisplayName}"/>
                       <TextBlock Classes="caption" Text="{Binding AlgorithmIdText}"/>
                     </StackPanel>
-                    <TextBlock Grid.Column="2" HorizontalAlignment="Right" Text="{Binding KeyIdText}"/>
-                    <TextBlock Grid.Column="3" HorizontalAlignment="Right" Text="{Binding RequiredLength}"/>
-                    <TextBlock Grid.Column="4" HorizontalAlignment="Center" Text="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;"/>
+                    <TextBlock Grid.Column="4" HorizontalAlignment="Right" Text="{Binding KeyIdText}"/>
+                    <TextBlock Grid.Column="5" HorizontalAlignment="Right" Text="{Binding RequiredLength}"/>
+                    <TextBlock Grid.Column="6" HorizontalAlignment="Center" Text="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;"/>
                   </Grid>
                 </Border>
               </DataTemplate>
@@ -50,6 +57,14 @@
       <Border x:Name="KeyInspector" Grid.Column="1" Classes="panel">
         <StackPanel Spacing="6" IsEnabled="{Binding CanEditKeyFile}">
           <TextBlock Classes="subheading" Text="Key Inspector"/>
+          <TextBlock Classes="caption" Text="Name"/>
+          <TextBox Text="{Binding SelectedKey.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleKeyFieldEdit" AutomationProperties.Name="Encryption key name"/>
+          <TextBlock Classes="caption" Text="FNE system"/>
+          <ComboBox ItemsSource="{Binding Systems}"
+                    SelectedValueBinding="{Binding Name}"
+                    SelectedValue="{Binding SelectedKeySystem, Mode=TwoWay}"
+                    SelectionChanged="HandleKeySystemChanged"
+                    AutomationProperties.Name="Encryption key FNE system"/>
           <TextBlock Classes="caption" Text="Protocol"/>
           <ComboBox ItemsSource="{Binding ProtocolOptions}" SelectedValueBinding="{Binding Value}" SelectedValue="{Binding SelectedKeyProtocol, Mode=TwoWay}" SelectionChanged="HandleKeyProtocolChanged" AutomationProperties.Name="Encryption key protocol">
             <ComboBox.ItemTemplate>
@@ -73,11 +88,11 @@
           <Border Background="{DynamicResource StudioFieldBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="1" CornerRadius="3">
             <Grid ColumnDefinitions="Auto,*">
               <TextBlock Margin="10,0,2,0" VerticalAlignment="Center" Foreground="{DynamicResource StudioMutedBrush}" Text="0x"/>
-              <TextBox Grid.Column="1" MinHeight="32" BorderThickness="0" Text="{Binding SelectedKeyIdHexDigits, Mode=TwoWay}" LostFocus="HandleKeyFieldEdit" AutomationProperties.Name="Encryption key ID"/>
+              <TextBox Grid.Column="1" MinHeight="32" BorderThickness="0" Text="{Binding SelectedKeyIdHexDigits, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleKeyFieldEdit" AutomationProperties.Name="Encryption key ID"/>
             </Grid>
           </Border>
           <TextBlock Classes="caption" Text="Key material (hex)"/>
-          <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedKey.Key, Mode=TwoWay}" LostFocus="HandleKeyFieldEdit" AutomationProperties.Name="Encryption key material"/>
+          <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedKey.Key, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleKeyFieldEdit" AutomationProperties.Name="Encryption key material"/>
           <TextBlock Classes="caption" Text="Required length"/>
           <TextBlock Text="{Binding SelectedKey.RequiredLength}"/>
           <TextBlock Classes="caption" Text="Key material stays masked and is never included in diagnostics. FNE/KMM-delivered P25 Phase 1 keys are runtime-only and cannot be written back here." TextWrapping="Wrap"/>

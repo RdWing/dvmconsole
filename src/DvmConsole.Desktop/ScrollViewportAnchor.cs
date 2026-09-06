@@ -1,12 +1,23 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Controls;
 
 namespace DvmConsole.Desktop;
 
+internal interface IScrollViewportAnchor
+{
+    bool HasPendingRestore { get; }
+    void Capture();
+    void Restore();
+    void Reset();
+}
+
 // Preserves the first visible item while rows are inserted above it. Windows
 // supply only their item controls and model projection; capture/restore math
 // and lifecycle state remain centralized here.
-internal sealed class ScrollViewportAnchor<T> where T : class
+internal sealed class ScrollViewportAnchor<T> : IScrollViewportAnchor where T : class
 {
     private readonly Func<ScrollViewer?> getScrollViewer;
     private readonly Func<IEnumerable<Control>> getItemControls;
@@ -25,6 +36,8 @@ internal sealed class ScrollViewportAnchor<T> where T : class
         this.getItemControls = getItemControls ?? throw new ArgumentNullException(nameof(getItemControls));
         this.getItem = getItem ?? throw new ArgumentNullException(nameof(getItem));
     }
+
+    public bool HasPendingRestore => pendingAnchor is not null;
 
     public void Capture()
     {

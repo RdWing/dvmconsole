@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using fnecore.DMR;
 
 namespace DvmConsole.Media;
@@ -160,6 +163,39 @@ public static class DmrVoicePacketCodec
         EmbeddedData? embeddedData = null,
         DmrBurstFSignaling? burstFSignaling = null)
     {
+        byte[] packet = new byte[PacketBytes];
+        WriteVoicePacket(
+            packet,
+            sourceId,
+            destinationId,
+            slot,
+            voiceSync,
+            embeddedSequence,
+            frameSequence,
+            ambe,
+            embeddedData,
+            burstFSignaling);
+        return packet;
+    }
+
+    /// <summary>
+    /// Writes one complete DMR FNE voice packet into caller-owned storage.
+    /// The optional frame workspace lets a session reuse the array required
+    /// by the upstream embedded-data API instead of allocating it per burst.
+    /// </summary>
+    public static void WriteVoicePacket(
+        Span<byte> packet,
+        uint sourceId,
+        uint destinationId,
+        byte slot,
+        bool voiceSync,
+        byte embeddedSequence,
+        byte frameSequence,
+        ReadOnlySpan<byte> ambe,
+        EmbeddedData? embeddedData = null,
+        DmrBurstFSignaling? burstFSignaling = null,
+        byte[]? frameWorkspace = null)
+    {
         if (sourceId > 0xFFFFFF)
             throw new ArgumentOutOfRangeException(nameof(sourceId));
         if (destinationId > 0xFFFFFF)
@@ -170,11 +206,21 @@ public static class DmrVoicePacketCodec
             throw new ArgumentOutOfRangeException(nameof(embeddedSequence));
         if (ambe.Length < AmbeBytes)
             throw new ArgumentException($"AMBE data must contain {AmbeBytes} bytes.", nameof(ambe));
+        if (packet.Length < PacketBytes)
+            throw new ArgumentException($"Destination must contain {PacketBytes} bytes.", nameof(packet));
+        if (frameWorkspace is not null && frameWorkspace.Length < FrameBytes)
+        {
+            throw new ArgumentException(
+                $"Frame workspace must contain {FrameBytes} bytes.",
+                nameof(frameWorkspace));
+        }
 
-        byte[] packet = CreatePacketHeader(sourceId, destinationId, slot, frameSequence);
+        packet[..PacketBytes].Clear();
+        WritePacketHeader(packet, sourceId, destinationId, slot, frameSequence);
         packet[15] |= voiceSync ? (byte)0x10 : embeddedSequence;
 
-        byte[] frame = new byte[FrameBytes];
+        byte[] frame = frameWorkspace ?? new byte[FrameBytes];
+        frame.AsSpan(0, FrameBytes).Clear();
         ambe[..13].CopyTo(frame);
         frame[13] = (byte)(ambe[13] & 0xF0);
         frame[19] = (byte)(ambe[13] & 0x0F);
@@ -195,8 +241,7 @@ public static class DmrVoicePacketCodec
             }.Encode(ref frame);
         }
 
-        frame.CopyTo(packet.AsSpan(HeaderBytes));
-        return packet;
+        frame.AsSpan(0, FrameBytes).CopyTo(packet[HeaderBytes..]);
     }
 
     public static bool TryExtractBurstFSignaling(
@@ -325,6 +370,17 @@ public static class DmrVoicePacketCodec
     private static byte[] CreatePacketHeader(uint sourceId, uint destinationId, byte slot, byte frameSequence)
     {
         byte[] packet = new byte[PacketBytes];
+        WritePacketHeader(packet, sourceId, destinationId, slot, frameSequence);
+        return packet;
+    }
+
+    private static void WritePacketHeader(
+        Span<byte> packet,
+        uint sourceId,
+        uint destinationId,
+        byte slot,
+        byte frameSequence)
+    {
         packet[0] = (byte)'D';
         packet[1] = (byte)'M';
         packet[2] = (byte)'R';
@@ -334,10 +390,9 @@ public static class DmrVoicePacketCodec
         WriteThreeBytes(packet, 8, destinationId);
         // FNE decodes the high bit as zero-based slot 1 (displayed as timeslot 2).
         packet[15] = (byte)(slot == 1 ? 0x80 : 0x00);
-        return packet;
     }
 
-    private static void WriteThreeBytes(byte[] target, int offset, uint value)
+    private static void WriteThreeBytes(Span<byte> target, int offset, uint value)
     {
         target[offset] = (byte)(value >> 16);
         target[offset + 1] = (byte)(value >> 8);

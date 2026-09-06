@@ -23,9 +23,12 @@ DVM Console saves this setting.
 
 When enabled, DVM Console plays a short local tone when transmit begins.
 
-This is local operator feedback only; it is not transmitted. Global,
-active-system, and serial PTT wait for the cue to complete before microphone
-audio is released, including when the shared PTT setting uses toggle mode.
+This is local operator feedback. Microphone preparation starts immediately,
+while its audio remains held back through the cue and a short settling guard.
+This applies to card, global, active-system, and serial microphone PTT in both
+press-and-hold and toggle mode. Bluetooth profile changes can add preparation
+time; use **Test talk permit tone** in Audio settings to check the selected
+route.
 
 ## Connection chimes
 
@@ -135,9 +138,9 @@ The main toolbar has three independent live-output mute controls:
 - `Z` mutes or restores the currently selected zone.
 - the unprefixed speaker button mutes or restores all live RX output.
 
-These controls affect speaker playback only. Receive decoding, call lifecycle,
-patching, and TAR recording continue. System and zone scopes compose: restoring
-one scope does not override another scope that is still muted.
+These controls affect speaker playback only. Receive decoding, call tracking,
+patching, and TAR recording continue. Mute settings overlap: unmuting a zone
+does not make it audible while its system is still muted.
 
 When Console Settings is narrow, the microphone gain, EQ, AGC, warm-microphone,
 and Apply controls wrap onto more rows so each one remains reachable.
@@ -149,6 +152,21 @@ saved, and Audio status and Debug Logs report the problem.
 
 ## Import and export settings
 
+NEO stores settings and related application data in these directories:
+
+- macOS: `~/Library/Application Support/DVMProject/dvmconsole-neo/`
+- Windows: `%APPDATA%\DVMProject\dvmconsole-neo\`
+- Linux: `$XDG_CONFIG_HOME/DVMProject/dvmconsole-neo/`, normally
+  `~/.config/DVMProject/dvmconsole-neo/`
+
+When NEO has no existing data and the old `DVMProject/dvmconsole`
+directory exists, first launch offers an import assistant. It lists
+recognized settings profiles and managed configurations with nothing selected.
+Selected configurations bring their companion files and referenced assets.
+Recordings, logs, and unknown files are never imported, and the old directory
+is never changed. **Not now** postpones the choice; **Don't ask again** records
+the decline without changing either directory.
+
 Use **File > Export Settings…** to save the current console settings as a
 JSON profile. The file includes layout, audio routing, TAR settings, group
 operator state, custom alert settings, clocks, startup preferences, history
@@ -156,10 +174,33 @@ preferences, PTT keybinds, and selectable-encryption state. It does not include
 the Configuration Library, recordings, or managed alert audio files. Reimport
 custom alert audio after moving settings to another computer.
 
+To transfer card positions and receive on/off selections to another computer:
+
+1. On the source console, arrange the cards and choose which channels should
+   receive. Enable **Restore selected channels on startup**, then use
+   **File > Export Settings…**.
+2. On the destination, import and load the matching codeplug, including its
+   companion files. Settings JSON alone cannot create that configuration.
+3. Choose **File > Import Settings…**, select the exported JSON, and review the
+   preview. If recording location or retention changes, review the separate
+   recording-policy confirmation, including any files it proposes to prune.
+4. After the configuration reloads, check the layout, receive selections, audio
+   devices, and TAR location. Start web streams deliberately and verify patch
+   membership and transmit selections on this installation.
+
+The imported layout applies to the active configuration even when the two
+computers use different managed library IDs. Card positions match by FNE and
+channel name, as do receive selections. Web-stream names must match for saved
+positions. Matching these names does not enable automatic web-stream startup
+or infer transmit selections.
+Named-profile loading keeps the current receive selection, so use the full
+settings import to transfer channel on/off state.
+
 Use **File > Import Settings…** to apply a complete exported profile. DVM
 Console reloads the current managed configuration so imported layout and
 routing changes take effect. The import does not switch to a different managed
-configuration.
+configuration. If settings are saved but the configuration cannot reload, the
+console reports this separately; restart it to load the saved settings.
 
 ## Named settings profiles
 
@@ -337,6 +378,13 @@ only key identifiers and availability; it never displays or logs key material.
 For an unavailable local DMR key, it also shows the protocol, algorithm ID, and
 key length required by the channel.
 
+**Require channel key match for DMR receive** is off by default. In that mode,
+the incoming DMR privacy header chooses the algorithm and key ID from keys
+available to the same FNE system. Enable the option to reject encrypted DMR
+audio whose advertised identifiers differ from the channel configuration.
+Clear DMR calls remain receivable. The change saves immediately and recreates
+active listening and patch-source decode sessions.
+
 DVM Console restores selectable-encryption state independently of key arrival.
 If a restored channel is secure and its key is available only through KMM, the
 channel remains unavailable during the post-connect request. When the matching
@@ -349,8 +397,8 @@ appears. DVM Console does not save or display the key itself.
 
 ## Documentation
 
-This opens the searchable documentation viewer, which renders headings, lists,
-tables, links, and code blocks from the user guide.
+This opens the searchable user guide in the app, including its headings, lists,
+tables, links, and code examples.
 
 ## About
 

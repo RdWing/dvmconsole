@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Configuration;
 using DvmConsole.FneClient;
@@ -10,6 +13,24 @@ namespace DvmConsole.Media.Tests;
 
 public sealed class P25DfsiFrameCodecTests
 {
+    [Fact]
+    public void LduWriterAllocatesOnlyTheOwnedNetworkPayload()
+    {
+        byte[] imbe = new byte[P25DfsiFrameCodec.ImbeBytes];
+        for (int index = 0; index < 100; index++)
+            _ = P25DfsiFrameCodec.CreateLdu1Payload(42, 99, imbe);
+
+        const int Iterations = 10_000;
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        byte[]? last = null;
+        for (int index = 0; index < Iterations; index++)
+            last = P25DfsiFrameCodec.CreateLdu1Payload(42, 99, imbe);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        GC.KeepAlive(last);
+        Assert.InRange(allocated, 200L * Iterations, 256L * Iterations);
+    }
+
     [Fact]
     public void ExtractsLinkControlIdentifiersAheadOfPlaceholderEventIdentity()
     {
@@ -39,6 +60,74 @@ public sealed class P25DfsiFrameCodecTests
     }
 
     [Fact]
+    public void RepeatedConsumersReuseOneStructuralLduAnalysis()
+    {
+        byte[] payload = CreatePayload(0x62);
+        FneTrafficFrame traffic = CreateTraffic("LDU1", payload);
+        Span<byte> firstImbe = stackalloc byte[P25DfsiFrameCodec.ImbeBytes];
+        Span<bool> firstAvailable = stackalloc bool[P25DfsiFrameCodec.CodewordsPerLdu];
+        Assert.True(P25DfsiFrameCodec.TryExtractImbeFrames(
+            traffic,
+            firstImbe,
+            firstAvailable));
+
+        // FNE media frames are immutable at the ingress contract. Corrupting
+        // the backing test array after the first consumer makes a second
+        // structural parse observable without adding a production test hook.
+        traffic.Payload[24] = 0xFF;
+        Span<byte> imbe = stackalloc byte[P25DfsiFrameCodec.ImbeBytes];
+        Span<bool> available = stackalloc bool[P25DfsiFrameCodec.CodewordsPerLdu];
+        Span<byte> messageIndicator = stackalloc byte[P25Defines.P25_MI_LENGTH];
+
+        Assert.True(P25DfsiFrameCodec.TryParseVoiceLdu(
+            traffic,
+            imbe,
+            available,
+            messageIndicator,
+            out _));
+        Assert.True(available[0]);
+        Assert.Equal((byte)1, imbe[0]);
+    }
+
+    [Fact]
+    public void CachedLduFactsAndCallerOwnedCopiesAllocateNothing()
+    {
+        FneTrafficFrame traffic = CreateTraffic(
+            "LDU1",
+            P25DfsiFrameCodec.CreateLdu1Payload(
+                99,
+                100,
+                new byte[P25DfsiFrameCodec.ImbeBytes]));
+        Span<byte> imbe = stackalloc byte[P25DfsiFrameCodec.ImbeBytes];
+        Span<bool> available = stackalloc bool[P25DfsiFrameCodec.CodewordsPerLdu];
+        Span<byte> messageIndicator = stackalloc byte[P25Defines.P25_MI_LENGTH];
+        Assert.True(P25DfsiFrameCodec.TryParseVoiceLdu(
+            traffic,
+            imbe,
+            available,
+            messageIndicator,
+            out _));
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int index = 0; index < 10_000; index++)
+        {
+            Assert.True(P25DfsiFrameCodec.TryParseVoiceLdu(
+                traffic,
+                imbe,
+                available,
+                messageIndicator,
+                out _));
+            Assert.True(P25DfsiFrameCodec.TryExtractEncryptionIdentity(
+                traffic,
+                out _,
+                out _));
+        }
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
     public void ClearTransmitPayloadsCarryExplicitUnencryptedMetadata()
     {
         byte[] ldu1 = P25DfsiFrameCodec.CreateLdu1Payload(99, 100, new byte[P25DfsiFrameCodec.ImbeBytes]);
@@ -59,7 +148,7 @@ public sealed class P25DfsiFrameCodecTests
         var metadata = new P25DfsiFrameCodec.P25EncryptionMetadata(
             AlgorithmId: P25Defines.P25_ALGO_AES,
             KeyId: 3,
-            MessageIndicator: [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            MessageIndicator: new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 });
 
         byte[] ldu1 = P25DfsiFrameCodec.CreateEncryptedLdu1Payload(
             99,

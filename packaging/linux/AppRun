@@ -1,0 +1,11 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2025-2026 RdWing
+# SPDX-License-Identifier: AGPL-3.0-only
+
+set -eu
+
+if [ -z "${APPDIR:-}" ]; then
+    APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+fi
+
+exec "$APPDIR/usr/lib/dvmconsole/DvmConsole" "$@"

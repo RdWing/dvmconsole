@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Controls;
 using DvmConsole.Presentation;
@@ -96,6 +99,7 @@ public sealed partial class OperatorToolsWindow
         var view = new RecorderSettingsView();
         view.ChooseRecordingLocationRequested += HandleSharedChooseRecordingLocationRequested;
         view.ApplyRecordingLocationRequested += HandleSharedApplyRecordingLocationRequested;
+        view.ApplyRecordingRetentionRequested += HandleSharedApplyRecordingRetentionRequested;
         view.SaveIgnoredSubscribersRequested += HandleSharedSaveIgnoredSubscribersRequested;
         return view;
     }
@@ -106,8 +110,7 @@ public sealed partial class OperatorToolsWindow
         view.ExportRequested += HandleSharedHistoryExportRequested;
         view.ClearRequested += HandleSharedHistoryClearRequested;
         view.ClearFiltersRequested += HandleSharedHistoryClearFiltersRequested;
-        view.PlayRequested += HandleSharedHistoryPlayRequested;
-        view.StopRequested += HandleSharedHistoryStopRequested;
+        view.PlaybackToggleRequested += HandleSharedHistoryPlaybackToggleRequested;
         view.OpenRequested += HandleSharedHistoryOpenRequested;
         view.DeleteRequested += HandleSharedHistoryDeleteRequested;
         historyView = view;

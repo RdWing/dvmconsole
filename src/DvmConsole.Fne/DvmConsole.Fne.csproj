@@ -1,13 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <Nullable>disable</Nullable>
-    <!-- Temporary Phase 2 trim/AOT allowlist. The pinned upstream FneUtils
-         memory primitive emits a DynamicMethod at runtime. Keep this one
-         assembly explicitly non-trimmable until that implementation is
-         replaced; portable DVM Console assemblies remain analyzer-gated. -->
-    <IsTrimmable>false</IsTrimmable>
-    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
-    <EnableAotAnalyzer>false</EnableAotAnalyzer>
+    <!-- The pinned upstream FneUtils is replaced below by a root-owned mirror
+         whose memory primitive uses Span.Fill instead of DynamicMethod. -->
+    <IsTrimmable>true</IsTrimmable>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
     <!-- Keep the mixed upstream/owned project under the standard analyzer
          baseline; only the finite upstream compatibility list below is exempt. -->
     <AnalysisMode>Minimum</AnalysisMode>
@@ -25,13 +23,14 @@
          command-line parser and semantic-version utility are standalone host
          concerns and pull reflection/serialization roots into the linker. -->
     <Compile Include="../../fnecore/**/*.cs"
-             Exclude="../../fnecore/obj/**/*.cs;../../fnecore/bin/**/*.cs;../../fnecore/Udp.cs;../../fnecore/Properties/AssemblyInfo.cs;../../fnecore/Utility/CommandOptions.cs;../../fnecore/Utility/SemVersion.cs" />
+             Exclude="../../fnecore/obj/**/*.cs;../../fnecore/bin/**/*.cs;../../fnecore/Udp.cs;../../fnecore/FneUtils.cs;../../fnecore/Properties/AssemblyInfo.cs;../../fnecore/Utility/CommandOptions.cs;../../fnecore/Utility/SemVersion.cs" />
     <Compile Include="CompatibleUdp.cs" />
     <Compile Include="FneInboundFramePolicy.cs" />
     <Compile Include="FneTalkgroupAnnouncement.cs" />
     <Compile Include="FnePeerKeepaliveStreamInitializer.cs" />
     <Compile Include="FneTransportCryptoCodec.cs" />
     <Compile Include="FneTransportNegotiationState.cs" />
+    <Compile Include="FneUtils.cs" />
     <Compile Include="InboundReplayWindow.cs" />
     <Compile Include="Properties/AssemblyInfo.cs" />
     <PackageReference Include="SharpZipLib" Version="1.4.2" />

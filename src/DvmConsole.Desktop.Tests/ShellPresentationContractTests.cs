@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using fnecore.P25;
@@ -33,7 +36,7 @@ public sealed class ShellPresentationContractTests
         string path = Path.Combine(Path.GetTempPath(), "recording with spaces.wav");
 
         System.Diagnostics.ProcessStartInfo startInfo =
-            MainWindowViewModel.CreateRevealRecordingStartInfo(path, isWindows, isMacOS);
+            RecordingFileLauncher.CreateStartInfo(path, isWindows, isMacOS);
 
         Assert.Equal(expectedExecutable, startInfo.FileName);
         Assert.Equal(expectedShellExecution, startInfo.UseShellExecute);
@@ -48,7 +51,7 @@ public sealed class ShellPresentationContractTests
         string path = Path.Combine(folder, "call.wav");
 
         System.Diagnostics.ProcessStartInfo startInfo =
-            MainWindowViewModel.CreateRevealRecordingStartInfo(path, isWindows: false, isMacOS: false);
+            RecordingFileLauncher.CreateStartInfo(path, isWindows: false, isMacOS: false);
 
         Assert.Equal(Path.GetFullPath(folder), startInfo.FileName);
         Assert.True(startInfo.UseShellExecute);
@@ -132,7 +135,7 @@ public sealed class ShellPresentationContractTests
             FneTrafficProtocol.Dmr,
             78);
 
-        CallHistoryEntry[] selected = MainWindowViewModel.SelectActivityHistory(
+        CallHistoryEntry[] selected = HistoryRecordingController.SelectActivityHistory(
             [recordingOnly, otherSystem],
             "SKYNET",
             selectedZoneChannelNames: null);
@@ -144,7 +147,7 @@ public sealed class ShellPresentationContractTests
     [Fact]
     public void ActivitySidebarRemainsBoundedWhenFullHistoryRetentionIsLarger()
     {
-        CallHistoryEntry[] history = Enumerable.Range(1, MainWindowViewModel.MaximumActivityHistoryEntries + 1)
+        CallHistoryEntry[] history = Enumerable.Range(1, HistoryRecordingController.MaximumActivityEntries + 1)
             .Select(streamId => new CallHistoryEntry(
                 DateTimeOffset.UtcNow,
                 "SKYNET",
@@ -155,22 +158,22 @@ public sealed class ShellPresentationContractTests
                 (uint)streamId))
             .ToArray();
 
-        CallHistoryEntry[] selected = MainWindowViewModel.SelectActivityHistory(
+        CallHistoryEntry[] selected = HistoryRecordingController.SelectActivityHistory(
             history,
             "SKYNET",
             selectedZoneChannelNames: null);
 
-        Assert.Equal(100, MainWindowViewModel.MaximumActivityHistoryEntries);
-        Assert.Equal(MainWindowViewModel.MaximumActivityHistoryEntries, selected.Length);
+        Assert.Equal(100, HistoryRecordingController.MaximumActivityEntries);
+        Assert.Equal(HistoryRecordingController.MaximumActivityEntries, selected.Length);
     }
 
     [Fact]
     public void RecordingCatalogSnapshotRejectsStaleOrCancelledScans()
     {
-        Assert.True(MainWindowViewModel.IsRecordingCatalogSnapshotCurrent(4, 4, 10, 10, false));
-        Assert.False(MainWindowViewModel.IsRecordingCatalogSnapshotCurrent(4, 4, 10, 11, false));
-        Assert.False(MainWindowViewModel.IsRecordingCatalogSnapshotCurrent(4, 5, 10, 10, false));
-        Assert.False(MainWindowViewModel.IsRecordingCatalogSnapshotCurrent(4, 4, 10, 10, true));
+        Assert.True(HistoryRecordingController.IsRecordingCatalogSnapshotCurrent(4, 4, 10, 10, false));
+        Assert.False(HistoryRecordingController.IsRecordingCatalogSnapshotCurrent(4, 4, 10, 11, false));
+        Assert.False(HistoryRecordingController.IsRecordingCatalogSnapshotCurrent(4, 5, 10, 10, false));
+        Assert.False(HistoryRecordingController.IsRecordingCatalogSnapshotCurrent(4, 4, 10, 10, true));
     }
 
     [Fact]

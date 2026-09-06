@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
@@ -169,4 +172,4 @@ public sealed class NxdnTxAudioSession : IDisposable
     }
 }
 
-internal readonly record struct NxdnOutboundPacket(byte[] Payload, ushort Sequence, uint StreamId);
+internal readonly record struct NxdnOutboundPacket(ReadOnlyMemory<byte> Payload, ushort Sequence, uint StreamId);

@@ -4,23 +4,42 @@
     <RootNamespace>DvmConsole.Vocoder</RootNamespace>
     <NativeVocoderRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../native/vocoder'))</NativeVocoderRoot>
     <NativeVocoderCargoManifest>$(NativeVocoderRoot)/Cargo.toml</NativeVocoderCargoManifest>
+    <MacOSDeploymentTargetFile>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../packaging/macos/deployment-target.txt'))</MacOSDeploymentTargetFile>
+    <DvmConsoleMacOSDeploymentTarget>$([System.IO.File]::ReadAllText('$(MacOSDeploymentTargetFile)').Trim())</DvmConsoleMacOSDeploymentTarget>
     <NativeVocoderProfile Condition="'$(Configuration)' == 'Release'">release</NativeVocoderProfile>
     <NativeVocoderProfile Condition="'$(NativeVocoderProfile)' == ''">debug</NativeVocoderProfile>
     <NativeVocoderReleaseArgument Condition="'$(Configuration)' == 'Release'">--release</NativeVocoderReleaseArgument>
     <NativeVocoderTarget Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">aarch64-apple-darwin</NativeVocoderTarget>
     <NativeVocoderTarget Condition="'$(RuntimeIdentifier)' == 'osx-x64'">x86_64-apple-darwin</NativeVocoderTarget>
     <NativeVocoderTarget Condition="'$(RuntimeIdentifier)' == 'win-x64'">x86_64-pc-windows-msvc</NativeVocoderTarget>
+    <NativeVocoderTarget Condition="'$(RuntimeIdentifier)' == 'win-arm64'">aarch64-pc-windows-msvc</NativeVocoderTarget>
+    <NativeVocoderTarget Condition="'$(RuntimeIdentifier)' == 'linux-x64'">x86_64-unknown-linux-gnu</NativeVocoderTarget>
+    <NativeVocoderTarget Condition="'$(RuntimeIdentifier)' == 'linux-arm64'">aarch64-unknown-linux-gnu</NativeVocoderTarget>
     <NativeVocoderTargetArgument Condition="'$(NativeVocoderTarget)' != ''">--target $(NativeVocoderTarget)</NativeVocoderTargetArgument>
-    <NativeVocoderLibraryName Condition="'$(RuntimeIdentifier)' == 'win-x64' or '$(NativeVocoderTarget)' == 'x86_64-pc-windows-msvc' or '$(NativeVocoderTarget)' == 'x86_64-pc-windows-gnu'">dvmconsole_vocoder.dll</NativeVocoderLibraryName>
+    <!-- Optional Cargo subcommand such as `xwin` enables deliberate cross-host
+         packaging while native CI continues to use plain `cargo build`. -->
+    <NativeVocoderCargoTargetDirectory>$([System.Environment]::GetEnvironmentVariable('CARGO_TARGET_DIR'))</NativeVocoderCargoTargetDirectory>
+    <NativeVocoderLibraryName Condition="'$(RuntimeIdentifier)' == 'win-x64' or '$(RuntimeIdentifier)' == 'win-arm64' or '$(NativeVocoderTarget)' == 'x86_64-pc-windows-msvc' or '$(NativeVocoderTarget)' == 'x86_64-pc-windows-gnu' or '$(NativeVocoderTarget)' == 'aarch64-pc-windows-msvc'">dvmconsole_vocoder.dll</NativeVocoderLibraryName>
     <NativeVocoderLibraryName Condition="'$(RuntimeIdentifier)' == 'osx-arm64' or '$(RuntimeIdentifier)' == 'osx-x64'">libdvmconsole_vocoder.dylib</NativeVocoderLibraryName>
+    <NativeVocoderLibraryName Condition="'$(RuntimeIdentifier)' == 'linux-x64' or '$(RuntimeIdentifier)' == 'linux-arm64'">libdvmconsole_vocoder.so</NativeVocoderLibraryName>
     <NativeVocoderLibraryName Condition="'$(NativeVocoderLibraryName)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">dvmconsole_vocoder.dll</NativeVocoderLibraryName>
     <NativeVocoderLibraryName Condition="'$(NativeVocoderLibraryName)' == '' and $([MSBuild]::IsOSPlatform('OSX'))">libdvmconsole_vocoder.dylib</NativeVocoderLibraryName>
     <NativeVocoderLibraryName Condition="'$(NativeVocoderLibraryName)' == ''">libdvmconsole_vocoder.so</NativeVocoderLibraryName>
-    <NativeVocoderOutputDirectory Condition="'$(NativeVocoderTarget)' == ''">$(NativeVocoderRoot)/target/$(NativeVocoderProfile)</NativeVocoderOutputDirectory>
-    <NativeVocoderOutputDirectory Condition="'$(NativeVocoderTarget)' != ''">$(NativeVocoderRoot)/target/$(NativeVocoderTarget)/$(NativeVocoderProfile)</NativeVocoderOutputDirectory>
+    <NativeVocoderOutputDirectory Condition="'$(NativeVocoderCargoTargetDirectory)' != '' and '$(NativeVocoderTarget)' == ''">$(NativeVocoderCargoTargetDirectory)/$(NativeVocoderProfile)</NativeVocoderOutputDirectory>
+    <NativeVocoderOutputDirectory Condition="'$(NativeVocoderCargoTargetDirectory)' != '' and '$(NativeVocoderTarget)' != ''">$(NativeVocoderCargoTargetDirectory)/$(NativeVocoderTarget)/$(NativeVocoderProfile)</NativeVocoderOutputDirectory>
+    <NativeVocoderOutputDirectory Condition="'$(NativeVocoderOutputDirectory)' == '' and '$(NativeVocoderTarget)' == ''">$(NativeVocoderRoot)/target/$(NativeVocoderProfile)</NativeVocoderOutputDirectory>
+    <NativeVocoderOutputDirectory Condition="'$(NativeVocoderOutputDirectory)' == '' and '$(NativeVocoderTarget)' != ''">$(NativeVocoderRoot)/target/$(NativeVocoderTarget)/$(NativeVocoderProfile)</NativeVocoderOutputDirectory>
     <NativeVocoderOutputPath>$(NativeVocoderOutputDirectory)/$(NativeVocoderLibraryName)</NativeVocoderOutputPath>
-    <NativeVocoderEnvironment Condition="'$(NativeVocoderTarget)' == 'aarch64-apple-darwin'">MACOSX_DEPLOYMENT_TARGET=14.0;CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS=-C link-arg=-mmacosx-version-min=14.0</NativeVocoderEnvironment>
-    <NativeVocoderEnvironment Condition="'$(NativeVocoderTarget)' == 'x86_64-apple-darwin'">MACOSX_DEPLOYMENT_TARGET=14.0;CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS=-C link-arg=-mmacosx-version-min=14.0</NativeVocoderEnvironment>
+    <!-- Keep ld64's default content-based LC_UUID. macOS requires that load
+         command when loading the dylib, and the content-derived value remains
+         stable across identical unsigned builds. -->
+    <NativeVocoderEnvironment Condition="'$(NativeVocoderTarget)' == 'aarch64-apple-darwin'">MACOSX_DEPLOYMENT_TARGET=$(DvmConsoleMacOSDeploymentTarget);CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS=-C link-arg=-mmacosx-version-min=$(DvmConsoleMacOSDeploymentTarget) -C link-arg=-Wl,-install_name,@rpath/libdvmconsole_vocoder.dylib</NativeVocoderEnvironment>
+    <NativeVocoderEnvironment Condition="'$(NativeVocoderTarget)' == 'x86_64-apple-darwin'">MACOSX_DEPLOYMENT_TARGET=$(DvmConsoleMacOSDeploymentTarget);CARGO_TARGET_X86_64_APPLE_DARWIN_RUSTFLAGS=-C link-arg=-mmacosx-version-min=$(DvmConsoleMacOSDeploymentTarget) -C link-arg=-Wl,-install_name,@rpath/libdvmconsole_vocoder.dylib</NativeVocoderEnvironment>
+    <!-- MSVC-style linkers otherwise emit a fresh CodeView identifier for
+         every build even when no PDB is distributed. /Brepro derives that
+         identifier from linked content so the embedded DLL is stable. -->
+    <NativeVocoderEnvironment Condition="'$(NativeVocoderTarget)' == 'x86_64-pc-windows-msvc'">CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-C link-arg=/Brepro -C link-arg=/DEBUG:NONE</NativeVocoderEnvironment>
+    <NativeVocoderEnvironment Condition="'$(NativeVocoderTarget)' == 'aarch64-pc-windows-msvc'">CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_RUSTFLAGS=-C link-arg=/Brepro -C link-arg=/DEBUG:NONE</NativeVocoderEnvironment>
   </PropertyGroup>
 
   <ItemGroup>
@@ -36,7 +55,7 @@
   </ItemGroup>
 
   <Target Name="BuildRequiredNativeVocoder" BeforeTargets="PrepareForBuild">
-    <Exec Command="cargo build --manifest-path &quot;$(NativeVocoderCargoManifest)&quot; --locked $(NativeVocoderReleaseArgument) $(NativeVocoderTargetArgument)"
+    <Exec Command="cargo $(NativeVocoderCargoExtension) build --manifest-path &quot;$(NativeVocoderCargoManifest)&quot; --locked $(NativeVocoderReleaseArgument) $(NativeVocoderTargetArgument)"
           EnvironmentVariables="$(NativeVocoderEnvironment)" />
     <Error Condition="!Exists('$(NativeVocoderOutputPath)')"
            Text="Required built-in vocoder was not produced at $(NativeVocoderOutputPath)." />

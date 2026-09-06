@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Media;
 using System.Collections;
 using System.Windows.Input;
@@ -23,6 +26,8 @@ public interface IRecorderSystemViewModel
 
 public interface IRecorderSettingsViewModel
 {
+    bool IsRecordingUnavailable => false;
+    string? RecordingAvailabilityWarning => null;
     bool IsExternalRecordingLocationAvailable { get; }
     string RecordingLocationText { get; set; }
     string RecordingRetentionDaysText { get; set; }

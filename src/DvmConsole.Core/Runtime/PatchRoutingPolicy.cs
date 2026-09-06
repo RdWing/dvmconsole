@@ -1,8 +1,18 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Core.Runtime;
+
+public readonly record struct PatchCallStartResult(uint StreamId, bool SkipSourceCall = false)
+{
+    public static PatchCallStartResult Skipped => new(0, true);
+}
 
 public interface IPatchForwardingSink
 {
     uint BeginCall(PatchMemberAddress member, uint sourceId);
+    PatchCallStartResult TryBeginCall(PatchMemberAddress member, uint sourceId)
+        => new(BeginCall(member, sourceId));
     void EndCall(PatchMemberAddress member, uint streamId, uint sourceId);
     void SendAudio(PatchMemberAddress member, uint streamId, ReadOnlyMemory<short> samples, uint sourceId);
     uint GetFallbackSourceId(PatchMemberAddress member);
@@ -29,7 +39,7 @@ internal static class PatchMembershipPolicy
 
             List<PatchMemberAddress> members = (configuredMembers ?? [])
                 .Where(member => member is not null)
-                .GroupBy(member => member.Key, StringComparer.OrdinalIgnoreCase)
+                .GroupBy(member => member.Identity)
                 .Select(group => group.First())
                 .ToList();
             if (members.Count == 0)
@@ -47,36 +57,53 @@ internal static class PatchMembershipPolicy
     public static bool MembersEqual(
         IReadOnlyList<PatchMemberAddress> left,
         IReadOnlyList<PatchMemberAddress> right)
-        => new HashSet<string>(left.Select(member => member.Key), StringComparer.OrdinalIgnoreCase)
-            .SetEquals(right.Select(member => member.Key));
+        => new HashSet<PatchMemberIdentity>(left.Select(member => member.Identity))
+            .SetEquals(right.Select(member => member.Identity));
 
     public static bool RoutingEqual(
         PatchGroupMembership left,
         PatchGroupMembership right)
         => left.OneWay == right.OneWay &&
            MembersEqual(left.Members, right.Members) &&
-           (!left.OneWay || string.Equals(
-               left.Members[0].Key,
-               right.Members[0].Key,
-               StringComparison.OrdinalIgnoreCase));
+           (!left.OneWay || left.Members[0].Identity == right.Members[0].Identity);
 
     public static bool IsEligibleSource(
         IReadOnlyList<PatchMemberAddress> members,
         bool oneWay,
         PatchMemberAddress source)
-        => members.Any(member => member.Key == source.Key) &&
-           (!oneWay || members[0].Key == source.Key);
+    {
+        if (oneWay)
+            return members.Count > 0 && members[0].Identity == source.Identity;
+
+        for (int index = 0; index < members.Count; index++)
+        {
+            if (members[index].Identity == source.Identity)
+                return true;
+        }
+        return false;
+    }
 }
 
 internal sealed class DelegatePatchForwardingSink : IPatchForwardingSink
 {
-    private readonly Func<PatchMemberAddress, uint, uint> beginCall;
+    private readonly Func<PatchMemberAddress, uint, PatchCallStartResult> beginCall;
     private readonly Action<PatchMemberAddress, uint, uint> endCall;
     private readonly Action<PatchMemberAddress, uint, ReadOnlyMemory<short>, uint> sendAudio;
     private readonly Func<PatchMemberAddress, uint> fallbackSourceId;
 
     public DelegatePatchForwardingSink(
         Func<PatchMemberAddress, uint, uint> beginCall,
+        Action<PatchMemberAddress, uint, uint> endCall,
+        Action<PatchMemberAddress, uint, ReadOnlyMemory<short>, uint> sendAudio,
+        Func<PatchMemberAddress, uint> fallbackSourceId)
+        : this((member, sourceId) => new PatchCallStartResult(beginCall(member, sourceId)),
+            endCall, sendAudio, fallbackSourceId)
+    {
+        ArgumentNullException.ThrowIfNull(beginCall);
+    }
+
+    public DelegatePatchForwardingSink(
+        Func<PatchMemberAddress, uint, PatchCallStartResult> beginCall,
         Action<PatchMemberAddress, uint, uint> endCall,
         Action<PatchMemberAddress, uint, ReadOnlyMemory<short>, uint> sendAudio,
         Func<PatchMemberAddress, uint> fallbackSourceId)
@@ -88,6 +115,9 @@ internal sealed class DelegatePatchForwardingSink : IPatchForwardingSink
     }
 
     public uint BeginCall(PatchMemberAddress member, uint sourceId)
+        => beginCall(member, sourceId).StreamId;
+
+    public PatchCallStartResult TryBeginCall(PatchMemberAddress member, uint sourceId)
         => beginCall(member, sourceId);
 
     public void EndCall(PatchMemberAddress member, uint streamId, uint sourceId)

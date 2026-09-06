@@ -1,6 +1,10 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
-using DvmConsole.Core.Settings;
 using Xunit;
+
+using static DvmConsole.Desktop.Tests.ConfigurationStudioDraftTestBuilder;
 
 namespace DvmConsole.Desktop.Tests;
 
@@ -43,44 +47,31 @@ public sealed class ConfigurationStudioDraftHistoryTests
         Assert.Null(history.Undo(snapshot));
     }
 
-    private static ConfigurationStudioDraftSnapshot CreateSnapshot(
-        string yaml,
-        int keyId,
-        double x,
-        string system)
+    [Fact]
+    public void UndoHistoryRetainsOnlyTheMostRecentHundredEntries()
     {
-        Guid systemId = Guid.NewGuid();
-        Guid zoneId = Guid.NewGuid();
-        Guid channelId = Guid.NewGuid();
-        var references = new ConfigurationStudioReferencedFilesSnapshot(
-            null,
-            null,
-            string.Empty,
-            null,
-            null,
-            false,
-            $"KeyId: {keyId}",
-            new Dictionary<string, string>(),
-            new Dictionary<string, string>(),
-            new Dictionary<string, string>(),
-            [],
-            [],
-            string.Empty);
-        string fingerprint = ConfigurationStudioDraftSnapshot.ComputeFingerprint(
-            [yaml, references.KeyFileContent, x.ToString(), system]);
-        return new ConfigurationStudioDraftSnapshot(
-            yaml,
-            new ConfigurationDraftIdentityLayout(
-                [systemId],
-                [new ConfigurationZoneIdentityLayout(zoneId, [channelId], [])],
-                []),
-            references,
-            new Dictionary<Guid, WidgetPositionSetting>
-            {
-                [channelId] = new() { X = x, Y = 20 }
-            },
-            new Dictionary<Guid, string> { [zoneId] = system },
-            new HashSet<Guid> { systemId },
-            fingerprint);
+        var history = new ConfigurationStudioDraftHistory();
+        ConfigurationStudioDraftSnapshot current = CreateSnapshot("0", 0, 0, "North");
+        for (int index = 1; index <= 110; index++)
+        {
+            ConfigurationStudioDraftSnapshot next = CreateSnapshot(
+                index.ToString(),
+                index,
+                index,
+                "North");
+            history.Record(current, next);
+            current = next;
+        }
+
+        var restored = new List<string>();
+        while (history.Undo(current) is { } previous)
+        {
+            restored.Add(previous.Yaml);
+            current = previous;
+        }
+
+        Assert.Equal(100, restored.Count);
+        Assert.Equal("10", restored[^1]);
     }
+
 }

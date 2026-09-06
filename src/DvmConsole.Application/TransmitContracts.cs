@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Runtime;
 
 namespace DvmConsole.Application;
@@ -29,7 +32,7 @@ public interface IRadioTrafficEndpoint
     uint CreateStreamId();
     void SendTraffic(
         RadioMediaProtocol protocol,
-        ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> payload,
         ushort packetSequence,
         uint streamId);
 }

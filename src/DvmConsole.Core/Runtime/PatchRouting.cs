@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Core.Runtime;
 
 // Stable configured-channel identity used by patch routing. The router does not
@@ -17,15 +20,30 @@ public sealed record PatchMemberAddress
             throw new ArgumentOutOfRangeException(nameof(destinationId));
         DestinationId = destinationId;
         ChannelName = string.IsNullOrWhiteSpace(channelName) ? null : channelName.Trim();
+        Identity = new PatchMemberIdentity(
+            SystemName.ToUpperInvariant(),
+            ChannelName?.ToUpperInvariant(),
+            ChannelName is null ? DestinationId : 0);
+        Key = Identity.ToString();
     }
 
     public string SystemName { get; }
     public uint DestinationId { get; }
     public string? ChannelName { get; }
     public bool HasConfiguredChannelIdentity => ChannelName is not null;
-    public string Key => ChannelName is null
-        ? $"{SystemName.ToLowerInvariant()}|destination|{DestinationId}"
-        : $"{SystemName.ToLowerInvariant()}|channel|{ChannelName.ToLowerInvariant()}";
+    public string Key { get; }
+    internal PatchMemberIdentity Identity { get; }
+}
+
+internal readonly record struct PatchMemberIdentity(
+    string SystemName,
+    string? ChannelName,
+    uint DestinationId)
+{
+    public override string ToString()
+        => ChannelName is null
+            ? $"{SystemName}|DESTINATION|{DestinationId}"
+            : $"{SystemName}|CHANNEL|{ChannelName}";
 }
 
 // Protocol-independent patch membership and active-call state machine.
@@ -41,6 +59,7 @@ public sealed class PatchRoutingTable
     private readonly TimeProvider timeProvider;
     private readonly PatchLoopSuppression loopSuppression;
     private readonly Dictionary<string, GroupState> groups = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<SourceStreamKey, ForwardTarget[]> audioRouteSnapshots = [];
     private bool sourceIdPassthrough;
     private int membershipGeneration;
 
@@ -64,6 +83,14 @@ public sealed class PatchRoutingTable
         this.timeProvider = timeProvider ?? TimeProvider.System;
         loopSuppression = new PatchLoopSuppression(this.timeProvider, LatePacketSuppressWindow);
     }
+
+    public static PatchRoutingTable WithAdmission(
+        Func<PatchMemberAddress, uint, PatchCallStartResult> beginCall,
+        Action<PatchMemberAddress, uint, uint> endCall,
+        Action<PatchMemberAddress, uint, ReadOnlyMemory<short>, uint> sendAudio,
+        Func<PatchMemberAddress, uint> fallbackSourceId,
+        TimeProvider? timeProvider = null)
+        => new(new DelegatePatchForwardingSink(beginCall, endCall, sendAudio, fallbackSourceId), timeProvider);
 
     public bool SourceIdPassthrough
     {
@@ -95,8 +122,8 @@ public sealed class PatchRoutingTable
         Dictionary<string, PatchGroupMembership> incoming = PatchMembershipPolicy.Normalize(
             memberships,
             oneWayModes);
-        List<ForwardTarget> stops;
-        HashSet<string> explicitlyReconfiguredSourceKeys = new(StringComparer.OrdinalIgnoreCase);
+        List<ForwardTarget>? stops = null;
+        HashSet<PatchMemberIdentity> explicitlyReconfiguredSources = [];
 
         lock (sync)
         {
@@ -104,7 +131,6 @@ public sealed class PatchRoutingTable
                 return;
 
             membershipGeneration++;
-            stops = [];
             foreach (string groupName in groups.Keys
                 .Where(name => !incoming.ContainsKey(name) ||
                               !PatchMembershipPolicy.RoutingEqual(groups[name].Membership, incoming[name]))
@@ -115,15 +141,12 @@ public sealed class PatchRoutingTable
                     replacement.Members.Count > 0 &&
                     groups[groupName].OneWay &&
                     groups[groupName].Members.Count > 0 &&
-                    !string.Equals(
-                        groups[groupName].Members[0].Key,
-                        replacement.Members[0].Key,
-                        StringComparison.OrdinalIgnoreCase))
+                    groups[groupName].Members[0].Identity != replacement.Members[0].Identity)
                 {
-                    explicitlyReconfiguredSourceKeys.Add(replacement.Members[0].Key);
+                    explicitlyReconfiguredSources.Add(replacement.Members[0].Identity);
                 }
 
-                CollectAndClearStops(groups[groupName], stops);
+                CollectAndClearStops(groups[groupName], ref stops);
                 groups.Remove(groupName);
             }
 
@@ -133,8 +156,9 @@ public sealed class PatchRoutingTable
                     groups[groupName] = new GroupState(membership);
             }
 
-            foreach (string sourceKey in explicitlyReconfiguredSourceKeys)
-                loopSuppression.AllowReconfiguredSource(sourceKey);
+            audioRouteSnapshots.Clear();
+            foreach (PatchMemberIdentity source in explicitlyReconfiguredSources)
+                loopSuppression.AllowReconfiguredSource(source);
         }
 
         EndTargets(stops);
@@ -146,19 +170,21 @@ public sealed class PatchRoutingTable
         if (streamId == 0)
             return;
 
-        List<StartRequest> starts = [];
-        List<ForwardTarget> stops = [];
+        List<StartRequest>? starts = null;
+        List<ForwardTarget>? stops = null;
         lock (sync)
         {
             if (loopSuppression.ShouldSuppressInbound(source, streamId, sourceId))
                 return;
 
             DateTimeOffset now = timeProvider.GetUtcNow();
-            foreach (GroupState group in groups.Values.Where(group => IsEligibleSource(group, source)))
+            foreach (GroupState group in groups.Values)
             {
+                if (!IsEligibleSource(group, source))
+                    continue;
                 if (group.Source is not null)
                 {
-                    if (group.Source.SourceKey == source.Key && group.Source.StreamId == streamId)
+                    if (group.Source.Source == source.Identity && group.Source.StreamId == streamId)
                     {
                         group.Source.LastActivityUtc = now;
                         continue;
@@ -167,12 +193,12 @@ public sealed class PatchRoutingTable
                     if (!IsSourceStale(group.Source, now))
                         continue;
 
-                    CollectAndClearStops(group, stops);
+                    CollectAndClearStops(group, ref stops);
                     group.Source = null;
                 }
 
-                group.Source = new ActiveSource(source.Key, streamId, sourceId, sourceId != 0, now);
-                AddStartRequests(group, starts);
+                group.Source = new ActiveSource(source.Identity, streamId, sourceId, sourceId != 0, now);
+                AddStartRequests(group, ref starts);
             }
         }
 
@@ -190,27 +216,29 @@ public sealed class PatchRoutingTable
         if (streamId == 0 || samples.IsEmpty)
             return;
 
-        List<StartRequest> starts = [];
-        List<ForwardTarget> stops = [];
+        List<StartRequest>? starts = null;
+        List<ForwardTarget>? stops = null;
         lock (sync)
         {
             if (loopSuppression.ShouldSuppressInbound(source, streamId, sourceId))
                 return;
 
             DateTimeOffset now = timeProvider.GetUtcNow();
-            foreach (GroupState group in groups.Values.Where(group => IsEligibleSource(group, source)))
+            foreach (GroupState group in groups.Values)
             {
+                if (!IsEligibleSource(group, source))
+                    continue;
                 if (group.Source is null ||
-                    (group.Source.SourceKey != source.Key || group.Source.StreamId != streamId) &&
+                    (group.Source.Source != source.Identity || group.Source.StreamId != streamId) &&
                     IsSourceStale(group.Source, now))
                 {
                     if (group.Source is not null)
-                        CollectAndClearStops(group, stops);
+                        CollectAndClearStops(group, ref stops);
 
-                    group.Source = new ActiveSource(source.Key, streamId, sourceId, sourceId != 0, now);
+                    group.Source = new ActiveSource(source.Identity, streamId, sourceId, sourceId != 0, now);
                 }
 
-                if (group.Source.SourceKey != source.Key || group.Source.StreamId != streamId)
+                if (group.Source.Source != source.Identity || group.Source.StreamId != streamId)
                     continue;
 
                 group.Source.LastActivityUtc = now;
@@ -223,23 +251,16 @@ public sealed class PatchRoutingTable
                 }
 
                 if (!sourceIdPassthrough || group.Source.SourceIdLatched)
-                    AddStartRequests(group, starts);
+                    AddStartRequests(group, ref starts);
             }
         }
 
         EndTargets(stops);
         BeginTargets(starts);
 
-        List<ForwardTarget> audioTargets = [];
+        ForwardTarget[] audioTargets;
         lock (sync)
-        {
-            foreach (GroupState group in groups.Values.Where(group =>
-                         group.Source?.SourceKey == source.Key &&
-                         group.Source.StreamId == streamId))
-            {
-                audioTargets.AddRange(group.ActiveTargets.Values);
-            }
-        }
+            audioTargets = GetOrCreateAudioRouteSnapshot(source.Identity, streamId);
 
         foreach (ForwardTarget target in audioTargets)
             sink.SendAudio(target.Member, target.StreamId, samples, target.OutboundSourceId);
@@ -251,15 +272,15 @@ public sealed class PatchRoutingTable
         if (streamId == 0)
             return;
 
-        List<ForwardTarget> stops = [];
+        List<ForwardTarget>? stops = null;
         lock (sync)
         {
             foreach (GroupState group in groups.Values)
             {
-                if (group.Source?.SourceKey != source.Key || group.Source.StreamId != streamId)
+                if (group.Source?.Source != source.Identity || group.Source.StreamId != streamId)
                     continue;
 
-                CollectAndClearStops(group, stops);
+                CollectAndClearStops(group, ref stops);
                 group.Source = null;
             }
         }
@@ -287,7 +308,7 @@ public sealed class PatchRoutingTable
     // Releases router state after the host loses an outbound encoder or
     // transport session. The next source audio block can then establish a
     // fresh target instead of remaining attached to a dead session.
-    public bool ReportTargetFailure(PatchMemberAddress member, uint streamId)
+    public bool ReportTargetFailure(PatchMemberAddress member, uint streamId, bool skipSourceCall = false)
     {
         ArgumentNullException.ThrowIfNull(member);
         if (streamId == 0)
@@ -298,13 +319,15 @@ public sealed class PatchRoutingTable
         {
             foreach (GroupState group in groups.Values)
             {
-                if (!group.ActiveTargets.TryGetValue(member.Key, out ForwardTarget? target) ||
+                if (!group.ActiveTargets.TryGetValue(member.Identity, out ForwardTarget? target) ||
                     target.StreamId != streamId)
                 {
                     continue;
                 }
 
-                group.ActiveTargets.Remove(member.Key);
+                group.ActiveTargets.Remove(member.Identity);
+                if (skipSourceCall)
+                    group.Source?.SkipTarget(member.Identity);
                 removedTargets.Add(target);
             }
 
@@ -318,6 +341,7 @@ public sealed class PatchRoutingTable
                     streamId,
                     target.OutboundSourceId);
             }
+            audioRouteSnapshots.Clear();
         }
 
         return true;
@@ -325,7 +349,7 @@ public sealed class PatchRoutingTable
 
     public int CleanupStaleSources()
     {
-        List<ForwardTarget> stops = [];
+        List<ForwardTarget>? stops = null;
         int cleaned = 0;
         lock (sync)
         {
@@ -333,7 +357,7 @@ public sealed class PatchRoutingTable
             foreach (GroupState group in groups.Values.Where(group =>
                          group.Source is not null && IsSourceStale(group.Source, now)))
             {
-                CollectAndClearStops(group, stops);
+                CollectAndClearStops(group, ref stops);
                 group.Source = null;
                 cleaned++;
             }
@@ -343,8 +367,10 @@ public sealed class PatchRoutingTable
         return cleaned;
     }
 
-    private void BeginTargets(List<StartRequest> starts)
+    private void BeginTargets(List<StartRequest>? starts)
     {
+        if (starts is null)
+            return;
         foreach (StartRequest start in starts)
         {
             uint outboundSourceId = SourceIdPassthrough && start.SourceId != 0
@@ -353,7 +379,19 @@ public sealed class PatchRoutingTable
             if (outboundSourceId == 0)
                 continue;
 
-            uint streamId = sink.BeginCall(start.Member, outboundSourceId);
+            PatchCallStartResult admission = sink.TryBeginCall(start.Member, outboundSourceId);
+            if (admission.SkipSourceCall)
+            {
+                lock (sync)
+                {
+                    if (membershipGeneration == start.Generation &&
+                        groups.TryGetValue(start.GroupName, out GroupState? group) &&
+                        group.Source?.Source == start.Source && group.Source.StreamId == start.SourceStreamId)
+                        group.Source.SkipTarget(start.Member.Identity);
+                }
+                continue;
+            }
+            uint streamId = admission.StreamId;
             if (streamId == 0)
                 continue;
 
@@ -362,15 +400,16 @@ public sealed class PatchRoutingTable
             {
                 if (membershipGeneration == start.Generation &&
                     groups.TryGetValue(start.GroupName, out GroupState? group) &&
-                    group.Source?.SourceKey == start.SourceKey &&
+                    group.Source?.Source == start.Source &&
                     group.Source.StreamId == start.SourceStreamId &&
-                    group.Members.Any(member => member.Key == start.Member.Key) &&
-                    !group.ActiveTargets.ContainsKey(start.Member.Key))
+                    ContainsMember(group.Members, start.Member.Identity) &&
+                    !group.ActiveTargets.ContainsKey(start.Member.Identity))
                 {
-                    group.ActiveTargets[start.Member.Key] = new ForwardTarget(
+                    group.ActiveTargets[start.Member.Identity] = new ForwardTarget(
                         start.Member,
                         streamId,
                         outboundSourceId);
+                    audioRouteSnapshots.Clear();
                     loopSuppression.ActivateTarget(
                         start.Member,
                         streamId,
@@ -384,37 +423,44 @@ public sealed class PatchRoutingTable
         }
     }
 
-    private void EndTargets(List<ForwardTarget> stops)
+    private void EndTargets(List<ForwardTarget>? stops)
     {
+        if (stops is null)
+            return;
         foreach (ForwardTarget target in stops)
             sink.EndCall(target.Member, target.StreamId, target.OutboundSourceId);
     }
 
-    private void AddStartRequests(GroupState group, List<StartRequest> starts)
+    private void AddStartRequests(GroupState group, ref List<StartRequest>? starts)
     {
         if (sourceIdPassthrough && group.Source is { SourceIdLatched: false })
             return;
 
-        foreach (PatchMemberAddress member in group.Members.Where(member =>
-                     group.Source is not null &&
-                     member.Key != group.Source.SourceKey &&
-                     !group.ActiveTargets.ContainsKey(member.Key)))
+        for (int index = 0; index < group.Members.Count; index++)
         {
-            starts.Add(new StartRequest(
+            PatchMemberAddress member = group.Members[index];
+            if (group.Source is null ||
+                member.Identity == group.Source.Source ||
+                group.ActiveTargets.ContainsKey(member.Identity) ||
+                group.Source.IsTargetSkipped(member.Identity))
+            {
+                continue;
+            }
+            (starts ??= []).Add(new StartRequest(
                 group.GroupName,
                 membershipGeneration,
-                group.Source!.SourceKey,
+                group.Source.Source,
                 group.Source.StreamId,
                 member,
                 group.Source.SourceId));
         }
     }
 
-    private void CollectAndClearStops(GroupState group, List<ForwardTarget> stops)
+    private void CollectAndClearStops(GroupState group, ref List<ForwardTarget>? stops)
     {
         foreach (ForwardTarget target in group.ActiveTargets.Values)
         {
-            stops.Add(target);
+            (stops ??= []).Add(target);
             loopSuppression.ReleaseTarget(
                 target.Member,
                 target.StreamId,
@@ -422,6 +468,7 @@ public sealed class PatchRoutingTable
         }
 
         group.ActiveTargets.Clear();
+        audioRouteSnapshots.Clear();
     }
 
     private bool MembershipsEqual(Dictionary<string, PatchGroupMembership> incoming)
@@ -444,6 +491,48 @@ public sealed class PatchRoutingTable
     private static bool IsEligibleSource(GroupState group, PatchMemberAddress source)
         => PatchMembershipPolicy.IsEligibleSource(group.Members, group.OneWay, source);
 
+    private ForwardTarget[] GetOrCreateAudioRouteSnapshot(
+        PatchMemberIdentity source,
+        uint streamId)
+    {
+        var key = new SourceStreamKey(source, streamId);
+        if (audioRouteSnapshots.TryGetValue(key, out ForwardTarget[]? existing))
+            return existing;
+
+        int count = 0;
+        foreach (GroupState group in groups.Values)
+        {
+            if (group.Source?.Source == source && group.Source.StreamId == streamId)
+                count += group.ActiveTargets.Count;
+        }
+        if (count == 0)
+            return [];
+
+        var snapshot = new ForwardTarget[count];
+        int index = 0;
+        foreach (GroupState group in groups.Values)
+        {
+            if (group.Source?.Source != source || group.Source.StreamId != streamId)
+                continue;
+            foreach (ForwardTarget target in group.ActiveTargets.Values)
+                snapshot[index++] = target;
+        }
+        audioRouteSnapshots[key] = snapshot;
+        return snapshot;
+    }
+
+    private static bool ContainsMember(
+        IReadOnlyList<PatchMemberAddress> members,
+        PatchMemberIdentity identity)
+    {
+        foreach (PatchMemberAddress member in members)
+        {
+            if (member.Identity == identity)
+                return true;
+        }
+        return false;
+    }
+
     private static bool IsSourceStale(ActiveSource source, DateTimeOffset now)
         => now - source.LastActivityUtc > LatePacketSuppressWindow;
 
@@ -463,24 +552,27 @@ public sealed class PatchRoutingTable
         public IReadOnlyList<PatchMemberAddress> Members { get; }
         public bool OneWay { get; }
         public ActiveSource? Source { get; set; }
-        public Dictionary<string, ForwardTarget> ActiveTargets { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<PatchMemberIdentity, ForwardTarget> ActiveTargets { get; } = [];
     }
 
     private sealed class ActiveSource
     {
-        public ActiveSource(string sourceKey, uint streamId, uint sourceId, bool sourceIdLatched, DateTimeOffset lastActivityUtc)
+        public ActiveSource(PatchMemberIdentity source, uint streamId, uint sourceId, bool sourceIdLatched, DateTimeOffset lastActivityUtc)
         {
-            SourceKey = sourceKey;
+            Source = source;
             StreamId = streamId;
             SourceId = sourceId;
             SourceIdLatched = sourceIdLatched;
             LastActivityUtc = lastActivityUtc;
         }
 
-        public string SourceKey { get; }
+        public PatchMemberIdentity Source { get; }
         public uint StreamId { get; }
         public uint SourceId { get; set; }
         public bool SourceIdLatched { get; set; }
+        private HashSet<PatchMemberIdentity>? skippedTargets;
+        public void SkipTarget(PatchMemberIdentity member) => (skippedTargets ??= []).Add(member);
+        public bool IsTargetSkipped(PatchMemberIdentity member) => skippedTargets?.Contains(member) == true;
         public DateTimeOffset LastActivityUtc { get; set; }
     }
 
@@ -501,8 +593,12 @@ public sealed class PatchRoutingTable
     private sealed record StartRequest(
         string GroupName,
         int Generation,
-        string SourceKey,
+        PatchMemberIdentity Source,
         uint SourceStreamId,
         PatchMemberAddress Member,
         uint SourceId);
+
+    private readonly record struct SourceStreamKey(
+        PatchMemberIdentity Source,
+        uint StreamId);
 }

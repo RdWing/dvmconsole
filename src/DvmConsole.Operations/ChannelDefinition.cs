@@ -1,4 +1,8 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Runtime;
+using System.Text.Json.Serialization;
 
 namespace DvmConsole.Operations;
 
@@ -8,6 +12,7 @@ namespace DvmConsole.Operations;
 /// </summary>
 public readonly record struct ChannelSessionId
 {
+    [JsonConstructor]
     public ChannelSessionId(
         string systemName,
         ChannelProtocol protocol,
@@ -37,6 +42,7 @@ public readonly record struct ChannelSessionId
     public byte Slot { get; }
     public string InstanceKey { get; }
 
+    [JsonIgnore]
     public ChannelRouteKey RouteKey => new(SystemName, Protocol, DestinationId, Slot);
 
     public override string ToString()

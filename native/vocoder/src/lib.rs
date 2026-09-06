@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 //! Panic-contained private C ABI for DVM Console's built-in vocoder.
 //!
 //! The ABI uses caller-owned buffers. Rust allocations, error values, and
@@ -29,7 +32,7 @@ use processing::*;
 pub use session::Session;
 use tone::*;
 
-const ABI_VERSION: u32 = 7;
+const ABI_VERSION: u32 = 8;
 const MODE_DMR: u32 = 0;
 const MODE_P25: u32 = 1;
 const MODE_NXDN: u32 = 2;
@@ -267,6 +270,49 @@ pub unsafe extern "C" fn dvmconsole_vocoder_configure_rx_audio_processing(
 }
 
 #[no_mangle]
+/// Moves optional RX processing out of decode and into explicit presentation calls.
+/// # Safety
+/// `session` must point to a live session, before decoding begins.
+pub unsafe extern "C" fn dvmconsole_vocoder_defer_rx_processing(session: *mut Session) -> i32 {
+    checked(
+        || {
+            let Some(session) = (unsafe { session.as_mut() }) else {
+                return ERR_STATE;
+            };
+            session.defer_receive_processing();
+            OK
+        },
+        ERR_STATE,
+    )
+}
+
+#[no_mangle]
+/// Applies optional RX processing to caller-owned local playback samples only.
+/// # Safety
+/// The session and writable buffer must be valid for the supplied length.
+pub unsafe extern "C" fn dvmconsole_vocoder_process_rx_presentation(
+    session: *mut Session,
+    samples: *mut i16,
+    sample_count: usize,
+) -> i32 {
+    checked(
+        || {
+            let Some(session) = (unsafe { session.as_mut() }) else {
+                return ERR_STATE;
+            };
+            if samples.is_null() || sample_count > i32::MAX as usize {
+                return ERR_INVALID;
+            }
+            session.process_presentation(unsafe {
+                std::slice::from_raw_parts_mut(samples, sample_count)
+            });
+            sample_count as i32
+        },
+        ERR_STATE,
+    )
+}
+
+#[no_mangle]
 /// # Safety
 /// `session` must be null or a live handle returned by `session_create` that
 /// has not already been destroyed.
@@ -294,6 +340,7 @@ pub unsafe extern "C" fn dvmconsole_vocoder_session_reset(session: *mut Session)
                 return ERR_STATE;
             };
             session.vocoder.reset();
+            session.presentation_state = Default::default();
             session.tone_converter = HalfToFullConverter::new();
             session.pending_tone = None;
             session.flushed = false;
@@ -728,7 +775,7 @@ mod tests {
 
     #[test]
     fn abi_reports_all_required_modes() {
-        assert_eq!(dvmconsole_vocoder_abi_version(), 7);
+        assert_eq!(dvmconsole_vocoder_abi_version(), 8);
         assert_eq!(dvmconsole_vocoder_capabilities(), 15);
     }
 
@@ -819,10 +866,10 @@ mod tests {
     #[test]
     fn receive_vocoder_uses_protocol_specific_fixed_output_settings() {
         for (mode, expected_gain_db) in [
-            (MODE_DMR, RX_OUTPUT_GAIN_DB),
-            (MODE_NXDN, RX_OUTPUT_GAIN_DB),
+            (MODE_DMR, 0.0),
+            (MODE_NXDN, 0.0),
             (MODE_P25, 0.0),
-            (MODE_P25_PHASE2, RX_OUTPUT_GAIN_DB),
+            (MODE_P25_PHASE2, 0.0),
         ] {
             let session = test_session(mode);
             let EnhancementMode::Classical(config) = session.vocoder.enhancement() else {

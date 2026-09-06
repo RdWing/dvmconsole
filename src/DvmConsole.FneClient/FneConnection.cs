@@ -1,7 +1,11 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Net;
 using System.Net.Sockets;
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Diagnostics;
 using fnecore;
@@ -146,8 +150,12 @@ public sealed class FneConnection : IAsyncDisposable
     private readonly object sync = new();
     private readonly object sendSync = new();
     private readonly Dictionary<(uint DestinationId, byte Slot), FneTalkgroupRule> talkgroupRules = [];
+    private const int MaximumTrackedTalkgroups = 4096;
     private readonly Queue<FneTalkgroupAuthority> talkgroupAuthorityNotifications = [];
     private readonly SemaphoreSlim lifecycle = new(1, 1);
+    private readonly CancellationTokenSource terminalCancellation = new();
+    private bool aborted;
+    private IFnePeerSession? retiringPeerSession;
     private IFnePeerSession? peerSession;
     private CancellationTokenSource? handshakeRecoveryCancellation;
     private FneConnectionStatus status;
@@ -265,7 +273,7 @@ public sealed class FneConnection : IAsyncDisposable
     // this service owns connection state and the legacy transport adapter.
     public void SendTraffic(
         FneTrafficProtocol protocol,
-        ReadOnlySpan<byte> payload,
+        ReadOnlyMemory<byte> payload,
         ushort packetSequence,
         uint streamId)
     {
@@ -282,7 +290,7 @@ public sealed class FneConnection : IAsyncDisposable
                 throw new InvalidOperationException($"The FNE connection is not ready for traffic ({status.State}).");
         }
 
-        byte[] ownedPayload = payload.ToArray();
+        byte[] ownedPayload = GetOwnedTrafficPayload(payload);
         lock (sendSync)
         {
             current.SendMasterTraffic(
@@ -292,6 +300,13 @@ public sealed class FneConnection : IAsyncDisposable
                 streamId);
         }
     }
+
+    internal static byte[] GetOwnedTrafficPayload(ReadOnlyMemory<byte> payload)
+        => MemoryMarshal.TryGetArray(payload, out ArraySegment<byte> segment) &&
+            segment.Offset == 0 &&
+            segment.Count == segment.Array!.Length
+                ? segment.Array
+                : payload.ToArray();
 
     // Requests one P25 key from the connected FNE. The response is accepted
     // only through the sanitized key callback below.
@@ -396,8 +411,12 @@ public sealed class FneConnection : IAsyncDisposable
 
     private async Task StartCoreAsync(CancellationToken cancellationToken)
     {
+        using CancellationTokenSource startupCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, terminalCancellation.Token);
+        cancellationToken = startupCancellation.Token;
         lock (sync)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (peerSession is not null)
                 throw new InvalidOperationException("The FNE connection is already started.");
         }
@@ -415,11 +434,15 @@ public sealed class FneConnection : IAsyncDisposable
 
             candidate = CreatePeerSession(endpoint);
             lock (sync)
+            {
+                // Adoption and native startup are one ownership transfer. Abort
+                // either prevents this transfer or receives the started peer.
+                cancellationToken.ThrowIfCancellationRequested();
                 peerSession = candidate;
-
-            ResetLoginCadence(candidate.Peer);
-            candidate.Start();
-            StartStateMonitor(candidate.Peer);
+                ResetLoginCadence(candidate.Peer);
+                candidate.Start();
+                StartStateMonitor(candidate.Peer);
+            }
             Publish(FneConnectionState.WaitingForLogin, "FNE network services started; waiting for login");
         }
         catch (Exception exception)
@@ -466,6 +489,52 @@ public sealed class FneConnection : IAsyncDisposable
         }
     }
 
+    // Last-resort shutdown fence. This deliberately does not await the
+    // upstream peer's close-packet path: it revokes ownership, cancels
+    // monitors, and closes the application-owned UDP receivers immediately.
+    public void Abort()
+    {
+        IFnePeerSession? current;
+        IFnePeerSession? retiring;
+        CancellationTokenSource? handshakeCancellation;
+        lock (sync)
+        {
+            if (aborted)
+                return;
+            aborted = true;
+            current = peerSession;
+            retiring = retiringPeerSession;
+            peerSession = null;
+            handshakeCancellation = handshakeRecoveryCancellation;
+            handshakeRecoveryCancellation = null;
+            pendingP25KeyRequests.Clear();
+            status = new FneConnectionStatus(
+                options.Name,
+                FneConnectionState.Disconnected,
+                "Aborted during shutdown",
+                DateTimeOffset.UtcNow);
+        }
+
+        terminalCancellation.Cancel();
+        InvalidateTalkgroupAuthoritySession();
+        handshakeCancellation?.Cancel();
+        handshakeCancellation?.Dispose();
+        stateMonitor.Cancel();
+        try
+        {
+            if (current is not null)
+            {
+                DetachPeerHandlers(current.Peer);
+                current.Abort();
+            }
+        }
+        finally
+        {
+            if (retiring is not null && !ReferenceEquals(current, retiring))
+                retiring.Abort();
+        }
+    }
+
     private async Task StopCoreAsync(CancellationToken cancellationToken)
     {
         IFnePeerSession? current;
@@ -473,6 +542,8 @@ public sealed class FneConnection : IAsyncDisposable
         {
             current = peerSession;
             peerSession = null;
+            if (current is not null)
+                retiringPeerSession = current;
             pendingP25KeyRequests.Clear();
         }
         InvalidateTalkgroupAuthoritySession();
@@ -508,10 +579,17 @@ public sealed class FneConnection : IAsyncDisposable
         {
             Publish(FneConnectionState.Disconnected, "Stopped");
         }
+        finally
+        {
+            lock (sync)
+                if (ReferenceEquals(retiringPeerSession, current))
+                    retiringPeerSession = null;
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
+        Abort();
         await StopAsync().ConfigureAwait(false);
     }
 
@@ -523,18 +601,22 @@ public sealed class FneConnection : IAsyncDisposable
             endpoint,
             SoftwareIdentifier,
             new FnePeerSessionCallbacks(
-                HandlePeerLog,
-                HandlePeerConnected,
-                HandleKeyResponse,
-                HandlePeerDisconnected,
-                HandleDmrDataReceived,
-                HandleP25DataReceived,
-                HandleNxdnDataReceived,
-                HandleAnalogDataReceived,
+                (level, message) => { if (IsCurrentPeerGeneration(authoritySession)) HandlePeerLog(level, message); },
+                (sender, args) => { if (IsCurrentPeerGeneration(authoritySession)) HandlePeerConnected(sender, args); },
+                (sender, args) => { if (IsCurrentPeerGeneration(authoritySession)) HandleKeyResponse(sender, args); },
+                id => { if (IsCurrentPeerGeneration(authoritySession)) HandlePeerDisconnected(id); },
+                (sender, args) => { if (IsCurrentPeerGeneration(authoritySession)) HandleDmrDataReceived(sender, args); },
+                (sender, args) => { if (IsCurrentPeerGeneration(authoritySession)) HandleP25DataReceived(sender, args); },
+                (sender, args) => { if (IsCurrentPeerGeneration(authoritySession)) HandleNxdnDataReceived(sender, args); },
+                (sender, args) => { if (IsCurrentPeerGeneration(authoritySession)) HandleAnalogDataReceived(sender, args); },
                 announcement => HandleTalkgroupAnnouncement(authoritySession, announcement),
-                timestamp => Volatile.Write(ref latestTrafficTransportTimestamp, timestamp),
-                HandleLoginRequestSent));
+                timestamp => { if (IsCurrentPeerGeneration(authoritySession)) Volatile.Write(ref latestTrafficTransportTimestamp, timestamp); },
+                () => { if (IsCurrentPeerGeneration(authoritySession)) HandleLoginRequestSent(); }));
     }
+
+    private bool IsCurrentPeerGeneration(long generation)
+        => !terminalCancellation.IsCancellationRequested &&
+           generation == Volatile.Read(ref talkgroupAuthoritySession);
 
     internal static string FormatSoftwareIdentifier(string? informationalVersion)
     {
@@ -571,6 +653,7 @@ public sealed class FneConnection : IAsyncDisposable
             return;
 
         bool publishNotifications = false;
+        int ignoredEntries = 0;
         lock (sync)
         {
             if (authoritySession != Volatile.Read(ref talkgroupAuthoritySession))
@@ -583,7 +666,13 @@ public sealed class FneConnection : IAsyncDisposable
 
             foreach (FneTalkgroupAnnouncementEntry entry in announcement.Entries)
             {
-                talkgroupRules[(entry.DestinationId, entry.Slot)] = new FneTalkgroupRule(
+                var key = (entry.DestinationId, entry.Slot);
+                if (!talkgroupRules.ContainsKey(key) && talkgroupRules.Count >= MaximumTrackedTalkgroups)
+                {
+                    ignoredEntries++;
+                    continue;
+                }
+                talkgroupRules[key] = new FneTalkgroupRule(
                     entry.DestinationId,
                     entry.Slot,
                     announcement.ContainsActiveTalkgroups,
@@ -596,6 +685,17 @@ public sealed class FneConnection : IAsyncDisposable
                 talkgroupAuthority = FneTalkgroupAuthority.FromRules(talkgroupRules.Values);
                 publishNotifications = EnqueueTalkgroupAuthorityNotificationLocked(talkgroupAuthority);
             }
+
+        }
+
+        if (ignoredEntries > 0)
+        {
+            Raise(LogReceived, new FneLogEntry(
+                options.Name,
+                DebugLogSeverity.Warning,
+                $"FNE talkgroup table reached the {MaximumTrackedTalkgroups:N0}-entry safety limit; " +
+                $"ignored {ignoredEntries:N0} new entr{(ignoredEntries == 1 ? "y" : "ies")}.",
+                DateTimeOffset.UtcNow));
         }
 
         if (publishNotifications)
@@ -899,6 +999,8 @@ public sealed class FneConnection : IAsyncDisposable
         FneConnectionState previousState;
         lock (sync)
         {
+            if (aborted)
+                return;
             previousState = status.State;
             status = next;
         }
@@ -1003,8 +1105,8 @@ public sealed class FneConnection : IAsyncDisposable
                 await Task.Delay(
                     handshakeReconnectGracePeriod,
                     timeProvider,
-                    CancellationToken.None).ConfigureAwait(false);
-                await StartCoreAsync(CancellationToken.None).ConfigureAwait(false);
+                    terminalCancellation.Token).ConfigureAwait(false);
+                await StartCoreAsync(terminalCancellation.Token).ConfigureAwait(false);
             }
             finally
             {

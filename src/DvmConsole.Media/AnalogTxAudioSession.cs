@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 
 namespace DvmConsole.Media;
@@ -69,7 +72,7 @@ public sealed class AnalogTxAudioSession : IDisposable
             throw new InvalidOperationException("The analog call must be active before processing audio.");
 
         int framesBefore = FramesSent;
-        assembler.Append(samples, EmitFrame);
+        assembler.AppendBorrowed(samples, EmitFrame);
         return FramesSent - framesBefore;
     }
 
@@ -81,8 +84,8 @@ public sealed class AnalogTxAudioSession : IDisposable
         if (ended)
             return;
 
-        assembler.FlushPadded(EmitFrame);
-        var silence = new short[AnalogVoicePacketCodec.SamplesPerPacket];
+        assembler.FlushPaddedBorrowed(EmitFrame);
+        Span<short> silence = stackalloc short[AnalogVoicePacketCodec.SamplesPerPacket];
         byte[] terminator = AnalogVoicePacketCodec.CreatePacket(
             AnalogAudioFrameType.Terminator,
             sourceId,
@@ -102,14 +105,14 @@ public sealed class AnalogTxAudioSession : IDisposable
         disposed = true;
     }
 
-    private void EmitFrame(ReadOnlyMemory<short> frame)
+    private void EmitFrame(ReadOnlySpan<short> frame)
     {
         bool first = FramesSent == 0;
         byte[] packet = AnalogVoicePacketCodec.CreatePacket(
             first ? AnalogAudioFrameType.VoiceStart : AnalogAudioFrameType.Voice,
             sourceId,
             destinationId,
-            frame.Span,
+            frame,
             frameSequence,
             control: first && grantDemand ? (byte)0x80 : (byte)0);
         send(packet, packetSequence, streamId);

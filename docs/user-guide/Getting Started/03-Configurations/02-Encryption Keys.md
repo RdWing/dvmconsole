@@ -9,7 +9,9 @@ ID through KMM. A valid key from that FNE takes precedence over the local YAML
 fallback. DMR and NXDN privacy keys come from the local YAML file.
 
 Open **File > Configuration Studio**, then select **Encryption Keys** to edit
-the referenced local key file. Choose a protocol, then choose an algorithm by name. Studio
+the referenced local key file. For a new entry, choose its owning FNE system,
+then the protocol and algorithm. Match the channel's protocol, algorithm, and
+key ID; the same numeric ID on a different FNE does not share its key. Studio
 fills in the protocol-specific algorithm ID for you. For example, P25 Phase 1
 AES-256 uses `0x84`, while DMR AES-256 uses `0x05`. The table shows both the
 name and ID so the saved value is easy to check. The inspector never displays
@@ -20,8 +22,8 @@ the digits that follow it. The key file table also shows IDs with the prefix.
 
 ![Encryption key editor](../../Assets/configuration-studio-encryption.png)
 
-The page edits local YAML keys only. FNE/KMM availability is runtime status and
-cannot be written back to the file. Use **Tools > Encryption Key Status** when
+The page edits local YAML keys only. Keys delivered by FNE/KMM are available
+while connected and cannot be saved to the file. Use **Tools > Encryption Key Status** when
 you need to see whether the running console has a local or KMM-delivered key.
 
 Keys are isolated by FNE system. Two systems can use the same algorithm and key
@@ -34,7 +36,7 @@ system disconnects, DVM Console removes them and uses the local fallback again.
 
 Encryption and key management depend on the connected FNE. Test key delivery,
 algorithm support, and encrypted voice against the exact FNE build used in the
-deployment.
+console.
 
 ---
 
@@ -65,17 +67,23 @@ Example:
 
 ```yaml
 keys:
-  - protocol: "p25"
+  - name: "Dispatch AES"
+    system: "Regional P25"
+    protocol: "p25"
     keyId: 0x1
     algId: 0x84
     key: "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
 
-  - protocol: "dmr"
+  - name: "DMR Operations"
+    system: "Regional DMR"
+    protocol: "dmr"
     keyId: 0x2
     algId: 0x05
     key: "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
 
-  - protocol: "nxdn"
+  - name: "NXDN Operations"
+    system: "Regional NXDN"
+    protocol: "nxdn"
     keyId: 0x3
     algId: 0x01
     key: "1234"
@@ -83,6 +91,10 @@ keys:
 
 Fields:
 
+- `name`: optional operator-facing label for the key.
+- `system`: FNE system that may use the key. Configuration Studio always sets
+  this for new entries. A legacy entry without `system` remains available to
+  every FNE for backward compatibility and is shown with a migration warning.
 - `protocol`: `p25`, `dmr`, or `nxdn`. Studio displays `p25` as P25 Phase 1.
   Entries without this field remain P25 Phase 1 for compatibility with existing
   key files.
@@ -166,6 +178,11 @@ After an FNE connection completes, DVM Console requests the distinct algorithm
 and key IDs used by that system's encrypted P25 Phase 1 channels. The system
 `rid` identifies the requesting console and must be a valid, nonzero 24-bit ID.
 
+The initial requests begin after a five-second connection delay and are spaced
+100 milliseconds apart. Two seconds after that pass, DVM Console requests each
+still-unanswered key once more. It does not keep retrying indefinitely. A
+disconnect, reconnect, or application shutdown cancels the pending pass.
+
 DVM Console does not request or use the FNE key inventory. An automatic KMM
 request therefore needs a nonzero `keyId` and supported `algo` on at least one
 P25 Phase 1 channel. KMM supplies the requested material; it does not assign
@@ -187,6 +204,14 @@ responses require the system's separate `kmfPresharedKey`; the FNE transport
 Open **Tools > Encryption Key Status** to inspect key availability for
 configured encrypted resources. Available entries identify the active source as
 **local file** or **FNE/KMM**.
+
+The same page includes **Require channel key match for DMR receive**. Leave it
+off to select DMR receive keys from the algorithm and key ID advertised by the
+incoming call, limited to keys belonging to that FNE system. Turn it on to
+accept encrypted DMR audio only when those identifiers match the channel's
+configured algorithm and key ID. Clear DMR calls remain available in either
+mode. Changing the setting immediately recreates active listening and
+patch-source decode sessions.
 
 When a supported local DMR key is unavailable, its row shows the required
 `protocol`, `algId`, and key length. The page never shows the key value.

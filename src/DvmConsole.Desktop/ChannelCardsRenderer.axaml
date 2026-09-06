@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <UserControl
     x:Class="DvmConsole.Desktop.ChannelCardsRenderer"
     xmlns="https://github.com/avaloniaui"
@@ -5,10 +8,22 @@
     xmlns:local="using:DvmConsole.Desktop"
     xmlns:presentation="using:DvmConsole.Presentation"
     x:DataType="local:MainWindowViewModel">
-  <TabControl ItemsSource="{Binding Systems}" SelectedItem="{Binding SelectedSystem, Mode=TwoWay}" IsVisible="{Binding ShowChannels}">
+  <UserControl.Styles>
+    <StyleInclude Source="avares://DvmConsole.Presentation/CompactSliderStyles.axaml" />
+  </UserControl.Styles>
+  <Grid IsVisible="{Binding ShowChannels}">
+  <TabControl x:Name="systemTabs"
+              ItemsSource="{Binding Systems}"
+              SelectedItem="{Binding SelectedSystem, Mode=TwoWay}"
+              SelectionChanged="HandleNavigationSelectionChanged">
+    <TabControl.ItemContainerTheme>
+      <ControlTheme TargetType="TabItem" BasedOn="{StaticResource {x:Type TabItem}}" x:DataType="local:SystemViewModel">
+        <Setter Property="AutomationProperties.Name" Value="{Binding TabAutomationName}" />
+      </ControlTheme>
+    </TabControl.ItemContainerTheme>
     <TabControl.ItemTemplate>
       <DataTemplate x:DataType="local:SystemViewModel">
-        <StackPanel Spacing="3">
+        <StackPanel Spacing="3" AutomationProperties.Name="{Binding TabAutomationName}">
           <StackPanel Orientation="Horizontal" Spacing="5"><TextBlock Text="{Binding Name}" /><TextBlock Foreground="{Binding StatusAccentBrush}" Text="{Binding StatusGlyph}" /></StackPanel>
           <Border Height="3" CornerRadius="2" Background="{Binding StatusAccentBrush}" Opacity="{Binding ActivityBarOpacity}" />
         </StackPanel>
@@ -16,29 +31,40 @@
     </TabControl.ItemTemplate>
     <TabControl.ContentTemplate>
       <DataTemplate x:DataType="local:SystemViewModel">
-        <TabControl Classes="zone-tabs" ItemsSource="{Binding Zones}" SelectedItem="{Binding SelectedZone, Mode=TwoWay}">
+        <TabControl Classes="zone-tabs"
+                    ItemsSource="{Binding Zones}"
+                    SelectedItem="{Binding SelectedZone, Mode=TwoWay}"
+                    SelectionChanged="HandleNavigationSelectionChanged">
+          <TabControl.ItemContainerTheme>
+            <ControlTheme TargetType="TabItem" BasedOn="{StaticResource {x:Type TabItem}}" x:DataType="local:ZoneViewModel">
+              <Setter Property="AutomationProperties.Name" Value="{Binding TabAutomationName}" />
+            </ControlTheme>
+          </TabControl.ItemContainerTheme>
           <TabControl.ItemTemplate>
             <DataTemplate x:DataType="local:ZoneViewModel">
-              <Border Background="{Binding TabBrush}" CornerRadius="4" Padding="5,2">
+              <Border Background="{Binding TabBrush}" CornerRadius="4" Padding="5,2" AutomationProperties.Name="{Binding TabAutomationName}">
                 <StackPanel Spacing="3"><TextBlock Foreground="{Binding TabTextBrush}" Text="{Binding Name}" /><Border Height="3" CornerRadius="2" Background="{Binding ActivityBrush}" Opacity="{Binding ActivityBarOpacity}" /></StackPanel>
               </Border>
             </DataTemplate>
           </TabControl.ItemTemplate>
           <TabControl.ContentTemplate>
             <DataTemplate x:DataType="local:ZoneViewModel">
-              <ScrollViewer x:Name="channelScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Padding="0">
+              <ScrollViewer x:Name="channelScrollViewer" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" AllowAutoHide="False" Padding="0">
+                <Grid Width="{Binding WidgetCanvasWidth}" Height="{Binding WidgetCanvasHeight}" HorizontalAlignment="Left" VerticalAlignment="Top">
                 <ItemsControl Classes="channel-canvas" ItemsSource="{Binding Channels}" Width="{Binding WidgetCanvasWidth}" Height="{Binding WidgetCanvasHeight}" HorizontalAlignment="Left" VerticalAlignment="Top">
-                  <ItemsControl.ItemsPanel><ItemsPanelTemplate><Canvas /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-                  <ItemsControl.Styles>
-                    <Style Selector="ItemsControl.channel-canvas > ContentPresenter" x:DataType="local:ChannelViewModel">
-                      <Setter Property="Canvas.Left" Value="{Binding WidgetX}" />
-                      <Setter Property="Canvas.Top" Value="{Binding WidgetY}" />
-                    </Style>
-                  </ItemsControl.Styles>
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <local:ViewportAwareAbsolutePanel
+                          ItemHeight="{Binding $parent[UserControl].((local:MainWindowViewModel)DataContext).ChannelCardHeight}"
+                          Overscan="240" />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="local:ChannelViewModel">
                       <Border Classes="channel-card" Width="{Binding CardWidth}" Height="{Binding $parent[UserControl].((local:MainWindowViewModel)DataContext).ChannelCardHeight}" Background="{Binding CardBackgroundBrush}" BorderBrush="{Binding CardBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="5,5,5,4" ClipToBounds="True" Focusable="True" PointerPressed="HandleChannelPointerPressed" PointerMoved="HandleChannelPointerMoved" PointerReleased="HandleChannelPointerReleased" PointerCaptureLost="HandleChannelPointerCaptureLost" ToolTip.Tip="Drag to move this channel while widgets are unlocked">
                         <presentation:ChannelCardContent
+                            AutomationProperties.Name="{Binding ReceiveAutomationName}"
+                            AutomationProperties.HelpText="Click the channel background to change receive selection."
                             UiFontSize="{Binding $parent[UserControl].((local:MainWindowViewModel)DataContext).UiFontSize}"
                             UiSmallFontSize="{Binding $parent[UserControl].((local:MainWindowViewModel)DataContext).UiSmallFontSize}"
                             TransmitSelectionClick="HandleTransmitSelectionClick"
@@ -48,6 +74,77 @@
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
+                <ItemsControl ItemsSource="{Binding WebStreamCards}"
+                              Width="{Binding WidgetCanvasWidth}"
+                              Height="{Binding WidgetCanvasHeight}"
+                              HorizontalAlignment="Left"
+                              VerticalAlignment="Top">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><Canvas /></ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemContainerTheme>
+                    <ControlTheme TargetType="ContentPresenter" x:DataType="local:WebStreamViewModel">
+                      <Setter Property="Canvas.Left" Value="{Binding WidgetX}" />
+                      <Setter Property="Canvas.Top" Value="{Binding WidgetY}" />
+                    </ControlTheme>
+                  </ItemsControl.ItemContainerTheme>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="local:WebStreamViewModel">
+                      <Border Classes="channel-card web-stream-card"
+                              Width="{Binding CardWidth}"
+                              Height="{Binding $parent[UserControl].((local:MainWindowViewModel)DataContext).ChannelCardHeight}"
+                              Background="{Binding CardBackgroundBrush}"
+                              BorderBrush="{Binding CardBorderBrush}"
+                              BorderThickness="1"
+                              CornerRadius="6"
+                              Padding="5,5,5,4"
+                              ClipToBounds="True"
+                              Focusable="True"
+                              PointerPressed="HandleChannelPointerPressed"
+                              PointerMoved="HandleChannelPointerMoved"
+                              PointerReleased="HandleChannelPointerReleased"
+                              PointerCaptureLost="HandleChannelPointerCaptureLost"
+                              ToolTip.Tip="Click to start or stop this stream. Drag to move it while widgets are unlocked."
+                              AutomationProperties.Name="{Binding ToggleAutomationName}">
+                        <Grid RowDefinitions="Auto,Auto,*,23,24" RowSpacing="3">
+                          <TextBlock Foreground="{Binding CardTextBrush}"
+                                     FontWeight="Bold"
+                                     FontSize="{Binding $parent[UserControl].((local:MainWindowViewModel)DataContext).UiFontSize}"
+                                     Text="{Binding Name}"
+                                     TextTrimming="CharacterEllipsis" />
+                          <TextBlock Grid.Row="1"
+                                     Foreground="{Binding CardTextBrush}"
+                                     FontSize="{Binding $parent[UserControl].((local:MainWindowViewModel)DataContext).UiSmallFontSize}"
+                                     Text="{Binding CardSubtitle}" />
+                          <TextBlock Grid.Row="2"
+                                     Foreground="{Binding CardTextBrush}"
+                                     FontSize="{Binding $parent[UserControl].((local:MainWindowViewModel)DataContext).UiSmallFontSize}"
+                                     Text="{Binding CardStatusText}"
+                                     TextTrimming="CharacterEllipsis"
+                                     VerticalAlignment="Center" />
+                          <presentation:NeutralSnapSlider Grid.Row="3"
+                                                          Classes="compact-slider"
+                                                          Minimum="-1"
+                                                          Maximum="1"
+                                                          NeutralValue="0"
+                                                          Value="{Binding VolumeSliderValue, Mode=TwoWay}"
+                                                          VerticalAlignment="Center"
+                                                          AutomationProperties.Name="{Binding VolumeAutomationName}"
+                                                          AutomationProperties.HelpText="Web stream playback volume; one is the normal level." />
+                          <Button Grid.Row="4"
+                                  Classes="card-action channel-action"
+                                  Padding="8,0"
+                                  VerticalContentAlignment="Center"
+                                  Content="{Binding ToggleButtonText}"
+                                  Command="{Binding ToggleCommand}"
+                                  AutomationProperties.Name="{Binding ToggleAutomationName}"
+                                  AutomationProperties.HelpText="Start or stop this receive-only web stream." />
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                </Grid>
               </ScrollViewer>
             </DataTemplate>
           </TabControl.ContentTemplate>
@@ -55,4 +152,5 @@
       </DataTemplate>
     </TabControl.ContentTemplate>
   </TabControl>
+  </Grid>
 </UserControl>

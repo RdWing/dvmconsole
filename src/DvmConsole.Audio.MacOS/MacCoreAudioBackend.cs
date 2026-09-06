@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Audio;
 
 // macOS CoreAudio backend. The native shim is loaded explicitly so the rest of
@@ -7,9 +10,6 @@ public sealed class MacCoreAudioBackend :
     IDefaultAudioDeviceIdentityProvider
 {
     private readonly NativeCoreAudioApi api;
-    private readonly AudioProcessingMode processingMode;
-    private readonly string configuredInputDeviceId;
-    private readonly string configuredOutputDeviceId;
 
     public MacCoreAudioBackend(
         string? libraryPath = null,
@@ -21,12 +21,8 @@ public sealed class MacCoreAudioBackend :
             throw new PlatformNotSupportedException("MacCoreAudioBackend requires macOS.");
         if (processingMode == AudioProcessingMode.WindowsCommunications)
             throw new PlatformNotSupportedException("Windows communications processing requires a Windows audio backend.");
-        if (processingMode is not AudioProcessingMode.DvmConsole and not AudioProcessingMode.AppleVoiceProcessing)
+        if (processingMode != AudioProcessingMode.DvmConsole)
             throw new ArgumentOutOfRangeException(nameof(processingMode));
-
-        this.processingMode = processingMode;
-        configuredInputDeviceId = NormalizeConfiguredDeviceId(inputDeviceId);
-        configuredOutputDeviceId = NormalizeConfiguredDeviceId(outputDeviceId);
         api = NativeCoreAudioApi.Load(libraryPath);
     }
 
@@ -80,39 +76,12 @@ public sealed class MacCoreAudioBackend :
     public IAudioCapture OpenCapture(AudioDeviceInfo device, PcmAudioFormat format)
     {
         ulong inputDeviceId = ParseDeviceId(device);
-        if (processingMode == AudioProcessingMode.AppleVoiceProcessing)
-        {
-            ulong outputDeviceId = ResolveConfiguredDeviceId(AudioDirection.Output, configuredOutputDeviceId);
-            EnsureVoiceProcessingPairSupported(inputDeviceId, outputDeviceId);
-            return new MacVoiceProcessingCapture(
-                VoiceProcessingSessionRegistry.Acquire(
-                    api.LibraryPath,
-                    inputDeviceId,
-                    outputDeviceId,
-                    format,
-                    VoiceEndpoint.Capture),
-                format);
-        }
         return new MacCoreAudioCapture(api, inputDeviceId, format);
     }
 
     public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
     {
         ulong outputDeviceId = ParseDeviceId(device);
-        if (processingMode == AudioProcessingMode.AppleVoiceProcessing &&
-            outputDeviceId == ResolveConfiguredDeviceId(AudioDirection.Output, configuredOutputDeviceId))
-        {
-            ulong inputDeviceId = ResolveConfiguredDeviceId(AudioDirection.Input, configuredInputDeviceId);
-            EnsureVoiceProcessingPairSupported(inputDeviceId, outputDeviceId);
-            return new MacVoiceProcessingPlayback(
-                VoiceProcessingSessionRegistry.Acquire(
-                    api.LibraryPath,
-                    inputDeviceId,
-                    outputDeviceId,
-                    format,
-                    VoiceEndpoint.Playback),
-                format);
-        }
         return new MacCoreAudioPlayback(api, outputDeviceId, format);
     }
 
@@ -126,42 +95,15 @@ public sealed class MacCoreAudioBackend :
         return deviceId;
     }
 
-    private ulong ResolveConfiguredDeviceId(AudioDirection direction, string configuredId)
-    {
-        IReadOnlyList<AudioDeviceInfo> devices = EnumerateDevices(direction);
-        AudioDeviceInfo device = devices.FirstOrDefault(candidate =>
-            !configuredId.Equals("default", StringComparison.OrdinalIgnoreCase) &&
-            candidate.Id.Equals(configuredId, StringComparison.OrdinalIgnoreCase))
-        ?? devices.FirstOrDefault(candidate => candidate.IsDefault)
-        ?? (devices.Count > 0 ? devices[0] : null)
-        ?? throw new InvalidOperationException($"No {direction.ToString().ToLowerInvariant()} audio device is available.");
-        return ParseDeviceId(device);
-    }
-
-    private void EnsureVoiceProcessingPairSupported(ulong inputDeviceId, ulong outputDeviceId)
-    {
-        if (inputDeviceId == outputDeviceId)
-            return;
-
-        bool inputIsDefault = EnumerateDevices(AudioDirection.Input)
-            .Any(device => device.IsDefault && ParseDeviceId(device) == inputDeviceId);
-        bool outputIsDefault = EnumerateDevices(AudioDirection.Output)
-            .Any(device => device.IsDefault && ParseDeviceId(device) == outputDeviceId);
-        if (inputIsDefault && outputIsDefault)
-            return;
-
-        throw new NotSupportedException(
-            "Apple voice processing on macOS requires the system-default input/output pair " +
-            "or one duplex device that provides both input and output. Choose a compatible paired route " +
-            "or use DVM Console processing for separate devices.");
-    }
-
-    private static string NormalizeConfiguredDeviceId(string? deviceId)
-        => string.IsNullOrWhiteSpace(deviceId) ? "default" : deviceId.Trim();
-
     internal static void EnsureSuccess(int result, string operation)
     {
         if (result != 0)
+            throw new InvalidOperationException($"Unable to {operation}; CoreAudio status {result}.");
+    }
+
+    internal static void EnsureNonNegative(int result, string operation)
+    {
+        if (result < 0)
             throw new InvalidOperationException($"Unable to {operation}; CoreAudio status {result}.");
     }
 

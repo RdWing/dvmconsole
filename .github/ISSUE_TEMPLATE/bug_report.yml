@@ -15,7 +15,7 @@ body:
     attributes:
       label: Version
       description: What release or commit are you running?
-      placeholder: v0.6.0 or commit abc1234
+      placeholder: v0.7.0 or commit abc1234
     validations:
       required: true
 
@@ -25,9 +25,14 @@ body:
       label: Platform
       description: Choose the package target or build environment.
       options:
-        - macOS 14+ / Apple Silicon (arm64)
-        - macOS 14+ / Intel (x64)
+        - macOS 14+ / Apple Silicon (arm64, supported)
+        - macOS 14+ / Intel (x64, supported)
+        - macOS 12–13 / Apple Silicon (arm64, best effort)
+        - macOS 12–13 / Intel (x64, best effort)
         - Windows / x64
+        - Windows / ARM64
+        - Linux / x64
+        - Linux / ARM64
         - Source or custom build
     validations:
       required: true
@@ -36,7 +41,7 @@ body:
     id: os_version
     attributes:
       label: Operating-system version
-      placeholder: macOS 15.6 or Windows 11 24H2
+      placeholder: macOS 15.6, Windows 11 24H2, Debian 13, or Linux Mint 22
     validations:
       required: true
 
@@ -61,6 +66,9 @@ body:
         - osx-arm64
         - osx-x64
         - win-x64
+        - win-arm64
+        - linux-x64
+        - linux-arm64
         - Source or custom build (not an RdWing release package)
     validations:
       required: true
@@ -131,7 +139,7 @@ body:
     attributes:
       label: Source and automated evidence
       description: Name the source review, test commands, and results actually collected. Enter "Not run" when none were collected.
-      placeholder: dotnet test ... — 12 passed; reviewed commit abc1234
+      placeholder: dotnet test ... - 12 passed; reviewed commit abc1234
     validations:
       required: true
 
@@ -140,7 +148,7 @@ body:
     attributes:
       label: Package evidence
       description: Name the exact package RID and package-smoke result. Enter "Not run" for a source-only report.
-      placeholder: dvmconsole-0.6.0-osx-arm64.zip; reproduced after clean extraction
+      placeholder: dvmconsole-0.7.0-osx-arm64.zip; reproduced after clean extraction
     validations:
       required: true
 

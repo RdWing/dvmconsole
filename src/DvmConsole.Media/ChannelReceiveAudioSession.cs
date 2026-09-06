@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Vocoder;
@@ -22,7 +25,8 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
         IAudioPlayback playback,
         IP25KeyResolver? keyResolver = null,
         IDmrKeyResolver? dmrKeyResolver = null,
-        INxdnKeyResolver? nxdnKeyResolver = null)
+        INxdnKeyResolver? nxdnKeyResolver = null,
+        DmrReceiveKeyPolicy dmrReceiveKeyPolicy = DmrReceiveKeyPolicy.OnAirMetadata)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(playback);
@@ -39,7 +43,10 @@ public sealed class ChannelReceiveAudioSession : IAsyncDisposable
                     playback,
                     dmrKeyResolver,
                     definition.SystemName,
-                    privacyMayVary: definition.IsEncrypted);
+                    privacyMayVary: definition.IsEncrypted,
+                    receiveKeyPolicy: dmrReceiveKeyPolicy,
+                    configuredAlgorithm: definition.EncryptionAlgorithm,
+                    configuredKeyId: definition.EncryptionKeyId);
                 break;
             case "p25":
                 ArgumentNullException.ThrowIfNull(vocoder);

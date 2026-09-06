@@ -1,10 +1,13 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 
 namespace DvmConsole.Application;
 
 internal sealed record AudioOutputRoutePolicy
 {
-    public AudioOutputRoutePolicy(int maximumAttempts, TimeSpan retryInterval)
+    public AudioOutputRoutePolicy(int maximumAttempts, TimeSpan retryInterval, bool allowImmediateWiredRoute = false)
     {
         if (maximumAttempts <= 0)
             throw new ArgumentOutOfRangeException(nameof(maximumAttempts));
@@ -13,10 +16,15 @@ internal sealed record AudioOutputRoutePolicy
 
         MaximumAttempts = maximumAttempts;
         RetryInterval = retryInterval;
+        AllowImmediateWiredRoute = allowImmediateWiredRoute;
     }
 
     public int MaximumAttempts { get; }
     public TimeSpan RetryInterval { get; }
+    public bool AllowImmediateWiredRoute { get; }
+
+    public static AudioOutputRoutePolicy PreferStableWiredRoute { get; } =
+        new(12, TimeSpan.FromMilliseconds(50), allowImmediateWiredRoute: true);
 
     public static AudioOutputRoutePolicy TransientRouteChanges { get; } =
         new(12, TimeSpan.FromMilliseconds(50));
@@ -71,7 +79,9 @@ internal sealed record LocalTonePlaybackTiming(
     TimeSpan OutputWarmupDrained,
     TimeSpan CueQueued,
     TimeSpan CueDrained,
-    TimeSpan Completed);
+    TimeSpan Completed,
+    TimeSpan CueWriteStarted = default,
+    TimeSpan? CallbackConfirmationObserved = null);
 
 internal static class LocalToneCues
 {
@@ -79,14 +89,18 @@ internal static class LocalToneCues
         Frequency: 1200,
         ToneDuration: TimeSpan.FromMilliseconds(80),
         Amplitude: 0.40,
-        OutputWarmupDuration: TimeSpan.FromMilliseconds(300),
+        // Prime ordinary output with two 20 ms frames of silence, then verify
+        // drain and callback consumption before releasing the audible cue.
+        // Cold Bluetooth transitions use the separate extended cue below.
+        OutputWarmupDuration: TimeSpan.FromMilliseconds(40),
         ReopenOutputAfterCueRelease: false,
         LeadSilenceDuration: TimeSpan.Zero,
         TailSilenceDuration: TimeSpan.Zero,
-        OutputPostDrainDuration: TimeSpan.Zero,
+        OutputPostDrainDuration: TimeSpan.FromMilliseconds(150),
         MaximumPlaybackAttempts: 3,
-        RoutePolicy: AudioOutputRoutePolicy.TransientRouteChanges,
-        RequireOutputCallbackEvidence: true);
+        RoutePolicy: AudioOutputRoutePolicy.PreferStableWiredRoute,
+        RequireOutputCallbackEvidence: true,
+        UseMeasuredOutputPresentationLatency: true);
 
     // A cold Bluetooth microphone changes the headset's profile in place
     // without necessarily changing its CoreAudio device ID. Discard the
@@ -188,6 +202,18 @@ internal sealed class AudioOutputRouteResolver : IAudioOutputRouteResolver
                 : devices.FirstOrDefault(device => device.IsDefault)
                     ?? (devices.Count > 0 ? devices[0] : null);
 
+            // Resolve synthetic default aliases to a concrete endpoint. Returning
+            // that identity also lets post-warmup validation detect default changes.
+            if (!hasSpecificRequest && candidate?.Id.Equals("default", StringComparison.OrdinalIgnoreCase) == true &&
+                backend is IDefaultAudioDeviceIdentityProvider identityProvider)
+            {
+                string? identity = identityProvider.GetDefaultDeviceIdentity(AudioDirection.Output);
+                candidate = devices.FirstOrDefault(device => device.Id.Equals(identity, StringComparison.OrdinalIgnoreCase));
+            }
+            if (policy.AllowImmediateWiredRoute && candidate is { IsBluetooth: false } &&
+                !candidate.Id.Equals("default", StringComparison.OrdinalIgnoreCase))
+                return candidate;
+
             if (candidate is not null &&
                 previousCandidate is not null &&
                 candidate.Id.Equals(previousCandidate.Id, StringComparison.OrdinalIgnoreCase))
@@ -264,7 +290,12 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
         Func<CancellationToken, Task>? beforeCueAsync = null,
         CancellationToken cancellationToken = default)
         => await PlayCoreAsync(
-            LocalToneCues.TalkPermit,
+            LocalToneCues.TalkPermit with
+            {
+                RoutePolicy = microphoneStartedCold && microphoneIsBluetooth != false
+                    ? AudioOutputRoutePolicy.TransientRouteChanges
+                    : AudioOutputRoutePolicy.PreferStableWiredRoute
+            },
             output => LocalToneCues.SelectTalkPermit(
                 microphoneStartedCold,
                 microphoneIsBluetooth,
@@ -486,6 +517,7 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
                 .. tailSilence
             ];
             long? cueCallbacksBefore = GetOutputCallbackCount(activePlayback);
+            TimeSpan cueWriteStartedAt = timing.Elapsed;
             await activePlayback.WriteAsync(samples, cancellationToken).ConfigureAwait(false);
             TimeSpan cueQueuedAt = timing.Elapsed;
             int? cueQueued = activePlayback.QueuedSamples;
@@ -509,14 +541,22 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
             TimeSpan? measuredPresentationLatency = GetMeasuredPresentationLatency(
                 request,
                 activePlayback);
+            TimeSpan fallbackPresentationWait = request.OutputPostDrainDuration;
+            if (request.UseMeasuredOutputPresentationLatency && finalOutput.IsBluetooth != false &&
+                fallbackPresentationWait < LocalToneCues.ColdStartTalkPermit.OutputPostDrainDuration)
+            {
+                // Warm Bluetooth outputs still have downstream buffering. Use
+                // the established Bluetooth allowance when the driver cannot
+                // report its latency, without lengthening the ordinary cue.
+                fallbackPresentationWait = LocalToneCues.ColdStartTalkPermit.OutputPostDrainDuration;
+            }
             TimeSpan postDrainWait = measuredPresentationLatency is TimeSpan latency
                 ? AddPresentationSchedulingMargin(latency)
-                : request.OutputPostDrainDuration;
+                : fallbackPresentationWait;
 
             // Queue drainage establishes callback consumption, not physical
-            // presentation. On the experimental cold-Bluetooth path, wait for
-            // CoreAudio's measured device presentation interval. Other paths
-            // retain their existing fixed policy.
+            // presentation. Keep operator audio gated through the device
+            // presentation interval, using the cue fallback when unavailable.
             if (postDrainWait > TimeSpan.Zero)
                 await delayAsync(postDrainWait, cancellationToken).ConfigureAwait(false);
             TimeSpan completedAt = timing.Elapsed;
@@ -543,7 +583,9 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
                     outputWarmupDrained,
                     cueQueuedAt,
                     cueDrainedAt,
-                    completedAt));
+                    completedAt,
+                    cueWriteStartedAt,
+                    cueCallbacksBefore is long before && cueCallbacksAfter > before ? cueDrainedAt : null));
         }
         finally
         {
@@ -621,8 +663,8 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
         if (!request.RequireOutputCallbackEvidence)
             return;
         // Callback progress establishes consumption by the OS audio device.
-        // It does not establish physical audibility; the cold-Bluetooth policy
-        // separately uses the downstream-latency allowance.
+        // It does not establish physical audibility; permit cues separately
+        // wait for the downstream presentation interval.
         if (callbacksBefore is null || callbacksAfter is null)
         {
             throw new NotSupportedException(

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Media;
 
@@ -39,7 +42,9 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
     public DeferredEpisodePlayback CreatePlayback()
         => new(this);
 
-    public async ValueTask CompleteEpisodeAsync(long episodeId)
+    public async ValueTask CompleteEpisodeAsync(
+        long episodeId,
+        CancellationToken cancellationToken = default)
     {
         EpisodeLane? lane;
         lock (sync)
@@ -51,7 +56,7 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
             completedDiagnostics += lane.Arbiter.GetDiagnostics();
         }
 
-        await CompleteLaneAsync(lane).ConfigureAwait(false);
+        await CompleteLaneAsync(lane, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()
@@ -73,7 +78,7 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
         }
 
         foreach (EpisodeLane lane in snapshot)
-            await CompleteLaneAsync(lane).ConfigureAwait(false);
+            await CompleteLaneAsync(lane, CancellationToken.None).ConfigureAwait(false);
     }
 
     public EpisodeLivePlayoutDiagnostics GetDiagnostics()
@@ -84,6 +89,40 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
             foreach (EpisodeLane lane in lanes.Values)
                 diagnostics += lane.Arbiter.GetDiagnostics();
             return diagnostics;
+        }
+    }
+
+    public void SuppressOutput()
+    {
+        lock (sync)
+        {
+            foreach (EpisodeLane lane in lanes.Values)
+            {
+                if (lane.Playback is ILiveAudioPlaybackControl liveControl)
+                {
+                    try
+                    {
+                        liveControl.LivePlaybackEnabled = false;
+                    }
+                    catch
+                    {
+                        // A failed or already-disposed route is already silent.
+                        // Suppression must not prevent the remaining lanes and
+                        // cleanup owners from being stopped.
+                    }
+                }
+                if (lane.Playback is IAudioPlaybackInputExpectationControl expectation)
+                {
+                    try
+                    {
+                        expectation.ExpectsMoreInput = false;
+                    }
+                    catch
+                    {
+                        // Continue suppressing the other lanes.
+                    }
+                }
+            }
         }
     }
 
@@ -150,7 +189,7 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
         }
 
         if (complete)
-            await CompleteLaneAsync(lane).ConfigureAwait(false);
+            await CompleteLaneAsync(lane, CancellationToken.None).ConfigureAwait(false);
     }
 
     private static void ApplyControls(
@@ -167,26 +206,33 @@ internal sealed class ReceiveEpisodePlaybackPool : IAsyncDisposable
             liveControl.LivePlaybackEnabled = livePlaybackEnabled;
     }
 
-    private static async ValueTask CompleteLaneAsync(EpisodeLane lane)
+    private static async ValueTask CompleteLaneAsync(
+        EpisodeLane lane,
+        CancellationToken cancellationToken)
     {
         try
         {
-            await lane.Playback.DrainAsync().ConfigureAwait(false);
-            await lane.Playback.FlushAsync().ConfigureAwait(false);
+            try
+            {
+                await lane.Playback.DrainAsync(cancellationToken).ConfigureAwait(false);
+                await lane.Playback.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or ObjectDisposedException)
+            {
+                // The route publishes physical-output failures. Episode cleanup
+                // must not report the same failed mixer lane a second time.
+            }
         }
-        catch (Exception exception) when (exception is IOException or ObjectDisposedException)
+        finally
         {
-            // The route publishes physical-output failures. Episode cleanup
-            // must not report the same failed mixer lane a second time.
-        }
-
-        try
-        {
-            await lane.Playback.DisposeAsync().ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is IOException or ObjectDisposedException)
-        {
-            // See the route-failure note above.
+            try
+            {
+                await lane.Playback.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is IOException or ObjectDisposedException)
+            {
+                // See the route-failure note above.
+            }
         }
     }
 

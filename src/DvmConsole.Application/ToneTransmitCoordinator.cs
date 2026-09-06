@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
@@ -5,11 +8,21 @@ using DvmConsole.Vocoder;
 
 namespace DvmConsole.Application;
 
+public sealed class ToneSendingChangedEventArgs(bool isSending) : EventArgs
+{
+    public bool IsSending { get; } = isSending;
+}
+
 // Sends generated 8 kHz PCM tone sequences through the selected channel's
-// normal DMR, P25, NXDN, or analog call lifecycle. It deliberately does not open a
-// microphone; generated audio is paced as 20 ms media frames instead.
+// normal DMR, P25, NXDN, or analog call lifecycle. It deliberately does not
+// open a microphone. Digital PCM is prebuffered in complete protocol packets
+// so the protocol pacer cannot be starved by a delayed 20 ms producer wake;
+// analog audio retains its 20 ms packet cadence.
 public sealed class ToneTransmitCoordinator : IAsyncDisposable
 {
+    internal const double DmrNxdnToneTargetDbfs = -25;
+    private const int PrefetchedProtocolPackets = 2;
+    private static readonly TimeSpan PcmFrameInterval = TimeSpan.FromMilliseconds(20);
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
@@ -17,8 +30,12 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
     private readonly Func<ChannelId, bool, uint, ValueTask> stateObserver;
     private readonly TimeProvider timeProvider;
     private readonly SemaphoreSlim gate = new(1, 1);
-    private bool disposed;
+    private readonly OrderedNotificationDispatcher notifications = new();
+    private readonly AsyncDisposal disposal = new();
+    private int lifecycleState;
     private bool sending;
+
+    public event EventHandler<ToneSendingChangedEventArgs>? SendingChanged;
 
     public ToneTransmitCoordinator(
         IP25KeyResolver? p25KeyResolver = null,
@@ -55,7 +72,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(targets);
         if (samples.IsEmpty)
             throw new ArgumentException("Tone audio cannot be empty.", nameof(samples));
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ThrowIfDisposingOrDisposed();
 
         TransmitTarget[] requested = targets
             .GroupBy(target => target.Channel.Id)
@@ -67,21 +84,22 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ObjectDisposedException.ThrowIf(disposed, this);
+            ThrowIfDisposingOrDisposed();
             ValidateTargets(requested);
 
-            sending = true;
+            SetSending(true);
             await Task.WhenAll(requested.Select(target => SendCoreAsync(
                 target.Channel,
                 target.System,
                 target.System.SourceId!.Value,
                 samples,
+                digitalToneSamples: null,
                 sequence: null,
                 cancellationToken))).ConfigureAwait(false);
         }
         finally
         {
-            sending = false;
+            SetSending(false);
             gate.Release();
         }
     }
@@ -93,7 +111,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(targets);
         ArgumentNullException.ThrowIfNull(sequence);
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ThrowIfDisposingOrDisposed();
         await SendAsync(
             targets,
             sequence,
@@ -109,7 +127,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(targets);
         ArgumentNullException.ThrowIfNull(sequence);
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ThrowIfDisposingOrDisposed();
         ValidateRenderedSamples(sequence, renderedSamples);
 
         TransmitTarget[] requested = targets
@@ -122,21 +140,24 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ObjectDisposedException.ThrowIf(disposed, this);
+            ThrowIfDisposingOrDisposed();
             ValidateTargets(requested);
+            ReadOnlyMemory<short> digitalToneSamples = sequence.RenderPcmAtRms(
+                DmrNxdnToneTargetDbfs);
 
-            sending = true;
+            SetSending(true);
             await Task.WhenAll(requested.Select(target => SendCoreAsync(
                 target.Channel,
                 target.System,
                 target.System.SourceId!.Value,
                 renderedSamples,
+                digitalToneSamples,
                 sequence,
                 cancellationToken))).ConfigureAwait(false);
         }
         finally
         {
-            sending = false;
+            SetSending(false);
             gate.Release();
         }
     }
@@ -155,7 +176,41 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         }
     }
 
-    private static void ValidateTargets(IEnumerable<TransmitTarget> targets)
+    private void SetSending(bool value)
+    {
+        if (Volatile.Read(ref sending) == value)
+            return;
+
+        Volatile.Write(ref sending, value);
+        EventHandler<ToneSendingChangedEventArgs>? observers = SendingChanged;
+        var args = new ToneSendingChangedEventArgs(value);
+        notifications.Enqueue(() => NotifySendingChanged(observers, args));
+    }
+
+    internal Task DrainNotificationsAsync() => notifications.DrainAsync();
+
+    private void NotifySendingChanged(
+        EventHandler<ToneSendingChangedEventArgs>? observers,
+        ToneSendingChangedEventArgs args)
+    {
+        if (observers is null)
+            return;
+        foreach (EventHandler<ToneSendingChangedEventArgs> observer in observers.GetInvocationList())
+        {
+            try
+            {
+                observer(this, args);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Trace.TraceError(
+                    "Tone state observer failed: {0}",
+                    exception);
+            }
+        }
+    }
+
+    internal static void ValidateTargets(IEnumerable<TransmitTarget> targets)
     {
         foreach (TransmitTarget target in targets)
         {
@@ -169,28 +224,38 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (disposed)
-            return;
+        Interlocked.CompareExchange(ref lifecycleState, 1, 0);
+        return disposal.RunAsync(DisposeCoreAsync);
+    }
 
+    private async Task DisposeCoreAsync()
+    {
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            disposed = true;
+            Volatile.Write(ref lifecycleState, 2);
         }
         finally
         {
             gate.Release();
-            gate.Dispose();
         }
+
+        await notifications.DisposeAsync().ConfigureAwait(false);
     }
+
+    private void ThrowIfDisposingOrDisposed()
+        => ObjectDisposedException.ThrowIf(
+            Volatile.Read(ref lifecycleState) != 0,
+            this);
 
     private async Task SendCoreAsync(
         TransmitChannelDescriptor channel,
         IRadioTrafficEndpoint system,
         uint sourceId,
         ReadOnlyMemory<short> samples,
+        ReadOnlyMemory<short>? digitalToneSamples,
         GeneratedToneSequence? sequence,
         CancellationToken cancellationToken)
     {
@@ -228,7 +293,7 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
                 vocoderSession,
                 (payload, sequence, stream) => system.SendTraffic(
                     ChannelProtocolMediaMapper.ToTrafficProtocol(definition.Protocol),
-                    payload.Span,
+                    payload,
                     sequence,
                     stream),
                 encryption,
@@ -240,33 +305,27 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
 
             try
             {
-                var cadence = new TransmitFrameCadence(timeProvider);
+                ReadOnlyMemory<short> transmittedSamples =
+                    digitalToneSamples is { } leveledToneSamples &&
+                    definition.Protocol is ChannelProtocol.Dmr or ChannelProtocol.Nxdn
+                        ? leveledToneSamples
+                        : samples;
                 if (sequence is not null && definition.Protocol == ChannelProtocol.P25)
                 {
                     await SendP25SequenceAsync(
                         session,
                         sequence,
-                        samples,
-                        cadence,
+                        transmittedSamples,
+                        CreateGeneratedAudioCadence(definition.Protocol),
                         cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
-                    for (int offset = 0; offset < samples.Length; offset += VocoderFrameSizes.PcmSamplesPerFrame)
-                    {
-                        await cadence.WaitForNextFrameAsync(cancellationToken).ConfigureAwait(false);
-                        int count = Math.Min(VocoderFrameSizes.PcmSamplesPerFrame, samples.Length - offset);
-                        if (count == VocoderFrameSizes.PcmSamplesPerFrame)
-                        {
-                            session.Process(samples.Span.Slice(offset, count));
-                        }
-                        else
-                        {
-                            var finalFrame = new short[VocoderFrameSizes.PcmSamplesPerFrame];
-                            samples.Span.Slice(offset, count).CopyTo(finalFrame);
-                            session.Process(finalFrame);
-                        }
-                    }
+                    await SendPcmAsync(
+                        session,
+                        definition.Protocol,
+                        transmittedSamples,
+                        cancellationToken).ConfigureAwait(false);
                 }
 
                 await session.EndAsync(cancellationToken).ConfigureAwait(false);
@@ -304,11 +363,16 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         int pcmOffset = 0;
+        int frameIndex = 0;
         foreach (GeneratedToneStep step in sequence.Steps)
         {
-            for (int frameIndex = 0; frameIndex < step.FrameCount; frameIndex++)
+            for (int stepFrameIndex = 0; stepFrameIndex < step.FrameCount; stepFrameIndex++)
             {
-                await cadence.WaitForNextFrameAsync(cancellationToken).ConfigureAwait(false);
+                await WaitForGeneratedBatchAsync(
+                    cadence,
+                    frameIndex,
+                    FramesPerProtocolPacket(ChannelProtocol.P25),
+                    cancellationToken).ConfigureAwait(false);
                 if (step.Kind == GeneratedToneStepKind.SingleTone)
                     session.ProcessP25SingleTone(step.FrequencyHz);
                 else
@@ -316,8 +380,79 @@ public sealed class ToneTransmitCoordinator : IAsyncDisposable
                         pcmOffset,
                         VocoderFrameSizes.PcmSamplesPerFrame));
                 pcmOffset += VocoderFrameSizes.PcmSamplesPerFrame;
+                frameIndex++;
             }
         }
     }
+
+    private async Task SendPcmAsync(
+        PatchTransmitSession session,
+        ChannelProtocol protocol,
+        ReadOnlyMemory<short> samples,
+        CancellationToken cancellationToken)
+    {
+        int framesPerPacket = FramesPerProtocolPacket(protocol);
+        TransmitFrameCadence cadence = CreateGeneratedAudioCadence(protocol);
+        int frameIndex = 0;
+        for (int offset = 0; offset < samples.Length; offset += VocoderFrameSizes.PcmSamplesPerFrame)
+        {
+            await WaitForGeneratedBatchAsync(
+                cadence,
+                frameIndex,
+                framesPerPacket,
+                cancellationToken).ConfigureAwait(false);
+            int count = Math.Min(VocoderFrameSizes.PcmSamplesPerFrame, samples.Length - offset);
+            if (count == VocoderFrameSizes.PcmSamplesPerFrame)
+            {
+                session.Process(samples.Span.Slice(offset, count));
+            }
+            else
+            {
+                var finalFrame = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+                samples.Span.Slice(offset, count).CopyTo(finalFrame);
+                session.Process(finalFrame);
+            }
+            frameIndex++;
+        }
+    }
+
+    private TransmitFrameCadence CreateGeneratedAudioCadence(ChannelProtocol protocol)
+    {
+        int framesPerPacket = FramesPerProtocolPacket(protocol);
+        TimeSpan interval = TimeSpan.FromTicks(PcmFrameInterval.Ticks * framesPerPacket);
+        return protocol == ChannelProtocol.Analog
+            ? new TransmitFrameCadence(interval, timeProvider)
+            : TransmitFrameCadence.StartAfterInterval(interval, timeProvider);
+    }
+
+    private static async ValueTask WaitForGeneratedBatchAsync(
+        TransmitFrameCadence cadence,
+        int frameIndex,
+        int framesPerPacket,
+        CancellationToken cancellationToken)
+    {
+        if (framesPerPacket == 1)
+        {
+            await cadence.WaitForNextFrameAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (frameIndex % framesPerPacket != 0)
+            return;
+
+        int packetIndex = frameIndex / framesPerPacket;
+        if (packetIndex >= PrefetchedProtocolPackets)
+            await cadence.WaitForNextFrameAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static int FramesPerProtocolPacket(ChannelProtocol protocol)
+        => protocol switch
+        {
+            ChannelProtocol.Dmr => 3,
+            ChannelProtocol.Nxdn => 4,
+            ChannelProtocol.P25 => 9,
+            ChannelProtocol.Analog => 1,
+            _ => throw new ArgumentOutOfRangeException(nameof(protocol), protocol, null)
+        };
 
 }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.Audio;
 using DvmConsole.Operations;
@@ -7,6 +10,58 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class SharedAudioCaptureTests
 {
+    [Fact]
+    public async Task PostToneTailCallbacksStaySuppressedForTheEntireGuard()
+    {
+        var source = new FakeCapture();
+        var time = new ManualTimeProvider();
+        await using var shared = new SharedAudioCapture(source, timeProvider: time);
+        await using SharedAudioCapture.Lease lease = shared.CreateLease();
+        var published = new List<short[]>();
+        lease.SamplesAvailable += (_, args) => published.Add(args.Samples.ToArray());
+        shared.SetSamplesSuppressed(true);
+        await lease.StartAsync();
+        Task<TimeSpan> recovery = shared.WaitForNextPhysicalSamplesAsync(
+            TimeSpan.FromSeconds(1), minimumSuppressedDuration: TimeSpan.FromMilliseconds(60));
+        time.Advance(TimeSpan.FromMilliseconds(59));
+        source.Emit([1]);
+        Assert.False(recovery.IsCompleted);
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        source.Emit([2]);
+        Assert.Equal(TimeSpan.FromMilliseconds(60), await recovery);
+        Assert.Empty(published);
+        shared.SetSamplesSuppressed(false);
+        source.Emit([3]);
+        Assert.Equal(new short[] { 3 }, Assert.Single(published));
+        Assert.Equal(1, source.StartCalls);
+    }
+
+    [Fact]
+    public async Task PostCueRecoveryCallbackIsDiscardedBeforeOpeningTransmitGate()
+    {
+        var source = new FakeCapture();
+        await using var shared = new SharedAudioCapture(source);
+        await using SharedAudioCapture.Lease lease = shared.CreateLease();
+        var published = new List<short[]>();
+        lease.SamplesAvailable += (_, args) => published.Add(args.Samples.ToArray());
+        shared.SetSamplesSuppressed(true);
+        await lease.StartAsync();
+        source.Emit([1]);
+        await shared.WaitForSamplesAsync(TimeSpan.FromSeconds(1));
+        Task recovery = shared.WaitForNextPhysicalSamplesAsync(TimeSpan.FromSeconds(1));
+        Task release = Task.Run(async () =>
+        {
+            await recovery;
+            shared.SetSamplesSuppressed(false);
+        });
+        source.Emit([2]);
+        await release;
+        Assert.Empty(published);
+        source.Emit([3]);
+        Assert.Equal(new short[] { 3 }, Assert.Single(published));
+        Assert.Equal(1, source.StartCalls);
+    }
+
     [Fact]
     public async Task KeepsOneMicrophoneOpenWhileMultipleTransmitLeasesRun()
     {
@@ -169,6 +224,26 @@ public sealed class SharedAudioCaptureTests
         Assert.Equal(MicrophoneHealthState.Stale, shared.Health.State);
     }
 
+    [Fact]
+    public async Task PhysicalCallbacksAllocateNoReplacementWaiterWhenNobodyIsWaiting()
+    {
+        var source = new FakeCapture();
+        await using var shared = new SharedAudioCapture(source);
+        await using SharedAudioCapture.Lease lease = shared.CreateLease();
+        await lease.StartAsync();
+        var args = new PcmSamplesEventArgs(new short[160]);
+        // Measure steady-state callbacks after warming the tiered JIT path.
+        for (int callback = 0; callback < 10_000; callback++)
+            source.Emit(args);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int callback = 0; callback < 10_000; callback++)
+            source.Emit(args);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.InRange(allocated, 0, 256);
+    }
+
     private sealed class FakeCapture : IAudioCapture
     {
         public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
@@ -201,6 +276,12 @@ public sealed class SharedAudioCaptureTests
         {
             if (IsRunning)
                 SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(samples));
+        }
+
+        public void Emit(PcmSamplesEventArgs args)
+        {
+            if (IsRunning)
+                SamplesAvailable?.Invoke(this, args);
         }
     }
 

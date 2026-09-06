@@ -19,6 +19,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="DvmConsole" />
     <InternalsVisibleTo Include="DvmConsole.Desktop.Tests" />
+    <InternalsVisibleTo Include="DvmConsole.Application.Tests" />
     <InternalsVisibleTo Include="DvmConsole.Presentation" />
   </ItemGroup>
 </Project>

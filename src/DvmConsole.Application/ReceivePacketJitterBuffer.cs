@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Application;
 
 internal readonly record struct ReceiveJitterBufferDequeueMetadata(
@@ -5,7 +8,8 @@ internal readonly record struct ReceiveJitterBufferDequeueMetadata(
     int MissingPacketsAtDeadline,
     TimeSpan TargetDelay,
     bool IsAdaptive,
-    long ReleaseDeadlineTimestamp);
+    long ReleaseDeadlineTimestamp,
+    long OrderedDrainDeadlineTimestamp = 0);
 
 internal enum ReceiveJitterPacketKind
 {
@@ -67,6 +71,20 @@ internal sealed class ReceivePacketJitterBuffer<T>
     public bool ContainsStream(uint streamId)
         => streams.TryGetValue(streamId, out StreamState? state) &&
            state.BufferedPacketCount > 0;
+
+    // A stream's playout deadline must survive a temporarily empty packet
+    // queue. Otherwise an early next packet creates a fresh deadline and can
+    // bypass the protocol cadence. The channel worker calls this only after
+    // all queued packets for the stream have passed through its ordered
+    // processor.
+    public void ForgetStream(uint streamId)
+    {
+        if (streams.TryGetValue(streamId, out StreamState? state) &&
+            state.BufferedPacketCount == 0)
+        {
+            streams.Remove(streamId);
+        }
+    }
 
     public void Enqueue(T item, long timestamp)
     {
@@ -146,6 +164,14 @@ internal sealed class ReceivePacketJitterBuffer<T>
         long releaseDeadlineTimestamp = readySelection.UsesVoiceDeadline
             ? readySelection.Deadline
             : 0;
+        // A terminator becomes eligible after the preceding voice deadlines.
+        // Keep the scheduled deadline, not the actual dequeue time, so a late
+        // worker still reports its delay rather than hiding it as audio pacing.
+        if (selectedKind == ReceiveJitterPacketKind.Voice && readySelection.UsesVoiceDeadline)
+            selectedState.LastVoiceReleaseDeadline = readySelection.Deadline;
+        long orderedDrainDeadline = !drain && selectedKind == ReceiveJitterPacketKind.Terminator
+            ? selectedState.LastVoiceReleaseDeadline
+            : 0;
         int missingPackets = selectedKind != ReceiveJitterPacketKind.Voice || !selectedState.HasExpectedSequence
             ? 0
             : ForwardDistance(selectedState.ExpectedSequence, getSequence(selected.Item));
@@ -161,7 +187,8 @@ internal sealed class ReceivePacketJitterBuffer<T>
             missingPackets,
             selectedState.Profile.TargetDelay,
             selectedState.Profile.IsAdaptive,
-            releaseDeadlineTimestamp);
+            releaseDeadlineTimestamp,
+            orderedDrainDeadline);
         return true;
     }
 
@@ -229,6 +256,9 @@ internal sealed class ReceivePacketJitterBuffer<T>
         long timestamp,
         bool drain)
     {
+        if (state.BufferedPacketCount == 0)
+            return new StreamSelection(null, false, long.MaxValue, false);
+
         LinkedListNode<BufferedPacket>? exact = null;
         LinkedListNode<BufferedPacket>? nearestFuture = null;
         LinkedListNode<BufferedPacket>? late = null;
@@ -315,8 +345,6 @@ internal sealed class ReceivePacketJitterBuffer<T>
                 state.NextDeadline = next > 0 ? next : timestamp;
             }
         }
-
-        RemoveStreamStateWhenEmpty(streamId);
     }
 
     private void RemoveStreamStateWhenEmpty(uint streamId)
@@ -351,6 +379,7 @@ internal sealed class ReceivePacketJitterBuffer<T>
         public bool HasExpectedSequence { get; set; }
         public ushort ExpectedSequence { get; set; }
         public long NextDeadline { get; set; }
+        public long LastVoiceReleaseDeadline { get; set; }
         public bool HasVoiceDeadline { get; set; }
         public int BufferedPacketCount { get; set; }
     }

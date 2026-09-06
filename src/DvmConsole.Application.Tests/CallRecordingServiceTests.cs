@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Buffers.Binary;
 using DvmConsole.Application;
 using DvmConsole.Core.Runtime;
@@ -8,6 +11,30 @@ namespace DvmConsole.Application.Tests;
 
 public sealed class CallRecordingServiceTests
 {
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, false)]
+    [InlineData(0, true)]
+    [InlineData(1, true)]
+    public async Task DisposalAttemptsEveryRecordingAndSharesFailure(int failingIndex, bool flushFailure)
+    {
+        var store = new FakeRecordingStore();
+        var service = new CallRecordingService(store);
+        ChannelRecordingDescriptor channel = CreateChannel(recordingEnabled: true);
+        await service.WriteReceiveSamplesAsync(channel, episodeId: 1, sourceId: 2, new short[] { 1 });
+        await service.WriteReceiveSamplesAsync(channel, episodeId: 2, sourceId: 2, new short[] { 1 });
+        await service.WriteTransmitSamplesAsync(channel, streamId: 3, new short[] { 1 });
+        store.Handles[failingIndex].FailCommit = !flushFailure;
+        store.Handles[failingIndex].FailFlush = flushFailure;
+        Task first = service.DisposeAsync().AsTask();
+        Task second = service.DisposeAsync().AsTask();
+        Assert.Same(first, second);
+        await Assert.ThrowsAsync<AggregateException>(() => first);
+        Assert.All(store.Handles, handle => Assert.Equal(1, handle.DisposeCount));
+        Assert.All(store.Handles, handle => Assert.False(handle.Stream.CanWrite));
+        Assert.Equal(2, store.Handles.Count(handle => handle.Committed));
+    }
+
     [Fact]
     public async Task ReceiveEpisodeUsesOneStoreHandleAndCommitsFinalizedWave()
     {
@@ -151,7 +178,7 @@ public sealed class CallRecordingServiceTests
         DateTimeOffset startedAt,
         string mediaType) : IRecordingWriteHandle
     {
-        private readonly MemoryStream stream = new();
+        private readonly FaultableStream stream = new();
         public RecordingId Id { get; } = RecordingId.New();
         public CallId CallId { get; } = callId;
         public ChannelId ChannelId { get; } = channelId;
@@ -159,6 +186,9 @@ public sealed class CallRecordingServiceTests
         public string MediaType { get; } = mediaType;
         public Stream Stream => stream;
         public bool Committed { get; private set; }
+        public bool FailCommit { get; set; }
+        public bool FailFlush { set => stream.FailFlush = value; }
+        public int DisposeCount { get; private set; }
         public TimeSpan Duration { get; private set; }
         public byte[] Content => stream.ToArray();
         public RecordingCaptureContext? Context { get; private set; }
@@ -171,6 +201,8 @@ public sealed class CallRecordingServiceTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (FailCommit)
+                throw new IOException("Disk full");
             Committed = true;
             Duration = duration;
             return ValueTask.CompletedTask;
@@ -183,8 +215,20 @@ public sealed class CallRecordingServiceTests
 
         public ValueTask DisposeAsync()
         {
+            DisposeCount++;
             stream.Dispose();
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class FaultableStream : MemoryStream
+    {
+        public bool FailFlush { get; set; }
+        public override void Flush()
+        {
+            if (FailFlush)
+                throw new IOException("Injected stream flush failure");
+            base.Flush();
         }
     }
 }

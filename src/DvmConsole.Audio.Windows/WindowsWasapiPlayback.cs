@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using System.Runtime.InteropServices;
@@ -9,7 +12,8 @@ namespace DvmConsole.Audio;
 internal sealed class WindowsWasapiPlayback :
     IAudioPlayback,
     IAudioPlaybackContinuityDiagnostics,
-    IAudioPlaybackCallbackDiagnostics
+    IAudioPlaybackCallbackDiagnostics,
+    IImmediateAudioStop
 {
     private const int RequestedLatencyMilliseconds = 80;
     private const string MmcssTaskName = "Audio";
@@ -129,6 +133,14 @@ internal sealed class WindowsWasapiPlayback :
             player.PlaybackStopped -= HandlePlaybackStopped;
             device.Dispose();
         }
+    }
+
+    public void StopImmediately()
+    {
+        if (disposed)
+            return;
+        buffer.ClearBuffer();
+        player.Stop();
     }
 
     private void HandlePlaybackStopped(object? sender, StoppedEventArgs args)

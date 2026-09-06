@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Configuration;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -7,7 +10,11 @@ namespace DvmConsole.Presentation;
 
 public sealed record ConfigurationStreamRow(ZoneConfiguration Zone, WebStreamConfiguration Stream)
 {
-    public string ZoneName => Zone.Name;
+    // Snapshot displayed values so collection comparison detects edits to the
+    // mutable configuration objects and refreshes their list presentation.
+    public string Name { get; } = Stream.Name;
+    public string Url { get; } = Stream.Url;
+    public string ZoneName { get; } = Zone.Name;
 }
 
 public sealed class ConfigurationAliasRow : INotifyPropertyChanged
@@ -97,7 +104,7 @@ public sealed class ConfigurationChannelRow : INotifyPropertyChanged
             if (string.Equals(Channel.Tgid, value, StringComparison.Ordinal))
                 return;
             Channel.Tgid = value ?? string.Empty;
-            Notify(nameof(DestinationId), nameof(DestinationText));
+            Notify(nameof(DestinationId), nameof(DestinationText), nameof(CompactDestinationText));
         }
     }
     public string Mode
@@ -115,6 +122,7 @@ public sealed class ConfigurationChannelRow : INotifyPropertyChanged
                 nameof(IsDmr),
                 nameof(CanEditSlot),
                 nameof(SlotText),
+                nameof(SlotSummaryText),
                 nameof(AvailableAlgorithms),
                 nameof(SelectedAlgorithm),
                 nameof(EncryptionText));
@@ -129,7 +137,7 @@ public sealed class ConfigurationChannelRow : INotifyPropertyChanged
             if (Channel.Slot == value)
                 return;
             Channel.Slot = value;
-            Notify(nameof(Slot), nameof(SlotText));
+            Notify(nameof(Slot), nameof(SlotText), nameof(SlotSummaryText));
         }
     }
     public EncryptionAlgorithmOption? SelectedAlgorithm
@@ -148,9 +156,13 @@ public sealed class ConfigurationChannelRow : INotifyPropertyChanged
     }
     public string System => Channel.System;
     public string DestinationText => $"TG {Channel.Tgid} - {ConfigurationProtocolCatalog.DisplayName(Channel.Mode)}";
+    public string CompactDestinationText => $"TG {Channel.Tgid}";
     public string ModeText => ConfigurationProtocolCatalog.DisplayName(Channel.Mode);
     public string SlotText => IsDmr
         ? Channel.Slot.ToString(CultureInfo.InvariantCulture)
+        : string.Empty;
+    public string SlotSummaryText => IsDmr
+        ? $"TS {Channel.Slot.ToString(CultureInfo.InvariantCulture)}"
         : string.Empty;
     public string EncryptionText => string.IsNullOrWhiteSpace(Channel.Algo) ||
                                     string.Equals(Channel.Algo, "none", StringComparison.OrdinalIgnoreCase)
@@ -166,9 +178,10 @@ public sealed class ConfigurationChannelRow : INotifyPropertyChanged
             if (Channel.RxOnly == value)
                 return;
             Channel.RxOnly = value;
-            Notify(nameof(RxOnly));
+            Notify(nameof(RxOnly), nameof(ReceiveCapabilityText));
         }
     }
+    public string ReceiveCapabilityText => Channel.RxOnly ? "RX only" : "TX capable";
     public string CardSize
     {
         get => Channel.CardSize;
@@ -203,9 +216,12 @@ public sealed class ConfigurationChannelRow : INotifyPropertyChanged
         Number = number;
         Notify(
             nameof(Number), nameof(Name), nameof(DestinationId), nameof(System), nameof(DestinationText),
+            nameof(CompactDestinationText),
             nameof(Mode), nameof(ModeText), nameof(IsDmr), nameof(CanEditSlot), nameof(Slot), nameof(SlotText),
+            nameof(SlotSummaryText),
             nameof(SelectedAlgorithm), nameof(EncryptionText),
-            nameof(RxOnly), nameof(CardSize), nameof(SelectedCardSize), nameof(CardSizeText));
+            nameof(RxOnly), nameof(ReceiveCapabilityText),
+            nameof(CardSize), nameof(SelectedCardSize), nameof(CardSizeText));
         if (modeChanged)
             Notify(nameof(AvailableAlgorithms));
     }

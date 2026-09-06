@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Application;
 using DvmConsole.Core.Diagnostics;
@@ -11,181 +14,50 @@ using System.Globalization;
 
 namespace DvmConsole.Desktop;
 
-public sealed partial class MainWindowViewModel
+public sealed partial class MainWindowViewModel : IAudioInputSettingsSession
 {
-    public void SaveAudioInputPreset()
+    public bool HasUndoNotification => operatorUndo.CanUndo;
+    public string UndoNotificationText => operatorUndo.Message;
+
+    public async Task UndoLastOperatorActionAsync()
+        => _ = await operatorUndo.UndoAsync().ConfigureAwait(false);
+
+    void IAudioInputSettingsSession.BeginUndoableAction(
+        string message,
+        Func<ValueTask> undo,
+        Func<ValueTask>? commit)
+        => BeginUndoableAction(message, undo, commit);
+
+    private void BeginUndoableAction(
+        string message,
+        Func<ValueTask> undo,
+        Func<ValueTask>? commit = null)
+        => operatorUndo.Begin(message, undo, commit);
+
+    private void HandleOperatorUndoChanged(object? sender, EventArgs e)
     {
-        if (!TryParseBounded(AudioInputGainText, 0.25, 3.0, out double gain) ||
-            !TryParseBounded(AudioInputLowGainText, -12, 12, out double lowGainDb) ||
-            !TryParseBounded(AudioInputMidGainText, -12, 12, out double midGainDb) ||
-            !TryParseBounded(AudioInputHighGainText, -12, 12, out double highGainDb))
-        {
-            AudioStatusText = "Microphone presets require gain 0.25–3.0 and EQ values from -12 to 12 dB.";
-            return;
-        }
-
-        string name = string.IsNullOrWhiteSpace(AudioInputPresetNameText)
-            ? $"Mic preset {audioInputPresets.Count + 1}"
-            : AudioInputPresetNameText.Trim();
-        if (name.Length > 80)
-        {
-            AudioStatusText = "Microphone preset names must be 80 characters or fewer.";
-            return;
-        }
-
-        AudioInputPresetViewModel next = new(new AudioInputPresetSetting
-        {
-            Name = name,
-            Gain = gain,
-            LowGainDb = lowGainDb,
-            MidGainDb = midGainDb,
-            HighGainDb = highGainDb
-        });
-        int existingIndex = audioInputPresets
-            .Select((preset, index) => (preset, index))
-            .Where(item => item.preset.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-            .Select(item => item.index)
-            .DefaultIfEmpty(-1)
-            .First();
-        if (existingIndex >= 0 && existingIndex < audioInputPresets.Count)
-            audioInputPresets[existingIndex] = next;
-        else
-            audioInputPresets.Add(next);
-
-        AudioInputPresetNameText = name;
-        PersistAudioInputPresetState();
-        AudioStatusText = $"Microphone preset '{name}' saved.";
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasUndoNotification)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(UndoNotificationText)));
     }
+
+    public void SaveAudioInputPreset() => audioInputSettingsController.SavePreset();
 
     public void UseAudioInputPreset(AudioInputPresetViewModel preset)
     {
         ArgumentNullException.ThrowIfNull(preset);
-        AudioInputPresetNameText = preset.Name;
-        AudioInputGainText = preset.Gain.ToString("0.###", CultureInfo.InvariantCulture);
-        AudioInputLowGainText = preset.LowGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        AudioInputMidGainText = preset.MidGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        AudioInputHighGainText = preset.HighGainDb.ToString("0.###", CultureInfo.InvariantCulture);
+        audioInputSettingsController.LoadPreset(preset);
         TaskObservation.Observe(
             ApplyAudioInputSettingsAsync(restartActiveAudio: false),
             HandleAudioCommandFault);
-        AudioStatusText = $"Microphone preset '{preset.Name}' loaded.";
     }
 
     public void DeleteAudioInputPreset(AudioInputPresetViewModel preset)
     {
-        ArgumentNullException.ThrowIfNull(preset);
-        if (!audioInputPresets.Remove(preset))
-            return;
-
-        if (AudioInputPresetNameText.Equals(preset.Name, StringComparison.OrdinalIgnoreCase))
-            AudioInputPresetNameText = string.Empty;
-        PersistAudioInputPresetState();
-        AudioStatusText = $"Microphone preset '{preset.Name}' deleted.";
+        audioInputSettingsController.DeletePreset(preset);
     }
 
-    private async Task ApplyAudioInputSettingsAsync(bool restartActiveAudio)
-    {
-        if (string.IsNullOrWhiteSpace(AudioInputDeviceIdText) || AudioInputDeviceIdText.Trim().Length > 256 ||
-            string.IsNullOrWhiteSpace(AudioOutputDeviceIdText) || AudioOutputDeviceIdText.Trim().Length > 256 ||
-            !TryParseBounded(AudioInputGainText, 0.25, 3.0, out double gain) ||
-            !TryParseBounded(AudioInputAgcTargetDbfsText, -40, -12, out double agcTargetDbfs) ||
-            !TryParseBounded(AudioInputLowGainText, -12, 12, out double lowGainDb) ||
-            !TryParseBounded(AudioInputMidGainText, -12, 12, out double midGainDb) ||
-            !TryParseBounded(AudioInputHighGainText, -12, 12, out double highGainDb))
-        {
-            AudioStatusText = "Microphone settings require a device ID, gain 0.25–3.0, AGC target -40 to -12 dBFS, and EQ values from -12 to 12 dB.";
-            return;
-        }
-
-        ApplicationAudioConfiguration previousConfiguration = CreateApplicationAudioConfiguration();
-        AudioInputProcessingOptions previousInputOptions = CreateAudioInputProcessingOptions(
-            previousConfiguration.InputDeviceId,
-            previousConfiguration.ProcessingMode,
-            userSettings.AudioInputAgcEnabled,
-            userSettings.AudioInputAgcTargetDbfs,
-            userSettings.AudioInputGain,
-            userSettings.AudioInputEqLowGainDb,
-            userSettings.AudioInputEqMidGainDb,
-            userSettings.AudioInputEqHighGainDb);
-        AudioProcessingMode processingMode = GetSelectedAudioProcessingMode();
-        string deviceId = AudioInputDeviceIdText.Trim();
-        string outputDeviceId = AudioOutputDeviceIdText.Trim();
-        var proposedConfiguration = new ApplicationAudioConfiguration(
-            processingMode,
-            deviceId,
-            outputDeviceId);
-        bool audioRouteChanged =
-            previousConfiguration.ProcessingMode != proposedConfiguration.ProcessingMode ||
-            !previousConfiguration.InputDeviceId.Equals(
-                proposedConfiguration.InputDeviceId,
-                StringComparison.OrdinalIgnoreCase) ||
-            !previousConfiguration.OutputDeviceId.Equals(
-                proposedConfiguration.OutputDeviceId,
-                StringComparison.OrdinalIgnoreCase);
-        if (restartActiveAudio && audioRouteChanged && transmitCoordinator.ActiveChannels.Count > 0)
-        {
-            AudioStatusText = "Stop transmitting before changing the audio processing mode or device route.";
-            return;
-        }
-
-        AudioInputProcessingOptions proposedInputOptions = CreateAudioInputProcessingOptions(
-            deviceId,
-            processingMode,
-            AudioInputAgcEnabled,
-            agcTargetDbfs,
-            gain,
-            lowGainDb,
-            midGainDb,
-            highGainDb);
-        bool restoreWarmMicrophone = userSettings.KeepTransmitMicrophoneWarm;
-        transmitCoordinator.UpdateAudioInputOptions(proposedInputOptions);
-        try
-        {
-            await audioRuntimeSettings.ApplyAsync(
-                restartActiveAudio && audioRouteChanged,
-                previousConfiguration,
-                proposedConfiguration,
-                restoreWarmMicrophone).ConfigureAwait(false);
-        }
-        catch
-        {
-            transmitCoordinator.UpdateAudioInputOptions(previousInputOptions);
-            throw;
-        }
-
-        userSettings.AudioInputDeviceId = deviceId;
-        userSettings.AudioOutputDeviceId = outputDeviceId;
-        userSettings.AudioProcessingMode = processingMode switch
-        {
-            AudioProcessingMode.AppleVoiceProcessing => UserSettings.AppleVoiceProcessingMode,
-            AudioProcessingMode.WindowsCommunications => UserSettings.WindowsCommunicationsProcessingMode,
-            _ => UserSettings.DvmConsoleAudioProcessingMode
-        };
-        userSettings.AudioInputAgcEnabled = AudioInputAgcEnabled;
-        userSettings.AudioInputAgcTargetDbfs = agcTargetDbfs;
-        userSettings.AudioInputGain = gain;
-        userSettings.AudioInputEqLowGainDb = lowGainDb;
-        userSettings.AudioInputEqMidGainDb = midGainDb;
-        userSettings.AudioInputEqHighGainDb = highGainDb;
-        PersistAudioInputPresetState();
-        PersistUserSettings();
-        AudioInputDeviceIdText = deviceId;
-        AudioOutputDeviceIdText = outputDeviceId;
-        AudioInputGainText = gain.ToString("0.###", CultureInfo.InvariantCulture);
-        AudioInputAgcTargetDbfsText = agcTargetDbfs.ToString("0.###", CultureInfo.InvariantCulture);
-        AudioInputLowGainText = lowGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        AudioInputMidGainText = midGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        AudioInputHighGainText = highGainDb.ToString("0.###", CultureInfo.InvariantCulture);
-        AudioStatusText = (processingMode switch
-        {
-            AudioProcessingMode.AppleVoiceProcessing =>
-                "Apple voice processing saved; application playback and transmit capture now share one full-duplex voice route. RX vocoder processing remains independently controlled.",
-            AudioProcessingMode.WindowsCommunications =>
-                "Windows communications processing saved for microphone transmit capture; available effects depend on Windows and the selected endpoint.",
-            _ => "DVM Console audio processing saved; device routes apply to the next audio session and PTT call."
-        });
-
-    }
+    private Task ApplyAudioInputSettingsAsync(bool restartActiveAudio)
+        => audioInputSettingsController.ApplyAsync(restartActiveAudio);
 
     private static AudioInputProcessingOptions CreateAudioInputProcessingOptions(
         string deviceId,
@@ -212,7 +84,7 @@ public sealed partial class MainWindowViewModel
     {
         DesktopCrashLog.Write("Audio settings command", exception);
         TaskObservation.Observe(
-            uiDispatcher.InvokeAsync(() =>
+            RunOnUiThreadAsync(() =>
             {
                 AudioStatusText = $"Unable to apply audio settings: {exception.Message}";
                 AddDebugLog(
@@ -220,7 +92,7 @@ public sealed partial class MainWindowViewModel
                     "AUDIO",
                     DebugLogSeverity.Warning,
                     $"Audio settings command failed: {exception}");
-            }).AsTask(),
+            }),
             reportingException => DesktopCrashLog.Write(
                 "Audio settings command UI reporting",
                 reportingException));
@@ -242,25 +114,23 @@ public sealed partial class MainWindowViewModel
 
             ReplaceAudioDeviceOptions(audioInputDevices, inputs);
             ReplaceAudioDeviceOptions(audioOutputDevices, outputs);
-            foreach (WebStreamViewModel stream in webStreams)
+            foreach (WebStreamViewModel stream in WebStreams)
                 stream.RefreshOutputDeviceSelection();
             foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
                 channel.RefreshOutputDeviceSelection();
             audioSettings.SetResolvedDevices(
                 ResolveAudioDeviceOption(audioInputDevices, AudioInputDeviceIdText),
                 ResolveAudioDeviceOption(audioOutputDevices, AudioOutputDeviceIdText));
-            RefreshAppleVoiceProcessingRouteState();
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or DllNotFoundException or PlatformNotSupportedException)
         {
             audioInputDevices.Clear();
             audioOutputDevices.Clear();
-            foreach (WebStreamViewModel stream in webStreams)
+            foreach (WebStreamViewModel stream in WebStreams)
                 stream.RefreshOutputDeviceSelection();
             foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
                 channel.RefreshOutputDeviceSelection();
             audioSettings.SetResolvedDevices(input: null, output: null);
-            RefreshAppleVoiceProcessingRouteState();
             AudioStatusText = $"Audio device list unavailable: {exception.Message}";
         }
     }
@@ -315,11 +185,11 @@ public sealed partial class MainWindowViewModel
                 DateTimeOffset retryAt = DateTimeOffset.UtcNow.AddSeconds(5);
                 foreach (ChannelViewModel channel in ResolveChannels(outputRefresh.Restarted))
                 {
-                    receiveRetryAfter.Remove(channel);
+                    receiveSessions.RecordRestarted(channel);
                     receiveAudioWork.Start(channel);
                 }
                 foreach (ChannelViewModel channel in ResolveChannels(outputRefresh.Failed))
-                    receiveRetryAfter[channel] = retryAt;
+                    receiveSessions.RecordFailure(channel, retryAt);
             }
 
             DefaultInputRefreshResult inputRefresh = change.InputChanged
@@ -372,28 +242,6 @@ public sealed partial class MainWindowViewModel
             : "Audio devices changed; new sessions will use the current system defaults.";
     }
 
-    internal static bool IsAppleVoiceProcessingDevicePairCompatible(
-        AudioDeviceOptionViewModel? input,
-        AudioDeviceOptionViewModel? output)
-    {
-        if (input is null || output is null)
-            return false;
-        return input.Id.Equals(output.Id, StringComparison.OrdinalIgnoreCase) ||
-            (input.IsDefault && output.IsDefault);
-    }
-
-    private void RefreshAppleVoiceProcessingRouteState()
-    {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioProcessingModeOptions)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAppleVoiceProcessingRouteCompatible)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AppleVoiceProcessingRouteDescription)));
-        if (!IsAppleVoiceProcessingRouteCompatible &&
-            SelectedAudioProcessingMode == AppleVoiceProcessingDisplay)
-        {
-            SelectedAudioProcessingMode = DvmConsoleProcessingDisplay;
-        }
-    }
-
     private async Task ReconfigureApplicationAudioAsync(
         ApplicationAudioConfiguration configuration)
     {
@@ -401,15 +249,15 @@ public sealed partial class MainWindowViewModel
         try
         {
             ChannelViewModel[] activeChannels = ResolveChannels(audioCoordinator.ActiveChannels);
-            WebStreamViewModel[] activeStreams = webStreamPlayback.ActiveStreams.ToArray();
+            WebStreamViewModel[] activeStreams = webStreamOperator.ActiveStreams.ToArray();
 
             foreach (ChannelViewModel channel in activeChannels)
                 await receiveAudioWork.StopAsync(channel).ConfigureAwait(false);
             if (activeChannels.Length > 0)
                 await audioCoordinator.StopAsync().ConfigureAwait(false);
             foreach (WebStreamViewModel stream in activeStreams)
-                await webStreamPlayback.StopAsync(stream).ConfigureAwait(false);
-            await webStreamPlayback.ResetAudioBackendAsync().ConfigureAwait(false);
+                await webStreamOperator.StopPlaybackAsync(stream).ConfigureAwait(false);
+            await webStreamOperator.ResetAudioBackendAsync().ConfigureAwait(false);
             await recordingPlayback.ResetAudioBackendAsync().ConfigureAwait(false);
             await audioBackendProvider.ReconfigureAsync(configuration).ConfigureAwait(false);
 
@@ -421,12 +269,12 @@ public sealed partial class MainWindowViewModel
                     await EnsureRecordingAudioAsync(channel).ConfigureAwait(false);
             }
             foreach (WebStreamViewModel stream in activeStreams)
-                await webStreamPlayback.StartAsync(stream).ConfigureAwait(false);
+                await webStreamOperator.StartPlaybackAsync(stream).ConfigureAwait(false);
 
             int restarted = activeChannels.Count(channel => audioCoordinator.IsActive(channel));
             AudioStatusText =
                 $"Audio route changed; restarted {restarted} of {activeChannels.Length} receive session(s) " +
-                $"and {activeStreams.Count(webStreamPlayback.IsActive)} of {activeStreams.Length} web stream(s).";
+                $"and {activeStreams.Count(webStreamOperator.IsActive)} of {activeStreams.Length} web stream(s).";
         }
         finally
         {
@@ -447,7 +295,7 @@ public sealed partial class MainWindowViewModel
 
         try
         {
-            await RestartReceiveVocoderSessionsAsync();
+            await RestartReceiveVocoderSessionsAsync(includePatchSources: false);
             AudioStatusText = "RX audio processing options saved and applied to receive sessions.";
         }
         catch (Exception exception)
@@ -574,7 +422,7 @@ public sealed partial class MainWindowViewModel
             configuration).TargetDelay;
     }
 
-    private async Task RestartReceiveVocoderSessionsAsync()
+    private async Task RestartReceiveVocoderSessionsAsync(bool includePatchSources = true)
     {
         if (Volatile.Read(ref disposeStarted) != 0)
             return;
@@ -597,12 +445,15 @@ public sealed partial class MainWindowViewModel
                 }
             }
 
-            ChannelViewModel[] patchChannels = GetActivePatchSourceChannels();
-            await DrainPatchSourceWorkAsync().ConfigureAwait(false);
-            await patchSourceDecode.StopAllAsync().ConfigureAwait(false);
-            await patchSourceDecode.ApplyChannelsAsync(
-                patchChannels.Select(channel => (DvmConsole.Application.ReceiveChannelDescriptor)channel))
-                .ConfigureAwait(false);
+            if (includePatchSources)
+            {
+                ChannelViewModel[] patchChannels = GetActivePatchSourceChannels();
+                await DrainPatchSourceWorkAsync().ConfigureAwait(false);
+                await patchSourceDecode.StopAllAsync().ConfigureAwait(false);
+                await patchSourceDecode.ApplyChannelsAsync(
+                    patchChannels.Select(channel => (DvmConsole.Application.ReceiveChannelDescriptor)channel))
+                    .ConfigureAwait(false);
+            }
         }
         finally
         {
@@ -615,12 +466,21 @@ public sealed partial class MainWindowViewModel
         IReadOnlyList<AudioDeviceInfo> devices)
     {
         target.Clear();
-        target.Add(new AudioDeviceOptionViewModel("default", "System default", true));
+        AudioDeviceInfo? systemDefault = devices.FirstOrDefault(device => device.IsDefault);
+        target.Add(new AudioDeviceOptionViewModel(
+            "default",
+            "System default",
+            true,
+            systemDefault?.IsBluetooth));
         foreach (AudioDeviceInfo device in devices)
         {
             if (device.Id.Equals("default", StringComparison.OrdinalIgnoreCase))
                 continue;
-            target.Add(new AudioDeviceOptionViewModel(device.Id, device.Name, device.IsDefault));
+            target.Add(new AudioDeviceOptionViewModel(
+                device.Id,
+                device.Name,
+                device.IsDefault,
+                device.IsBluetooth));
         }
     }
 
@@ -634,19 +494,34 @@ public sealed partial class MainWindowViewModel
                ?? devices.FirstOrDefault();
     }
 
-    private void PersistAudioInputPresetState()
-    {
-        userSettings.AudioInputPresetName = AudioInputPresetNameText.Trim();
-        userSettings.AudioInputPresets = audioInputPresets
-            .Select(preset => preset.ToSetting())
-            .ToList();
-        PersistUserSettings();
-    }
+    bool IAudioInputSettingsSession.HasActiveTransmission
+        => transmitCoordinator.ActiveChannels.Count > 0;
 
-    private static bool TryParseBounded(string value, double minimum, double maximum, out double result)
-    {
-        return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out result) &&
-            double.IsFinite(result) && result >= minimum && result <= maximum;
-    }
+    bool IAudioInputSettingsSession.KeepTransmitMicrophoneWarm
+        => userSettings.KeepTransmitMicrophoneWarm;
+
+    ApplicationAudioConfiguration IAudioInputSettingsSession.CurrentConfiguration
+        => CreateApplicationAudioConfiguration();
+
+    AudioProcessingMode IAudioInputSettingsSession.SelectedProcessingMode
+        => GetSelectedAudioProcessingMode();
+
+    void IAudioInputSettingsSession.UpdateTransmitInputOptions(AudioInputProcessingOptions options)
+        => transmitCoordinator.UpdateAudioInputOptions(options);
+
+    Task IAudioInputSettingsSession.ApplyRuntimeSettingsAsync(
+        bool reconfigureRoute,
+        ApplicationAudioConfiguration previousConfiguration,
+        ApplicationAudioConfiguration proposedConfiguration,
+        bool restoreWarmMicrophone)
+        => audioRuntimeSettings.ApplyAsync(
+            reconfigureRoute,
+            previousConfiguration,
+            proposedConfiguration,
+            restoreWarmMicrophone);
+
+    void IAudioInputSettingsSession.PersistUserSettings() => PersistUserSettings();
+
+    void IAudioInputSettingsSession.SetAudioStatus(string status) => AudioStatusText = status;
 
 }

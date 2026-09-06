@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using fnecore.DMR;
 using DvmConsole.Vocoder;
 
@@ -14,11 +17,13 @@ public sealed class DmrTxCallSession : IDisposable
     private readonly byte slot;
     private readonly uint streamId;
     private readonly Action<ReadOnlyMemory<byte>, ushort, uint> send;
+    private readonly ProtocolPacketPacer<DmrOutboundPacket> packetPacer;
     private readonly DmrTxPacketSequence sequence;
     private readonly DmrTxAudioSession audio;
     private readonly DmrPrivacyOptions? privacy;
     private bool started;
     private bool ended;
+    private DmrOutboundPacket? retryTerminator;
     private bool disposed;
 
     public DmrTxCallSession(
@@ -31,6 +36,85 @@ public sealed class DmrTxCallSession : IDisposable
         ushort packetSequence = 0,
         byte frameSequence = 0,
         DmrPrivacyOptions? privacy = null)
+        : this(
+            sourceId,
+            destinationId,
+            slot,
+            streamId,
+            vocoder,
+            send,
+            packetSequence,
+            frameSequence,
+            privacy,
+            waitForNextPacket: null,
+            timeProvider: null)
+    {
+    }
+
+    internal DmrTxCallSession(
+        uint sourceId,
+        uint destinationId,
+        byte slot,
+        uint streamId,
+        IVocoderSession vocoder,
+        Action<ReadOnlyMemory<byte>, ushort, uint> send,
+        Func<CancellationToken, ValueTask> waitForNextPacket,
+        ushort packetSequence = 0,
+        byte frameSequence = 0,
+        DmrPrivacyOptions? privacy = null)
+        : this(
+            sourceId,
+            destinationId,
+            slot,
+            streamId,
+            vocoder,
+            send,
+            packetSequence,
+            frameSequence,
+            privacy,
+            waitForNextPacket ?? throw new ArgumentNullException(nameof(waitForNextPacket)),
+            timeProvider: null)
+    {
+    }
+
+    internal DmrTxCallSession(
+        uint sourceId,
+        uint destinationId,
+        byte slot,
+        uint streamId,
+        IVocoderSession vocoder,
+        Action<ReadOnlyMemory<byte>, ushort, uint> send,
+        TimeProvider timeProvider,
+        ushort packetSequence = 0,
+        byte frameSequence = 0,
+        DmrPrivacyOptions? privacy = null)
+        : this(
+            sourceId,
+            destinationId,
+            slot,
+            streamId,
+            vocoder,
+            send,
+            packetSequence,
+            frameSequence,
+            privacy,
+            waitForNextPacket: null,
+            timeProvider ?? throw new ArgumentNullException(nameof(timeProvider)))
+    {
+    }
+
+    private DmrTxCallSession(
+        uint sourceId,
+        uint destinationId,
+        byte slot,
+        uint streamId,
+        IVocoderSession vocoder,
+        Action<ReadOnlyMemory<byte>, ushort, uint> send,
+        ushort packetSequence,
+        byte frameSequence,
+        DmrPrivacyOptions? privacy,
+        Func<CancellationToken, ValueTask>? waitForNextPacket,
+        TimeProvider? timeProvider)
     {
         if (sourceId == 0 || sourceId > 0xFFFFFF)
             throw new ArgumentOutOfRangeException(nameof(sourceId));
@@ -47,6 +131,9 @@ public sealed class DmrTxCallSession : IDisposable
         this.streamId = streamId;
         this.send = send ?? throw new ArgumentNullException(nameof(send));
         this.privacy = privacy;
+        packetPacer = waitForNextPacket is null
+            ? new ProtocolPacketPacer<DmrOutboundPacket>(PacketInterval, SendPacket, timeProvider)
+            : new ProtocolPacketPacer<DmrOutboundPacket>(waitForNextPacket, SendPacket);
         sequence = new DmrTxPacketSequence(packetSequence, frameSequence);
 
         var lc = new LC
@@ -68,7 +155,7 @@ public sealed class DmrTxCallSession : IDisposable
             slot,
             streamId,
             vocoder ?? throw new ArgumentNullException(nameof(vocoder)),
-            send,
+            QueuePacket,
             sequence,
             // A DMR voice LC header is followed by a voice-sync burst. The
             // legacy transmitter starts its N sequence at zero here; starting
@@ -96,7 +183,7 @@ public sealed class DmrTxCallSession : IDisposable
             slot,
             sequence.FrameSequence,
             encrypted: privacy is not null);
-        send(header, sequence.PacketSequence, streamId);
+        QueuePacket(header, sequence.PacketSequence, streamId);
         sequence.Advance();
         if (privacy is not null)
         {
@@ -106,7 +193,7 @@ public sealed class DmrTxCallSession : IDisposable
                 slot,
                 sequence.FrameSequence,
                 privacy);
-            send(privacyHeader, sequence.PacketSequence, streamId);
+            QueuePacket(privacyHeader, sequence.PacketSequence, streamId);
             sequence.Advance();
         }
         started = true;
@@ -120,47 +207,50 @@ public sealed class DmrTxCallSession : IDisposable
         return audio.Process(samples);
     }
 
-    public ValueTask EndAsync(CancellationToken cancellationToken = default)
-        => EndAsync(WaitForNextPacketAsync, cancellationToken);
-
-    internal async ValueTask EndAsync(
-        Func<CancellationToken, ValueTask> waitForNextPacket,
-        CancellationToken cancellationToken)
+    public async ValueTask EndAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        ArgumentNullException.ThrowIfNull(waitForNextPacket);
         if (!started)
             throw new InvalidOperationException("The DMR call has not started.");
         if (ended)
             return;
 
-        IReadOnlyList<DmrOutboundPacket> completion = audio.PrepareSuperframeCompletion();
-        foreach (DmrOutboundPacket packet in completion)
+        if (retryTerminator is { } pendingTerminator)
         {
-            await waitForNextPacket(cancellationToken).ConfigureAwait(false);
-            send(packet.Payload, packet.Sequence, packet.StreamId);
+            SendPacket(pendingTerminator);
+            ended = true;
+            return;
         }
 
-        await waitForNextPacket(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<DmrOutboundPacket> completion = audio.PrepareSuperframeCompletion();
         byte[] terminator = DmrVoicePacketCodec.CreateTerminatorPacket(
             sourceId,
             destinationId,
             slot,
             sequence.FrameSequence,
             encrypted: privacy is not null);
-        send(terminator, sequence.PacketSequence, streamId);
+        var finalPacket = new DmrOutboundPacket(terminator, sequence.PacketSequence, streamId);
+        retryTerminator = finalPacket;
         sequence.Advance();
+        foreach (DmrOutboundPacket packet in completion)
+            packetPacer.Enqueue(packet);
+        packetPacer.Enqueue(finalPacket);
+        await packetPacer.CompleteAsync(cancellationToken).ConfigureAwait(false);
         ended = true;
     }
-
-    private static async ValueTask WaitForNextPacketAsync(CancellationToken cancellationToken)
-        => await Task.Delay(PacketInterval, cancellationToken).ConfigureAwait(false);
 
     public void Dispose()
     {
         if (disposed)
             return;
+        packetPacer.Dispose();
         audio.Dispose();
         disposed = true;
     }
+
+    private void QueuePacket(ReadOnlyMemory<byte> payload, ushort packetSequence, uint packetStreamId)
+        => packetPacer.Enqueue(new DmrOutboundPacket(payload, packetSequence, packetStreamId));
+
+    private void SendPacket(DmrOutboundPacket packet)
+        => send(packet.Payload, packet.Sequence, packet.StreamId);
 }

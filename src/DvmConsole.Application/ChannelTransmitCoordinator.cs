@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
@@ -7,6 +10,78 @@ using DvmConsole.Vocoder;
 namespace DvmConsole.Application;
 
 public sealed record TransmitTarget(TransmitChannelDescriptor Channel, IRadioTrafficEndpoint System);
+
+public delegate void BorrowedTransmitSamplesObserver(
+    ChannelId channelId,
+    uint streamId,
+    uint sourceId,
+    ReadOnlySpan<short> samples);
+
+internal interface ITransmitAudioBackendPort
+{
+    IAudioBackend CreateAudioBackend();
+    IVocoderBackend CreateVocoderBackend();
+}
+
+internal interface ITransmitKeyPort
+{
+    IP25KeyResolver? P25 { get; }
+    IDmrKeyResolver? Dmr { get; }
+    INxdnKeyResolver? Nxdn { get; }
+}
+
+internal interface ITransmitSampleObservationPort
+{
+    bool ObservesBorrowedSamples { get; }
+    bool ObservesOwnedSamples { get; }
+    void ObserveBorrowed(ChannelId channelId, uint streamId, uint sourceId, ReadOnlySpan<short> samples);
+    void ObserveOwned(ChannelId channelId, uint streamId, uint sourceId, ReadOnlyMemory<short> samples);
+    void ReportFault(Exception exception);
+}
+
+internal sealed class TransmitAudioBackendPort(
+    Func<IAudioBackend> createAudioBackend,
+    Func<IVocoderBackend> createVocoderBackend) : ITransmitAudioBackendPort
+{
+    public IAudioBackend CreateAudioBackend() => createAudioBackend();
+    public IVocoderBackend CreateVocoderBackend() => createVocoderBackend();
+}
+
+internal sealed record TransmitKeyPort(
+    IP25KeyResolver? P25,
+    IDmrKeyResolver? Dmr,
+    INxdnKeyResolver? Nxdn) : ITransmitKeyPort;
+
+internal sealed class TransmitSampleObservationPort(
+    Action<ChannelId, uint, uint, ReadOnlyMemory<short>>? owned = null,
+    BorrowedTransmitSamplesObserver? borrowed = null,
+    Action<Exception>? fault = null) : ITransmitSampleObservationPort
+{
+    public bool ObservesBorrowedSamples => borrowed is not null;
+    public bool ObservesOwnedSamples => owned is not null;
+
+    public void ObserveBorrowed(
+        ChannelId channelId,
+        uint streamId,
+        uint sourceId,
+        ReadOnlySpan<short> samples)
+        => borrowed?.Invoke(channelId, streamId, sourceId, samples);
+
+    public void ObserveOwned(
+        ChannelId channelId,
+        uint streamId,
+        uint sourceId,
+        ReadOnlyMemory<short> samples)
+        => owned?.Invoke(channelId, streamId, sourceId, samples);
+
+    public void ReportFault(Exception exception)
+    {
+        if (fault is not null)
+            fault(exception);
+        else
+            System.Diagnostics.Trace.TraceError("Transmit sample observer failed: {0}", exception);
+    }
+}
 
 public sealed record MicrophoneStartExpectation(bool StartsCold, bool? IsBluetooth)
 {
@@ -20,6 +95,16 @@ public enum DefaultInputRefreshResult
     DeferredUntilIdle
 }
 
+public sealed class ActiveChannelsChangedEventArgs : EventArgs
+{
+    internal ActiveChannelsChangedEventArgs(IEnumerable<ChannelId> channelIds)
+    {
+        ChannelIds = Array.AsReadOnly(channelIds.ToArray());
+    }
+
+    public IReadOnlyList<ChannelId> ChannelIds { get; }
+}
+
 // Lazily owns explicit transmit calls. Direct PTT starts one target; global
 // PTT may start several targets, all fed by one microphone capture stream.
 public sealed class ChannelTransmitCoordinator : IAsyncDisposable
@@ -28,14 +113,12 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         TimeSpan.FromSeconds(8);
     private static TimeSpan MicrophonePostCueRecoveryTimeout { get; } =
         TimeSpan.FromSeconds(2);
-    private readonly IP25KeyResolver? p25KeyResolver;
-    private readonly IDmrKeyResolver? dmrKeyResolver;
-    private readonly INxdnKeyResolver? nxdnKeyResolver;
-    private readonly Action<ChannelId, uint, uint, ReadOnlyMemory<short>>? samplesObserver;
-    private readonly Func<IAudioBackend> createAudioBackend;
-    private readonly Func<IVocoderBackend> createVocoderBackend;
+    private readonly ITransmitKeyPort keyPort;
+    private readonly ITransmitSampleObservationPort sampleObservation;
+    private readonly ITransmitAudioBackendPort backendPort;
     private readonly TimeProvider timeProvider;
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly AsyncDisposal disposal = new();
     private IAudioBackend? audioBackend;
     private IVocoderBackend? vocoderBackend;
     private SharedAudioCapture? sharedCapture;
@@ -45,7 +128,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     private bool refreshDefaultInputWhenIdle;
     private readonly List<ActiveTransmit> active = [];
     private ActiveTransmit[] activeSnapshot = [];
-    private bool disposed;
+    private int lifecycleState;
     private volatile bool microphoneAudioSuppressed;
     private AudioInputProcessingOptions audioInputOptions;
     private readonly TimeSpan microphoneStaleAfter;
@@ -54,6 +137,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     private int microphoneReadinessConfirmed;
 
     public event EventHandler<Exception>? Faulted;
+    public event EventHandler<ActiveChannelsChangedEventArgs>? ActiveChannelsChanged;
     public MicrophoneHealth MicrophoneHealth
     {
         get
@@ -107,12 +191,14 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         null);
 
     public async Task<MicrophoneStartExpectation> InspectNextMicrophoneStartAsync(
+        bool? selectedInputIsBluetooth = null,
         CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ThrowIfDisposingOrDisposed();
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfDisposingOrDisposed();
             if (sharedCapture is not null)
             {
                 MicrophoneHealth health = sharedCapture.Health;
@@ -128,9 +214,20 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                     sharedCaptureIsBluetooth);
             }
 
+            // Audio Settings already owns a current device catalog. Reuse its
+            // transport-neutral classification instead of constructing a
+            // second backend and enumerating every endpoint immediately before
+            // StartAsync repeats the work to open the selected microphone.
+            if (selectedInputIsBluetooth is bool cachedBluetooth)
+            {
+                return new MicrophoneStartExpectation(
+                    StartsCold: true,
+                    cachedBluetooth);
+            }
+
             return await Task.Run(() =>
             {
-                using IAudioBackend backend = createAudioBackend();
+                using IAudioBackend backend = backendPort.CreateAudioBackend();
                 AudioDeviceSelection selection = AudioDeviceSelector.Select(
                     backend.EnumerateDevices(AudioDirection.Input),
                     AudioDirection.Input,
@@ -155,21 +252,41 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         IDmrKeyResolver? dmrKeyResolver = null,
         INxdnKeyResolver? nxdnKeyResolver = null,
         TimeSpan? microphoneStaleAfter = null,
+        TimeProvider? timeProvider = null,
+        BorrowedTransmitSamplesObserver? borrowedSamplesObserver = null,
+        Action<Exception>? samplesObserverFaultHandler = null)
+        : this(
+            new TransmitKeyPort(p25KeyResolver, dmrKeyResolver, nxdnKeyResolver),
+            audioInputOptions,
+            new TransmitAudioBackendPort(
+                createAudioBackend ?? (() => throw new InvalidOperationException(
+                    "An audio backend factory is required for transmit.")),
+                createVocoderBackend ?? (() => throw new InvalidOperationException(
+                    "A vocoder backend factory is required for digital transmit."))),
+            new TransmitSampleObservationPort(
+                samplesObserver,
+                borrowedSamplesObserver,
+                samplesObserverFaultHandler),
+            microphoneStaleAfter,
+            timeProvider)
+    {
+    }
+
+    internal ChannelTransmitCoordinator(
+        ITransmitKeyPort keyPort,
+        AudioInputProcessingOptions? audioInputOptions,
+        ITransmitAudioBackendPort backendPort,
+        ITransmitSampleObservationPort sampleObservation,
+        TimeSpan? microphoneStaleAfter = null,
         TimeProvider? timeProvider = null)
     {
-        this.p25KeyResolver = p25KeyResolver;
-        this.dmrKeyResolver = dmrKeyResolver;
-        this.nxdnKeyResolver = nxdnKeyResolver;
+        this.keyPort = keyPort ?? throw new ArgumentNullException(nameof(keyPort));
         this.audioInputOptions = (audioInputOptions ?? new AudioInputProcessingOptions()).Normalize();
         this.microphoneStaleAfter = microphoneStaleAfter ?? TimeSpan.FromMilliseconds(250);
         if (this.microphoneStaleAfter <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(microphoneStaleAfter));
-        this.samplesObserver = samplesObserver;
-        this.createAudioBackend = createAudioBackend ??
-            (() => throw new InvalidOperationException("An audio backend factory is required for transmit."));
-        this.createVocoderBackend = createVocoderBackend ??
-            (() => throw new InvalidOperationException(
-                "A vocoder backend factory is required for digital transmit."));
+        this.backendPort = backendPort ?? throw new ArgumentNullException(nameof(backendPort));
+        this.sampleObservation = sampleObservation ?? throw new ArgumentNullException(nameof(sampleObservation));
         this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -184,7 +301,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     // suppressed; they are never buffered and replayed later.
     public void SetMicrophoneAudioSuppressed(bool suppressed)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ThrowIfDisposingOrDisposed();
         microphoneAudioSuppressed = suppressed;
         sharedCapture?.SetSamplesSuppressed(suppressed);
     }
@@ -193,10 +310,11 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     // for Bluetooth headsets, whose microphone profile can take time to wake.
     public async Task SetKeepMicrophoneWarmAsync(bool enabled)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ThrowIfDisposingOrDisposed();
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
+            ThrowIfDisposingOrDisposed();
             if (!enabled)
             {
                 refreshDefaultInputWhenIdle = false;
@@ -233,10 +351,11 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     public async Task<DefaultInputRefreshResult> RefreshSystemDefaultInputAsync(
         CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ThrowIfDisposingOrDisposed();
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfDisposingOrDisposed();
             if (sharedCapture is null || !sharedCaptureFollowsSystemDefault)
                 return DefaultInputRefreshResult.NotRequired;
             if (active.Count > 0)
@@ -264,7 +383,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         TimeSpan? timeout = null,
         CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ThrowIfDisposingOrDisposed();
         SharedAudioCapture capture = sharedCapture ??
             throw new InvalidOperationException("The transmit microphone path has not been started.");
         if (Volatile.Read(ref activeSnapshot).Length == 0)
@@ -278,15 +397,17 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     }
 
     // Releases the startup gate only after the selected microphone has proven
-    // it resumed following a cold Bluetooth permit-tone route transition.
+    // it delivered a fresh callback after permit-tone presentation or a cold
+    // Bluetooth route transition. The proving callback remains suppressed.
     // Once the gate opens, the normal active-transmit stale/fault watchdog is
     // responsible for failing the call closed.
     public async Task<TimeSpan> ReleaseMicrophoneAudioAsync(
         bool requireFreshRecoveryCallback,
         TimeSpan? recoveryTimeout = null,
+        TimeSpan postCueSuppressionDuration = default,
         CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ThrowIfDisposingOrDisposed();
         SharedAudioCapture capture = sharedCapture ??
             throw new InvalidOperationException("The transmit microphone path has not been started.");
         if (Volatile.Read(ref activeSnapshot).Length == 0)
@@ -297,6 +418,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         {
             recovery = await capture.WaitForNextPhysicalSamplesAsync(
                 recoveryTimeout ?? MicrophonePostCueRecoveryTimeout,
+                postCueSuppressionDuration,
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -324,10 +446,11 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     // settle, but no call-start packet is emitted until activation.
     public async Task ActivateAsync(CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ThrowIfDisposingOrDisposed();
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfDisposingOrDisposed();
             if (active.Count == 0)
                 throw new InvalidOperationException("No transmit call is prepared for activation.");
 
@@ -343,7 +466,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
     public async Task StartAsync(IEnumerable<TransmitTarget> targets)
     {
         ArgumentNullException.ThrowIfNull(targets);
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ThrowIfDisposingOrDisposed();
         TransmitTarget[] requested = targets
             .Where(target => target.Channel is not null && target.System is not null)
             .GroupBy(target => target.Channel.Id)
@@ -352,11 +475,16 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         if (requested.Length == 0)
             throw new InvalidOperationException("Select at least one transmit-capable channel.");
 
+        var stateChanges = new List<ActiveChannelsChangedEventArgs>(2);
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
+            ThrowIfDisposingOrDisposed();
             ValidateTargets(requested);
-            await StopCoreAsync(clearMicrophoneSuppression: false).ConfigureAwait(false);
+            await StopCoreAsync(
+                clearMicrophoneSuppression: false,
+                forceDispose: false,
+                stateChanges.Add).ConfigureAwait(false);
 
             IAudioBackend? createdAudioBackend = null;
             IVocoderBackend? createdVocoderBackend = null;
@@ -368,7 +496,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             {
                 if (sharedCapture is null)
                 {
-                    IAudioBackend backend = audioBackend ??= createAudioBackend();
+                    IAudioBackend backend = audioBackend ?? backendPort.CreateAudioBackend();
                     createdAudioBackend = backend;
                     createdSharedCapture = CreateSharedCapture(backend);
                 }
@@ -377,68 +505,81 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 
                 if (requested.Any(target => ChannelProtocolMediaMapper.RequiresVocoder(
                         target.Channel.Definition.Protocol)))
-                    createdVocoderBackend = createVocoderBackend();
+                    createdVocoderBackend = backendPort.CreateVocoderBackend();
 
                 foreach (TransmitTarget target in requested)
                 {
                     ChannelProtocol protocol = target.Channel.Definition.Protocol;
                     uint sourceId = target.System.SourceId!.Value;
                     uint streamId = target.System.CreateStreamId();
+                    var dmrPrivacy = protocol == ChannelProtocol.Dmr ? CreateDmrPrivacyOptions(target.Channel) : null;
+                    var nxdnPrivacy = protocol == ChannelProtocol.Nxdn ? CreateNxdnPrivacyOptions(target.Channel) : null;
+                    var p25Encryption = protocol == ChannelProtocol.P25 ? CreateP25EncryptionOptions(target.Channel) : null;
                     SharedAudioCapture.Lease lease = createdSharedCapture!.CreateLease();
-                    Action<ReadOnlyMemory<byte>, ushort, uint> send = (payload, sequence, stream) => target.System.SendTraffic(
-                        ChannelProtocolMediaMapper.ToTrafficProtocol(protocol),
-                        payload.Span,
-                        sequence,
-                        stream);
+                    IVocoderSession? ownedVocoder = null;
+                    try
+                    {
+                        Action<ReadOnlyMemory<byte>, ushort, uint> send = (payload, sequence, stream) => target.System.SendTraffic(
+                            ChannelProtocolMediaMapper.ToTrafficProtocol(protocol),
+                            payload,
+                            sequence,
+                            stream);
 
-                    ITransmitCaptureSession session;
-                    if (protocol == ChannelProtocol.Analog)
-                    {
-                        session = new AnalogTransmitCaptureSession(
-                            lease,
-                            sourceId,
-                            target.Channel.Definition.DestinationId,
-                            streamId,
-                            send);
-                    }
-                    else
-                    {
-                        IVocoderSession vocoder = createdVocoderBackend!.CreateSession(
-                            ChannelProtocolMediaMapper.ToVocoderMode(protocol));
-                        session = protocol switch
+                        ITransmitCaptureSession session;
+                        if (protocol == ChannelProtocol.Analog)
                         {
-                            ChannelProtocol.Dmr => new DmrTransmitCaptureSession(
+                            session = new AnalogTransmitCaptureSession(
                                 lease,
-                                vocoder,
                                 sourceId,
                                 target.Channel.Definition.DestinationId,
-                                target.Channel.Definition.Slot,
                                 streamId,
-                                send,
-                                CreateDmrPrivacyOptions(target.Channel)),
-                            ChannelProtocol.Nxdn => new NxdnTransmitCaptureSession(
+                                send);
+                        }
+                        else
+                        {
+                            IVocoderSession vocoder = ownedVocoder = createdVocoderBackend!.CreateSession(
+                                ChannelProtocolMediaMapper.ToVocoderMode(protocol));
+                            session = protocol switch
+                            {
+                                ChannelProtocol.Dmr => new DmrTransmitCaptureSession(
+                                    lease,
+                                    vocoder,
+                                    sourceId,
+                                    target.Channel.Definition.DestinationId,
+                                    target.Channel.Definition.Slot,
+                                    streamId,
+                                    send,
+                                    dmrPrivacy),
+                                ChannelProtocol.Nxdn => new NxdnTransmitCaptureSession(
+                                        lease,
+                                        vocoder,
+                                        sourceId,
+                                        target.Channel.Definition.DestinationId,
+                                        streamId,
+                                        send,
+                                        privacy: nxdnPrivacy),
+                                ChannelProtocol.P25 => new P25TransmitCaptureSession(
                                     lease,
                                     vocoder,
                                     sourceId,
                                     target.Channel.Definition.DestinationId,
                                     streamId,
                                     send,
-                                    privacy: CreateNxdnPrivacyOptions(target.Channel)),
-                            ChannelProtocol.P25 => new P25TransmitCaptureSession(
-                                lease,
-                                vocoder,
-                                sourceId,
-                                target.Channel.Definition.DestinationId,
-                                streamId,
-                                send,
-                                CreateP25EncryptionOptions(target.Channel)),
-                            _ => throw new InvalidOperationException(
-                                $"Unsupported transmit protocol '{protocol}'.")
-                        };
-                    }
+                                    p25Encryption),
+                                _ => throw new InvalidOperationException(
+                                    $"Unsupported transmit protocol '{protocol}'.")
+                            };
+                        }
 
-                    session.Faulted += HandleSessionFaulted;
-                    created.Add(new ActiveTransmit(target.Channel, streamId, sourceId, session));
+                        session.Faulted += HandleSessionFaulted;
+                        created.Add(new ActiveTransmit(target.Channel, streamId, sourceId, session));
+                    }
+                    catch
+                    {
+                        try { ownedVocoder?.Dispose(); }
+                        finally { await lease.DisposeAsync().ConfigureAwait(false); }
+                        throw;
+                    }
                 }
 
                 foreach (ActiveTransmit entry in created)
@@ -448,64 +589,121 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 vocoderBackend = createdVocoderBackend;
                 sharedCapture ??= createdSharedCapture;
                 active.AddRange(created);
-                PublishActiveSnapshot();
+                if (CommitActiveSnapshot() is { } stateChange)
+                    stateChanges.Add(stateChange);
                 ActiveMicrophoneStartedCold = !reusedReadyCapture;
                 ActiveMicrophoneIsBluetooth = sharedCaptureIsBluetooth;
                 Volatile.Write(ref microphoneReadinessConfirmed, reusedReadyCapture ? 1 : 0);
                 StartMicrophoneMonitor();
             }
-            catch
+            catch (Exception preparationFailure)
             {
-                await DisposeEntriesAsync(created).ConfigureAwait(false);
+                var failures = new List<Exception> { preparationFailure };
+                try { await DisposeEntriesAsync(created).ConfigureAwait(false); }
+                catch (Exception exception) { failures.Add(exception); }
                 if (!reusedWarmCapture && createdSharedCapture is not null)
-                    await createdSharedCapture.DisposeAsync().ConfigureAwait(false);
-                createdVocoderBackend?.Dispose();
+                {
+                    try { await createdSharedCapture.DisposeAsync().ConfigureAwait(false); }
+                    catch (Exception exception) { failures.Add(exception); }
+                }
+                try { createdVocoderBackend?.Dispose(); }
+                catch (Exception exception) { failures.Add(exception); }
                 if (!reusedWarmCapture)
-                    createdAudioBackend?.Dispose();
+                {
+                    if (ReferenceEquals(audioBackend, createdAudioBackend))
+                        audioBackend = null;
+                    try { createdAudioBackend?.Dispose(); }
+                    catch (Exception exception) { failures.Add(exception); }
+                }
+                if (failures.Count > 1)
+                    throw new AggregateException("Transmit preparation and rollback failed.", failures);
                 throw;
             }
         }
         finally
         {
             gate.Release();
+            NotifyActiveChannelsChanged(stateChanges);
         }
     }
 
     public async Task StopAsync()
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
+        ThrowIfDisposingOrDisposed();
+        ActiveChannelsChangedEventArgs? stateChange = null;
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await StopCoreAsync(clearMicrophoneSuppression: true).ConfigureAwait(false);
+            ThrowIfDisposingOrDisposed();
+            await StopCoreAsync(
+                clearMicrophoneSuppression: true,
+                forceDispose: false,
+                change => stateChange = change).ConfigureAwait(false);
         }
         finally
         {
             gate.Release();
+            if (stateChange is not null)
+                NotifyActiveChannelsChanged([stateChange]);
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (disposed)
-            return;
+        Interlocked.CompareExchange(ref lifecycleState, 1, 0);
+        return disposal.RunAsync(DisposeCoreAsync);
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        ActiveChannelsChangedEventArgs? stateChange = null;
+        var failures = new List<Exception>();
         await gate.WaitAsync().ConfigureAwait(false);
         try
         {
             if (warmCaptureLease is not null)
             {
-                await warmCaptureLease.DisposeAsync().ConfigureAwait(false);
-                warmCaptureLease = null;
+                try
+                {
+                    await warmCaptureLease.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    failures.Add(exception);
+                }
+                finally
+                {
+                    warmCaptureLease = null;
+                }
             }
-            await StopCoreAsync(clearMicrophoneSuppression: true).ConfigureAwait(false);
-            disposed = true;
+            try
+            {
+                await StopCoreAsync(
+                    clearMicrophoneSuppression: true,
+                    forceDispose: true,
+                    change => stateChange = change).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failures.Add(exception);
+            }
+            Volatile.Write(ref lifecycleState, 2);
         }
         finally
         {
             gate.Release();
-            gate.Dispose();
+            if (stateChange is not null)
+                NotifyActiveChannelsChanged([stateChange]);
         }
+
+        if (failures.Count > 0)
+            throw new AggregateException("Transmit cleanup failed.", failures);
     }
+
+    private void ThrowIfDisposingOrDisposed()
+        => ObjectDisposedException.ThrowIf(
+            Volatile.Read(ref lifecycleState) != 0,
+            this);
 
     private static void ValidateTargets(IEnumerable<TransmitTarget> targets)
     {
@@ -528,35 +726,71 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         }
     }
 
-    private async Task StopCoreAsync(bool clearMicrophoneSuppression)
+    private async Task StopCoreAsync(
+        bool clearMicrophoneSuppression,
+        bool forceDispose,
+        Action<ActiveChannelsChangedEventArgs> stateChanged)
     {
+        // Release microphone delivery for the whole selection before awaiting
+        // any target. A slow terminator must not keep feeding the other calls.
+        bool suppressionBeforeStop = microphoneAudioSuppressed;
+        microphoneAudioSuppressed = true;
+        sharedCapture?.SetSamplesSuppressed(true);
         await StopMicrophoneMonitorAsync().ConfigureAwait(false);
-        ActiveTransmit[] current = active.ToArray();
-        active.Clear();
-        PublishActiveSnapshot();
-        Volatile.Write(ref microphoneReadinessConfirmed, 0);
-        ActiveMicrophoneStartedCold = false;
-        ActiveMicrophoneIsBluetooth = null;
-        Exception? failure = null;
-        try
+        ActiveTransmit[] current = active.AsEnumerable().Reverse().ToArray();
+        Task<Exception?>[] stops = current
+            .Select(entry => Task.Run(() => StopSessionAsync(entry)))
+            .ToArray();
+        Exception?[] stopFailures = await Task.WhenAll(stops).ConfigureAwait(false);
+        var failures = new List<Exception>();
+        for (int index = 0; index < current.Length; index++)
         {
-            await DisposeEntriesAsync(current).ConfigureAwait(false);
+            ActiveTransmit entry = current[index];
+            bool stopConfirmed = stopFailures[index] is null;
+            if (stopFailures[index] is { } stopFailure)
+                failures.Add(stopFailure);
+
+            if (!stopConfirmed && !forceDispose)
+                continue;
+
+            try
+            {
+                await DisposeEntryAsync(entry).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failures.Add(new InvalidOperationException(
+                    $"Transmit session disposal failed for '{entry.Channel.Name}'.",
+                    exception));
+            }
+            finally
+            {
+                // A confirmed stop, or forced final disposal, has severed the
+                // local capture/call path. Only now may ownership disappear.
+                active.Remove(entry);
+            }
         }
-        catch (Exception exception)
+
+        if (CommitActiveSnapshot() is { } stateChange)
+            stateChanged(stateChange);
+
+        if (active.Count == 0)
         {
-            failure = exception;
+            Volatile.Write(ref microphoneReadinessConfirmed, 0);
+            ActiveMicrophoneStartedCold = false;
+            ActiveMicrophoneIsBluetooth = null;
         }
 
         // Keep startup frames gated until every transmit session has stopped.
         // Clearing suppression first creates a window where a failed permit
         // cue can leak microphone audio before cleanup sends terminators.
-        if (clearMicrophoneSuppression)
+        if (active.Count == 0)
         {
-            microphoneAudioSuppressed = false;
-            sharedCapture?.SetSamplesSuppressed(false);
+            microphoneAudioSuppressed = !clearMicrophoneSuppression && suppressionBeforeStop;
+            sharedCapture?.SetSamplesSuppressed(microphoneAudioSuppressed);
         }
 
-        if (sharedCapture is not null && warmCaptureLease is null)
+        if (active.Count == 0 && sharedCapture is not null && warmCaptureLease is null)
         {
             try
             {
@@ -564,34 +798,53 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             }
             catch (Exception exception)
             {
-                failure ??= exception;
+                failures.Add(exception);
             }
             sharedCapture = null;
             sharedCaptureFollowsSystemDefault = false;
             sharedCaptureIsBluetooth = null;
         }
-        vocoderBackend?.Dispose();
-        vocoderBackend = null;
-        if (warmCaptureLease is null)
+        if (active.Count == 0)
         {
-            audioBackend?.Dispose();
-            audioBackend = null;
-            refreshDefaultInputWhenIdle = false;
-        }
-        else if (refreshDefaultInputWhenIdle)
-        {
-            refreshDefaultInputWhenIdle = false;
             try
             {
-                await RestartSharedCaptureCoreAsync().ConfigureAwait(false);
+                vocoderBackend?.Dispose();
             }
             catch (Exception exception)
             {
-                failure ??= exception;
+                failures.Add(exception);
+            }
+            vocoderBackend = null;
+            if (warmCaptureLease is null)
+            {
+                try
+                {
+                    audioBackend?.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    failures.Add(exception);
+                }
+                audioBackend = null;
+                refreshDefaultInputWhenIdle = false;
+            }
+            else if (refreshDefaultInputWhenIdle)
+            {
+                refreshDefaultInputWhenIdle = false;
+                try
+                {
+                    await RestartSharedCaptureCoreAsync().ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    failures.Add(exception);
+                }
             }
         }
-        if (failure is not null)
-            throw failure;
+        if (failures.Count == 1)
+            throw failures[0];
+        if (failures.Count > 1)
+            throw new AggregateException("Transmit cleanup failed.", failures);
     }
 
     private async Task StopInfrastructureCoreAsync()
@@ -630,6 +883,24 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             throw failure;
     }
 
+    private static async Task<Exception?> StopSessionAsync(ActiveTransmit entry)
+    {
+        try
+        {
+            // Each target has its own capture lease and call drain. Dispatch
+            // independently so even a synchronous transport stall cannot delay
+            // requesting stop on the remaining targets.
+            await entry.Session.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return new InvalidOperationException(
+                $"Transmit stop remains unconfirmed for '{entry.Channel.Name}'.",
+                exception);
+        }
+    }
+
     private async Task DisposeEntriesAsync(IEnumerable<ActiveTransmit> entries)
     {
         Task[] disposals = entries
@@ -645,7 +916,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         await entry.Session.DisposeAsync().ConfigureAwait(false);
     }
 
-    private void HandleSessionFaulted(object? sender, Exception exception) => Faulted?.Invoke(this, exception);
+    private void HandleSessionFaulted(object? sender, Exception exception) => ReportFault(exception);
 
     private void StartMicrophoneMonitor()
     {
@@ -719,16 +990,15 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                     ? $"no fresh samples for {health.LastSampleAge?.TotalMilliseconds:0} ms"
                     : "capture pump faulted"
                 : health.Fault;
-            Faulted?.Invoke(
-                this,
-                new IOException($"Transmit microphone became {health.State.ToString().ToLowerInvariant()}: {detail}."));
+            ReportFault(new IOException(
+                $"Transmit microphone became {health.State.ToString().ToLowerInvariant()}: {detail}."));
             return;
         }
     }
 
     private async Task StartWarmCaptureCoreAsync()
     {
-        audioBackend ??= createAudioBackend();
+        audioBackend ??= backendPort.CreateAudioBackend();
         sharedCapture ??= CreateSharedCapture(audioBackend);
         SharedAudioCapture.Lease lease = sharedCapture.CreateLease();
         try
@@ -779,14 +1049,50 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         var capture = new ProcessedAudioCapture(
             backend.OpenCapture(input, PcmAudioFormat.Voice8KhzMono16Bit),
             audioInputOptions);
-        if (samplesObserver is not null)
+        if (sampleObservation.ObservesBorrowedSamples)
+        {
+            capture.BorrowedSamplesAvailable += samples =>
+            {
+                if (microphoneAudioSuppressed)
+                    return;
+                foreach (ActiveTransmit entry in Volatile.Read(ref activeSnapshot))
+                {
+                    try
+                    {
+                        sampleObservation.ObserveBorrowed(
+                            entry.Channel.Id,
+                            entry.StreamId,
+                            entry.SourceId,
+                            samples);
+                    }
+                    catch (Exception exception)
+                    {
+                        ReportSamplesObserverFailure(entry, exception);
+                    }
+                }
+            };
+        }
+        else if (sampleObservation.ObservesOwnedSamples)
         {
             capture.SamplesAvailable += (_, args) =>
             {
                 if (microphoneAudioSuppressed)
                     return;
                 foreach (ActiveTransmit entry in Volatile.Read(ref activeSnapshot))
-                    samplesObserver(entry.Channel.Id, entry.StreamId, entry.SourceId, args.Samples);
+                {
+                    try
+                    {
+                        sampleObservation.ObserveOwned(
+                            entry.Channel.Id,
+                            entry.StreamId,
+                            entry.SourceId,
+                            args.Samples);
+                    }
+                    catch (Exception exception)
+                    {
+                        ReportSamplesObserverFailure(entry, exception);
+                    }
+                }
             };
         }
         var shared = new SharedAudioCapture(
@@ -799,29 +1105,107 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         return shared;
     }
 
+    private void ReportSamplesObserverFailure(ActiveTransmit entry, Exception exception)
+    {
+        var failure = new InvalidOperationException(
+            $"Transmit sample observation failed for channel '{entry.Channel.Name}' " +
+            $"and stream {entry.StreamId}.",
+            exception);
+        try
+        {
+            sampleObservation.ReportFault(failure);
+        }
+        catch (Exception reportingFailure)
+        {
+            System.Diagnostics.Trace.TraceError(
+                "Transmit sample observer fault reporting failed: {0}; original failure: {1}",
+                reportingFailure,
+                failure);
+        }
+    }
+
     private P25TxEncryptionOptions? CreateP25EncryptionOptions(TransmitChannelDescriptor channel)
         => ChannelTransmitDefinitionFactory.CreateEncryptionOptions(
             channel,
             ChannelTransmitDefinitionFactory.Create(channel),
-            p25KeyResolver);
+            keyPort.P25);
 
     private DmrPrivacyOptions? CreateDmrPrivacyOptions(TransmitChannelDescriptor channel)
         => ChannelTransmitDefinitionFactory.CreateDmrPrivacyOptions(
             channel,
             ChannelTransmitDefinitionFactory.Create(channel),
-            dmrKeyResolver);
+            keyPort.Dmr);
 
     private NxdnPrivacyOptions? CreateNxdnPrivacyOptions(TransmitChannelDescriptor channel)
         => ChannelTransmitDefinitionFactory.CreateNxdnPrivacyOptions(
             channel,
             ChannelTransmitDefinitionFactory.Create(channel),
-            nxdnKeyResolver);
+            keyPort.Nxdn);
 
     // The coordinator gate remains the sole writer. Readers include capture
     // callbacks and UI properties, so publish an immutable point-in-time view
     // instead of enumerating the mutable lifecycle list concurrently.
-    private void PublishActiveSnapshot()
-        => Volatile.Write(ref activeSnapshot, active.ToArray());
+    private ActiveChannelsChangedEventArgs? CommitActiveSnapshot()
+    {
+        ActiveTransmit[] previous = Volatile.Read(ref activeSnapshot);
+        ActiveTransmit[] snapshot = active.ToArray();
+        Volatile.Write(ref activeSnapshot, snapshot);
+        if (previous.Length == snapshot.Length && previous
+            .Select(entry => entry.Channel.Id)
+            .SequenceEqual(snapshot.Select(entry => entry.Channel.Id)))
+        {
+            return null;
+        }
+        return new ActiveChannelsChangedEventArgs(snapshot.Select(entry => entry.Channel.Id));
+    }
+
+    private void NotifyActiveChannelsChanged(
+        IEnumerable<ActiveChannelsChangedEventArgs> stateChanges)
+    {
+        foreach (ActiveChannelsChangedEventArgs stateChange in stateChanges)
+        {
+            EventHandler<ActiveChannelsChangedEventArgs>? observers = ActiveChannelsChanged;
+            if (observers is null)
+                continue;
+            foreach (EventHandler<ActiveChannelsChangedEventArgs> observer in observers.GetInvocationList())
+            {
+                try
+                {
+                    observer(this, stateChange);
+                }
+                catch (Exception exception)
+                {
+                    ReportFault(new InvalidOperationException(
+                        "An active-channel state observer failed.",
+                        exception));
+                }
+            }
+        }
+    }
+
+    private void ReportFault(Exception exception)
+    {
+        EventHandler<Exception>? observers = Faulted;
+        if (observers is null)
+        {
+            System.Diagnostics.Trace.TraceError("Transmit coordinator fault: {0}", exception);
+            return;
+        }
+
+        foreach (EventHandler<Exception> observer in observers.GetInvocationList())
+        {
+            try
+            {
+                observer(this, exception);
+            }
+            catch (Exception observerException)
+            {
+                System.Diagnostics.Trace.TraceError(
+                    "Transmit fault observer failed: {0}",
+                    observerException);
+            }
+        }
+    }
 
     private sealed record ActiveTransmit(
         TransmitChannelDescriptor Channel,

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Vocoder;
 using Xunit;
 
@@ -37,6 +40,52 @@ public sealed class SoftwareVocoderTests
         Assert.Equal(0, session.DecodeLost(decodedSamples));
         Assert.Equal(codeword.Length, session.FlushEncode(codeword));
         Assert.Equal(0, session.FlushEncode(codeword));
+    }
+
+    [Theory]
+    [InlineData(VocoderMode.DmrAmbe)]
+    [InlineData(VocoderMode.P25Imbe)]
+    [InlineData(VocoderMode.NxdnAmbe)]
+    [InlineData(VocoderMode.P25Phase2Ambe)]
+    public void DeferredProcessingPreservesRawDecodeIncludingConcealmentAndReset(VocoderMode mode)
+    {
+        using var processedBackend = new SoftwareVocoderBackend(new Dictionary<VocoderMode, ReceiveAudioProcessingOptions>
+        {
+            [mode] = new() { CompressorEnabled = true, PeakingGainDb = 10 }
+        });
+        using var rawBackend = new SoftwareVocoderBackend(new Dictionary<VocoderMode, ReceiveAudioProcessingOptions>
+        {
+            [mode] = new() { HighPassFilterEnabled = false, PeakingFilterEnabled = false, CompressorEnabled = false }
+        });
+        using var encoder = rawBackend.CreateSession(mode);
+        using var raw = rawBackend.CreateSession(mode);
+        using var deferred = processedBackend.CreateSession(mode);
+        var processing = Assert.IsAssignableFrom<IReceiveAudioProcessingSession>(deferred);
+        processing.DeferReceiveAudioProcessing();
+        short[] input = Enumerable.Range(0, 160).Select(i => (short)(Math.Sin(i * 0.15) * 8000)).ToArray();
+        byte[] codeword = new byte[VocoderFrameSizes.CodewordBytes(mode)];
+        short[] expected = new short[160];
+        short[] actual = new short[160];
+        bool presentationDiffers = false;
+        for (int frame = 0; frame < 30; frame++)
+        {
+            if (frame == 15) { raw.Reset(); deferred.Reset(); }
+            encoder.Encode(input, codeword);
+            if (frame % 7 == 6)
+            {
+                raw.DecodeLost(expected);
+                deferred.DecodeLost(actual);
+            }
+            else
+            {
+                raw.Decode(codeword, expected);
+                deferred.Decode(codeword, actual);
+            }
+            Assert.Equal(expected, actual);
+            processing.ProcessReceiveAudio(actual);
+            presentationDiffers |= !expected.AsSpan().SequenceEqual(actual);
+        }
+        Assert.True(presentationDiffers);
     }
 
     [Fact]

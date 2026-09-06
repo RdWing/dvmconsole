@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -152,7 +155,6 @@ public sealed class DebugLogWindow : Window
         exportButton.Click += HandleExportClick;
         viewModel.DebugLogCollectionChanging += HandleDebugLogCollectionChanging;
         viewModel.PropertyChanged += HandleViewModelPropertyChanged;
-        logs.LayoutUpdated += HandleLogsLayoutUpdated;
         Closed += HandleClosed;
     }
 
@@ -181,13 +183,27 @@ public sealed class DebugLogWindow : Window
     private void HandleDebugLogCollectionChanging(object? sender, NotifyCollectionChangedEventArgs e)
     {
         if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
             logViewportAnchor.Reset();
+            logs.LayoutUpdated -= HandleLogsLayoutUpdated;
+        }
         if (e.Action == NotifyCollectionChangedAction.Add && e.NewStartingIndex == 0)
+        {
             logViewportAnchor.Capture();
+            if (logViewportAnchor.HasPendingRestore)
+            {
+                logs.LayoutUpdated -= HandleLogsLayoutUpdated;
+                logs.LayoutUpdated += HandleLogsLayoutUpdated;
+            }
+        }
     }
 
     private void HandleLogsLayoutUpdated(object? sender, EventArgs e)
-        => logViewportAnchor.Restore();
+    {
+        logViewportAnchor.Restore();
+        if (!logViewportAnchor.HasPendingRestore)
+            logs.LayoutUpdated -= HandleLogsLayoutUpdated;
+    }
 
     private void HandleClosed(object? sender, EventArgs e)
     {

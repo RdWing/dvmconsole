@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Application;
 using Xunit;
@@ -101,6 +104,24 @@ public sealed class GeneratedAudioMonitorTests
     }
 
     [Fact]
+    public async Task PrefetchesTwoHundredMillisecondsThenReplenishesInMediaFrames()
+    {
+        var backend = new FakeAudioBackend();
+        var pacer = new NoDelayPacer();
+        await using var monitor = new GeneratedAudioMonitor(
+            () => backend,
+            () => "alternate",
+            ResolveOutputImmediatelyAsync,
+            createPacer: _ => pacer);
+
+        await monitor.PlayAsync(new short[1_920]);
+
+        Assert.Equal([1_600, 160, 160], backend.Playback.Frames.Select(frame => frame.Length));
+        Assert.Equal(1_920, pacer.ObservedSamples);
+        Assert.Equal(2, pacer.WaitCount);
+    }
+
+    [Fact]
     public async Task DisposeAsyncIsIdempotent()
     {
         var monitor = new GeneratedAudioMonitor(
@@ -192,5 +213,21 @@ public sealed class GeneratedAudioMonitorTests
             IsDisposed = true;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class NoDelayPacer : IPcmPlaybackPacer
+    {
+        public int WaitCount { get; private set; }
+        public int ObservedSamples { get; private set; }
+
+        public ValueTask WaitBeforeWriteAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            WaitCount++;
+            return ValueTask.CompletedTask;
+        }
+
+        public void ObserveWrittenSamples(int sampleCount)
+            => ObservedSamples += sampleCount;
     }
 }

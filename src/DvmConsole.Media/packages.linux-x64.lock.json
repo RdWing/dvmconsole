@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Microsoft.NET.ILLink.Tasks": {
+        "type": "Direct",
+        "requested": "[10.0.11, )",
+        "resolved": "10.0.11",
+        "contentHash": "IBf7lbovvjGWVWXZX5cJ/cO0WXbId0Zq4BuSeT94mGZuOAP66oMeH9PTBZ9Jpp3Jb6jtK0qm/NyUbPRo1gC/wQ=="
+      },
+      "Concentus": {
+        "type": "Transitive",
+        "resolved": "2.2.2",
+        "contentHash": "2B9YmHPKO+k7YpAAnqmiXwiMJnfjfj1C868RszOll2iZWLnGTAiC1q21L/d7CvTan7T+hyqU8dR0Dcy3cpjVfQ=="
+      },
+      "Concentus.Oggfile": {
+        "type": "Transitive",
+        "resolved": "1.0.7",
+        "contentHash": "rKWtI5oiTWqK2ol1aWvIT1BRTPi07Uo1hAet0ysQoZQqFo/mxBRwr+ERw89fIdkL3tbMf3ncoW7b3HDGx8Sk4g==",
+        "dependencies": {
+          "Concentus": "2.2.2"
+        }
+      },
+      "NLayer": {
+        "type": "Transitive",
+        "resolved": "3.0.0",
+        "contentHash": "aQrCT93NjIrJNXA7wiTSHMp9OUhGNb8YTJAwnsx2FtaNdAe74vwfguFExf6QFNU72XhNPb/bLAcdMbxvaNZgWg=="
+      },
+      "SharpZipLib": {
+        "type": "Transitive",
+        "resolved": "1.4.2",
+        "contentHash": "yjj+3zgz8zgXpiiC3ZdF/iyTBbz2fFvMxZFEBPUcwZjIvXOf37Ylm+K58hqMfIBt5JgU/Z2uoUS67JmTLe973A=="
+      },
+      "YamlDotNet": {
+        "type": "Transitive",
+        "resolved": "16.2.0",
+        "contentHash": "iKVYog7JNiFOTr4gMHSjCqrGFD2NyABUHgSkRq9XR8A2+fsWepSWTpjHAOnKo1LVAHjy33o6I0u6lo5Ng0NtAw=="
+      },
+      "dvmconsole.audio.abstractions": {
+        "type": "Project"
+      },
+      "dvmconsole.audio.core": {
+        "type": "Project",
+        "dependencies": {
+          "Concentus.Oggfile": "[1.0.7, )",
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "NLayer": "[3.0.0, )"
+        }
+      },
+      "dvmconsole.core": {
+        "type": "Project",
+        "dependencies": {
+          "YamlDotNet": "[16.2.0, )"
+        }
+      },
+      "dvmconsole.fne": {
+        "type": "Project",
+        "dependencies": {
+          "SharpZipLib": "[1.4.2, )"
+        }
+      },
+      "dvmconsole.vocoder.abstractions": {
+        "type": "Project"
+      }
+    },
+    "net10.0/linux-x64": {}
+  }
+}

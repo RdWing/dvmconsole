@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Threading.Channels;
 using DvmConsole.Vocoder;
 
@@ -18,7 +21,8 @@ internal sealed class TransmitFramePacer
     private readonly Func<CancellationToken, ValueTask>? waitForNextFrame;
     private readonly TransmitFrameCadence? cadence;
     private readonly Channel<QueuedFrame> frames;
-    private readonly Queue<DateTimeOffset> enqueuedAt = new();
+    private readonly Queue<DateTimeOffset> enqueuedAt;
+    private readonly Queue<short[]> availableFrames;
     private readonly TimeProvider timeProvider;
     private readonly CancellationTokenSource cancellation = new();
     private readonly short[] partialFrame = new short[VocoderFrameSizes.PcmSamplesPerFrame];
@@ -27,6 +31,7 @@ internal sealed class TransmitFramePacer
     private int queuedFrameCount;
     private int peakQueuedFrameCount;
     private int faultPublished;
+    private bool drainWithoutCadence;
     private bool completed;
 
     public TransmitFramePacer(
@@ -52,6 +57,10 @@ internal sealed class TransmitFramePacer
             AllowSynchronousContinuations = false,
             FullMode = BoundedChannelFullMode.Wait
         });
+        enqueuedAt = new Queue<DateTimeOffset>(capacity);
+        availableFrames = new Queue<short[]>(capacity + 1);
+        for (int index = 0; index <= capacity; index++)
+            availableFrames.Enqueue(new short[VocoderFrameSizes.PcmSamplesPerFrame]);
         Capacity = capacity;
         completion = RunAsync();
     }
@@ -110,7 +119,7 @@ internal sealed class TransmitFramePacer
     // Completes normally after every accepted sample has been processed. A
     // final short frame is preserved so the protocol session can perform its
     // existing padding and terminator behavior without losing microphone tail.
-    public void Complete()
+    public void Complete(bool drainWithoutCadence = false)
     {
         Exception? overflow = null;
         lock (sync)
@@ -118,6 +127,7 @@ internal sealed class TransmitFramePacer
             if (completed)
                 return;
 
+            this.drainWithoutCadence = drainWithoutCadence;
             completed = true;
             if (partialSampleCount > 0 && !QueuePartialFrame())
                 overflow = FailForOverflow();
@@ -129,11 +139,17 @@ internal sealed class TransmitFramePacer
 
     private bool QueuePartialFrame()
     {
-        var frame = new short[partialSampleCount];
-        partialFrame.AsSpan(0, partialSampleCount).CopyTo(frame);
-        DateTimeOffset now = timeProvider.GetUtcNow();
-        if (!frames.Writer.TryWrite(new QueuedFrame(frame)))
+        if (!availableFrames.TryDequeue(out short[]? frame))
             return false;
+
+        int sampleCount = partialSampleCount;
+        partialFrame.AsSpan(0, sampleCount).CopyTo(frame);
+        DateTimeOffset now = timeProvider.GetUtcNow();
+        if (!frames.Writer.TryWrite(new QueuedFrame(frame, sampleCount)))
+        {
+            availableFrames.Enqueue(frame);
+            return false;
+        }
         enqueuedAt.Enqueue(now);
         queuedFrameCount++;
         peakQueuedFrameCount = Math.Max(peakQueuedFrameCount, queuedFrameCount);
@@ -182,16 +198,24 @@ internal sealed class TransmitFramePacer
                         enqueuedAt.Dequeue();
                     queuedFrameCount = Math.Max(0, queuedFrameCount - 1);
                 }
-                if (cadence is not null)
+                if (cadence is not null && !Volatile.Read(ref drainWithoutCadence))
                 {
                     await cadence.WaitForNextFrameAsync(cancellation.Token).ConfigureAwait(false);
                 }
-                else if (!firstFrame)
+                else if (cadence is null && !firstFrame && !Volatile.Read(ref drainWithoutCadence))
                 {
                     await waitForNextFrame!(cancellation.Token).ConfigureAwait(false);
                 }
 
-                processFrame(queued.Samples);
+                try
+                {
+                    processFrame(queued.Samples.AsSpan(0, queued.SampleCount));
+                }
+                finally
+                {
+                    lock (sync)
+                        availableFrames.Enqueue(queued.Samples);
+                }
                 firstFrame = false;
             }
         }
@@ -219,9 +243,14 @@ internal sealed class TransmitFramePacer
         }
         finally
         {
+            while (frames.Reader.TryRead(out QueuedFrame queued))
+            {
+                lock (sync)
+                    availableFrames.Enqueue(queued.Samples);
+            }
             cancellation.Dispose();
         }
     }
 
-    private readonly record struct QueuedFrame(short[] Samples);
+    private readonly record struct QueuedFrame(short[] Samples, int SampleCount);
 }

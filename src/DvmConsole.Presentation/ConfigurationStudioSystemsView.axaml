@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:presentation="using:DvmConsole.Presentation"
@@ -19,7 +22,11 @@
                      Text="Connection identity, transport, credentials, and call priority"
                      TextWrapping="Wrap"/>
         </StackPanel>
-        <Button Content="Add" AutomationProperties.Name="Add system" Click="HandleAddSystemClick" IsEnabled="{Binding CanEdit}"/>
+        <Button Content="Add FNE"
+                AutomationProperties.Name="Add system"
+                Click="HandleAddSystemClick"
+                IsEnabled="{Binding CanEdit}"
+                ToolTip.Tip="Adds an FNE system and an assigned starter zone."/>
         <Button Content="Duplicate" AutomationProperties.Name="Duplicate system" Click="HandleDuplicateSystemClick" IsEnabled="{Binding CanEdit}"/>
         <Button Content="Delete" AutomationProperties.Name="Delete system" Click="HandleDeleteSystemClick" IsEnabled="{Binding CanEdit}"/>
         <Button Content="Add channel"
@@ -62,23 +69,25 @@
           <StackPanel Spacing="6" IsEnabled="{Binding CanEdit}">
             <TextBlock Classes="subheading" Text="System Inspector"/>
             <TextBlock Classes="caption" Text="Name"/>
-            <TextBox Text="{Binding SelectedSystem.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System name"/>
+            <TextBox Text="{Binding SelectedSystem.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                     LostFocus="HandleDraftFieldEdit"
+                     AutomationProperties.Name="System name"/>
             <TextBlock Classes="caption" Text="Identity"/>
-            <TextBox Text="{Binding SelectedSystem.Identity, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System identity"/>
+            <TextBox Text="{Binding SelectedSystem.Identity, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System identity"/>
             <TextBlock Classes="caption" Text="Address"/>
-            <TextBox Text="{Binding SelectedSystem.Address, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System address"/>
+            <TextBox Text="{Binding SelectedSystem.Address, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System address"/>
             <WrapPanel ItemSpacing="8" LineSpacing="8">
               <StackPanel Width="140">
                 <TextBlock Classes="caption" Text="Port"/>
-                <TextBox Text="{Binding SelectedSystem.Port, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System port"/>
+                <TextBox Text="{Binding SelectedSystem.Port, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System port"/>
               </StackPanel>
               <StackPanel Width="140">
                 <TextBlock Classes="caption" Text="Peer ID"/>
-                <TextBox Text="{Binding SelectedSystem.PeerId, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System peer ID"/>
+                <TextBox Text="{Binding SelectedSystem.PeerId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System peer ID"/>
               </StackPanel>
             </WrapPanel>
             <TextBlock Classes="caption" Text="Radio ID (RID)"/>
-            <TextBox Text="{Binding SelectedSystem.Rid, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System radio ID"/>
+            <TextBox Text="{Binding SelectedSystem.Rid, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System radio ID"/>
             <CheckBox x:Name="hasCallPriorityCheckBox"
                       Content="Has Call Priority"
                       IsChecked="{Binding SelectedSystemHasCallPriority, Mode=TwoWay}"
@@ -87,7 +96,7 @@
                        Text="Allows this console to transmit over an active received call when the FNE peer is configured with call priority. Stored in Neo operator settings, not in codeplug YAML."
                        TextWrapping="Wrap"/>
             <TextBlock Classes="caption" Text="Password"/>
-            <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.Password, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System password"/>
+            <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.Password, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="System password"/>
             <CheckBox Content="Encrypt FNE transport"
                       IsChecked="{Binding SelectedSystem.Encrypted, Mode=TwoWay}"
                       AutomationProperties.Name="Encrypt FNE transport"
@@ -98,9 +107,9 @@
                       AutomationProperties.Name="Transport encryption mode"
                       SelectionChanged="HandleDraftFieldEdit"/>
             <TextBlock Classes="caption" Text="Transport preshared key"/>
-            <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.PresharedKey, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Transport preshared key"/>
+            <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.PresharedKey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Transport preshared key"/>
             <TextBlock Classes="caption" Text="KMF preshared key"/>
-            <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.KmfPresharedKey, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="KMF preshared key"/>
+            <TextBox PasswordChar="&#x25CF;" Text="{Binding SelectedSystem.KmfPresharedKey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="KMF preshared key"/>
           </StackPanel>
         </Border>
       </Grid>

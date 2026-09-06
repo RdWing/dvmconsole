@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
@@ -285,7 +288,7 @@ public sealed class ChannelViewModelTests
             ChannelAudioDirection.Receive);
 
         Assert.InRange(channel.AudioLevel, 1, 100);
-        Assert.Equal(channel.AudioMeterWidth * channel.AudioLevel / 100, channel.AudioFillWidth);
+        Assert.Equal(channel.AudioLevel, channel.AudioMeter.Level);
         Assert.True(channel.TryApplyTraffic(
             "System 1",
             CreateTraffic(FneTrafficProtocol.P25, 42, 0, null, "DATA_SYNC", "TDU", 7)));
@@ -386,11 +389,11 @@ public sealed class ChannelViewModelTests
     }
 
     [Theory]
-    [InlineData(75.99, "#F5F7FA")]
-    [InlineData(76, "#F2B134")]
-    [InlineData(87.99, "#F2B134")]
-    [InlineData(88, "#E5484D")]
-    public void AudioPeakMarkerUsesTheMeterThresholdColors(double peakLevel, string expectedColor)
+    [InlineData(75.99)]
+    [InlineData(76)]
+    [InlineData(87.99)]
+    [InlineData(88)]
+    public void AudioMeterPublishesPeakValuesForTheDrawingControl(double peakLevel)
     {
         var channel = new ChannelViewModel(new ChannelConfiguration
         {
@@ -402,9 +405,7 @@ public sealed class ChannelViewModelTests
 
         channel.SetAudioLevel(50, peakValue: peakLevel);
 
-        Assert.Equal(
-            Color.Parse(expectedColor),
-            Assert.IsType<SolidColorBrush>(channel.AudioPeakMarkerBrush).Color);
+        Assert.Equal(peakLevel, channel.AudioMeter.PeakLevel);
     }
 
     [Fact]
@@ -716,6 +717,42 @@ public sealed class ChannelViewModelTests
         channel.SetTransmitEnabled(true, 7);
 
         Assert.Equal(Color.Parse("#FFFFFF"), Assert.IsType<SolidColorBrush>(channel.CardTextBrush).Color);
+    }
+
+    [Fact]
+    public void PttTransitionsAreVisibleWithoutClaimingTransmitBeforeActivation()
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Dispatch",
+            System = "System 1",
+            Tgid = "99",
+            Mode = "dmr",
+            Slot = 1
+        });
+        Color idleBackground = Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color;
+
+        channel.SetTransmitStarting(true);
+
+        Assert.True(channel.IsTransmitStarting);
+        Assert.Equal("Starting PTT…", channel.StateText);
+        Assert.NotEqual(idleBackground, Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color);
+        Assert.Equal(Color.Parse("#0B6B9C"), Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color);
+        Assert.Equal(Color.Parse("#FFFFFF"), Assert.IsType<SolidColorBrush>(channel.CardTextBrush).Color);
+        Assert.Equal(Color.Parse("#D99920"), Assert.IsType<SolidColorBrush>(channel.CardBorderBrush).Color);
+
+        channel.SetTransmitEnabled(true, streamId: 7);
+        channel.SetTransmitStopping(true);
+
+        Assert.False(channel.IsTransmitStarting);
+        Assert.True(channel.IsTransmitStopping);
+        Assert.Equal("Releasing PTT…", channel.StateText);
+        Assert.Equal(Color.Parse("#0B6B9C"), Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color);
+
+        channel.SetTransmitEnabled(false);
+
+        Assert.False(channel.IsTransmitStopping);
+        Assert.Equal("Idle", channel.StateText);
     }
 
     [Fact]

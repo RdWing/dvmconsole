@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Core.Settings;
 
 internal sealed class UserSettingsSerializer
@@ -37,7 +40,7 @@ internal sealed class SettingsProfileRepository
     public string GetPath(string profileName)
     {
         string normalized = NormalizeName(profileName);
-        Directory.CreateDirectory(DirectoryPath);
+        AppDataFileProtection.EnsureDirectory(DirectoryPath);
         return System.IO.Path.Combine(DirectoryPath, $"{normalized}.json");
     }
 

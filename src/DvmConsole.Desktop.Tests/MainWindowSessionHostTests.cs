@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections.Specialized;
 using DvmConsole.Application;
 using DvmConsole.Core.Settings;
@@ -165,7 +168,10 @@ public sealed class MainWindowSessionHostTests
                 (candidate, _) =>
                 {
                     if (ReferenceEquals(initial, candidate))
+                    {
+                        Assert.True(initial.IsSessionInputSuppressed);
                         outgoingQuiesced = true;
+                    }
                     return Task.CompletedTask;
                 });
 
@@ -182,6 +188,223 @@ public sealed class MainWindowSessionHostTests
                 await host.DisposeAsync();
             else
                 await initial.DisposeAsync();
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FailedReplacementRestoresOutgoingInputOwnership()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-session-host-tests",
+            Guid.NewGuid().ToString("N"));
+        var store = new UserSettingsStore(Path.Combine(directory, "UserSettings.json"));
+        var initial = new MainWindowViewModel("Initial session", [], [], CreateOptions(store));
+        var replacement = new MainWindowViewModel("Replacement session", [], [], CreateOptions(store));
+        int publications = 0;
+        var connectionLifecycle = new RecordingConnectionLifecycle();
+        var host = new MainWindowSessionHost(
+            initial,
+            (_, _) => { },
+            _ =>
+            {
+                if (Interlocked.Increment(ref publications) > 1)
+                    throw new InvalidOperationException("test publication failure");
+            },
+            () => { },
+            () => { },
+            (_, _) => Task.CompletedTask,
+            createConnectionLifecycle: _ => connectionLifecycle);
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<Exception>(() => host.ReplaceAsync(replacement));
+
+            Assert.Same(initial, host.ViewModel);
+            Assert.False(initial.IsSessionInputSuppressed);
+            Assert.Equal(1, connectionLifecycle.QuiesceCount);
+            Assert.Equal([SystemId.FromName("Initial")], connectionLifecycle.RestoredSystemIds);
+        }
+        finally
+        {
+            await host.DisposeAsync();
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FailedReplacementPreservesPrimaryCauseWhenRollbackCleanupAlsoFails()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-session-host-tests",
+            Guid.NewGuid().ToString("N"));
+        var store = new UserSettingsStore(Path.Combine(directory, "UserSettings.json"));
+        var initial = new MainWindowViewModel("Initial session", [], [], CreateOptions(store));
+        var replacementServices = new ConsoleSessionServices();
+        var replacement = new MainWindowViewModel(
+            "Replacement session",
+            [],
+            [],
+            new MainWindowViewModelOptions(
+                Document: new(store),
+                Host: new(
+                    SerialPortProvider: () => [],
+                    UiDispatcher: ImmediateTestUiDispatcher.Instance,
+                    SessionServices: replacementServices),
+                Features: new(NetworkDisabledDemo: true)));
+        replacementServices.Presentation.Register(
+            "rollback-failure-one",
+            () => ValueTask.FromException(new IOException("test rollback failure one")));
+        replacementServices.Presentation.Register(
+            "rollback-failure-two",
+            () => ValueTask.FromException(new IOException("test rollback failure two")));
+        int publications = 0;
+        var host = new MainWindowSessionHost(
+            initial,
+            (_, _) => { },
+            _ =>
+            {
+                if (Interlocked.Increment(ref publications) > 1)
+                    throw new InvalidOperationException("test publication failure");
+            },
+            () => { },
+            () => { },
+            (_, _) => Task.CompletedTask,
+            createConnectionLifecycle: _ => new RecordingConnectionLifecycle());
+
+        try
+        {
+            InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => host.ReplaceAsync(replacement));
+
+            Assert.Contains("test publication failure", failure.Message, StringComparison.Ordinal);
+            Assert.Contains("Restoring the previous session also failed", failure.Message, StringComparison.Ordinal);
+            Assert.IsType<AggregateException>(failure.InnerException);
+            Assert.Same(initial, host.ViewModel);
+            Assert.False(initial.IsSessionInputSuppressed);
+        }
+        finally
+        {
+            await host.DisposeAsync();
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PublishedReplacementContainsRetiredSessionCleanupFailure()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-session-host-tests",
+            Guid.NewGuid().ToString("N"));
+        var store = new UserSettingsStore(Path.Combine(directory, "UserSettings.json"));
+        var initialServices = new ConsoleSessionServices();
+        var initial = new MainWindowViewModel(
+            "Initial session",
+            [],
+            [],
+            new MainWindowViewModelOptions(
+                Document: new(store),
+                Host: new(
+                    SerialPortProvider: () => [],
+                    UiDispatcher: ImmediateTestUiDispatcher.Instance,
+                    SessionServices: initialServices),
+                Features: new(NetworkDisabledDemo: true)));
+        initialServices.Presentation.Register(
+            "retirement-failure-one",
+            () => ValueTask.FromException(new IOException("test retirement failure one")));
+        initialServices.Presentation.Register(
+            "retirement-failure-two",
+            () => ValueTask.FromException(new IOException("test retirement failure two")));
+        MainWindowViewModel? replacement = new(
+            "Replacement session",
+            [],
+            [],
+            CreateOptions(store));
+        var followUpFailures = new List<SessionReplacementFollowUpFailure>();
+        var host = new MainWindowSessionHost(
+            initial,
+            (_, _) => { },
+            _ => { },
+            () => { },
+            () => { },
+            (_, _) => Task.CompletedTask);
+        host.ReplacementFollowUpFailed += (_, failure) =>
+        {
+            followUpFailures.Add(failure);
+            throw new InvalidOperationException("test observer failure");
+        };
+
+        try
+        {
+            await host.ReplaceAsync(replacement);
+
+            Assert.Same(replacement, host.ViewModel);
+            SessionReplacementFollowUpFailure failure = Assert.Single(followUpFailures);
+            Assert.Same(replacement, failure.ActiveViewModel);
+            Assert.Equal(SessionReplacementFollowUpPhase.RetiredSessionCleanup, failure.Phase);
+            Assert.IsType<AggregateException>(failure.Exception);
+            replacement = null;
+        }
+        finally
+        {
+            if (replacement is not null)
+                await replacement.DisposeAsync();
+            await host.DisposeAsync();
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReplacementPreparationFailureDisposesCandidateAndKeepsCurrentSession()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-session-host-tests",
+            Guid.NewGuid().ToString("N"));
+        var store = new UserSettingsStore(Path.Combine(directory, "UserSettings.json"));
+        var initial = new MainWindowViewModel("Initial session", [], [], CreateOptions(store));
+        int candidateDisposalCount = 0;
+        var replacement = new MainWindowViewModel(
+            "Replacement session",
+            [],
+            [],
+            new MainWindowViewModelOptions(
+                Document: new(store),
+                Host: new(
+                    SerialPortProvider: () => [],
+                    UiDispatcher: ImmediateTestUiDispatcher.Instance,
+                    SessionServices: new ConsoleSessionServices(
+                        _ => Interlocked.Increment(ref candidateDisposalCount))),
+                Features: new(NetworkDisabledDemo: true)));
+        var connectionLifecycle = new RecordingConnectionLifecycle();
+        var host = new MainWindowSessionHost(
+            initial,
+            (_, _) => { },
+            _ => { },
+            () => { },
+            () => { },
+            createConnectionLifecycle: owner => ReferenceEquals(owner, replacement)
+                ? throw new InvalidOperationException("test preparation failure")
+                : connectionLifecycle);
+
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => host.ReplaceAsync(replacement));
+
+            Assert.Same(initial, host.ViewModel);
+            Assert.False(initial.IsSessionInputSuppressed);
+            Assert.True(candidateDisposalCount > 0);
+        }
+        finally
+        {
+            await host.DisposeAsync();
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
         }
@@ -212,16 +435,68 @@ public sealed class MainWindowSessionHostTests
                 Assert.Same(viewModel, candidate);
                 operations.Add("quiesce-fne");
                 return Task.CompletedTask;
+            },
+            candidate =>
+            {
+                Assert.Same(viewModel, candidate);
+                operations.Add("silence-live-receive");
             });
 
         try
         {
             await host.DisposeAsync();
 
-            Assert.Equal(["quiesce-fne", "close-windows"], operations);
+            Assert.True(viewModel.IsSessionInputSuppressed);
+            Assert.Equal(
+                ["silence-live-receive", "quiesce-fne", "close-windows"],
+                operations);
         }
         finally
         {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ShutdownDeadlineDoesNotSkipLaterCleanupWhenQuiesceIgnoresCancellation()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-session-host-tests",
+            Guid.NewGuid().ToString("N"));
+        var store = new UserSettingsStore(Path.Combine(directory, "UserSettings.json"));
+        var viewModel = new MainWindowViewModel(
+            "Initial session",
+            [],
+            [],
+            CreateOptions(store));
+        var releaseQuiesce = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        int closeCount = 0;
+        var host = new MainWindowSessionHost(
+            viewModel,
+            (_, _) => { },
+            _ => { },
+            () => { },
+            () => Interlocked.Increment(ref closeCount),
+            (_, _) => releaseQuiesce.Task,
+            transitionTimeout: TimeSpan.FromMilliseconds(100));
+
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            await Assert.ThrowsAnyAsync<Exception>(() => host.DisposeAsync().AsTask());
+
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2));
+            Assert.Equal(1, Volatile.Read(ref closeCount));
+            Assert.True(viewModel.IsSessionInputSuppressed);
+        }
+        finally
+        {
+            releaseQuiesce.TrySetResult();
+            await host.ApplicationSession.DisposeAsync();
+            await viewModel.DisposeAsync();
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
         }
@@ -389,25 +664,29 @@ public sealed class MainWindowSessionHostTests
     }
 
     private static MainWindowViewModelOptions CreateOptions(UserSettingsStore store)
-        => new(
-            UserSettingsStore: store,
-            SerialPortProvider: () => [],
-            UiDispatcher: ImmediateUiDispatcher.Instance,
-            NetworkDisabledDemo: true);
+        => DesktopTestSessionBuilder.CreateOptions(store);
 
-    private sealed class ImmediateUiDispatcher : IUiDispatcher
+    private sealed class RecordingConnectionLifecycle : IConsoleSessionConnectionLifecycle
     {
-        public static ImmediateUiDispatcher Instance { get; } = new();
+        public int QuiesceCount { get; private set; }
+        public IReadOnlyList<SystemId> RestoredSystemIds { get; private set; } = [];
 
-        public bool CheckAccess() => true;
+        public IReadOnlyList<SystemId> CaptureActiveSystemIds()
+            => [SystemId.FromName("Initial")];
 
-        public void Post(Action action, bool background = false)
-            => action();
-
-        public ValueTask InvokeAsync(Action action)
+        public ValueTask QuiesceAsync(CancellationToken cancellationToken)
         {
-            action();
+            QuiesceCount++;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask RestoreAsync(
+            IReadOnlyList<SystemId> systemIds,
+            CancellationToken cancellationToken)
+        {
+            RestoredSystemIds = systemIds.ToArray();
             return ValueTask.CompletedTask;
         }
     }
+
 }

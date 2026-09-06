@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
 using Xunit;
@@ -15,7 +18,8 @@ public sealed class P25TxCallSessionTests
             destinationId: 0xA0B0C0,
             streamId: 77,
             vocoder: new FakeVocoderSession(),
-            send: (payload, sequence, stream) => packets.Add((payload.ToArray(), sequence, stream)));
+            send: (payload, sequence, stream) => packets.Add((payload.ToArray(), sequence, stream)),
+            waitForNextPacket: TestPacketCadence.NoDelayAsync);
 
         session.Start();
 
@@ -25,7 +29,7 @@ public sealed class P25TxCallSessionTests
         Assert.Equal((byte)0x80, packets[0].Payload[14]);
 
         Assert.Equal(2, session.Process(new short[18 * 160]));
-        await session.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
+        await session.EndAsync();
 
         Assert.Equal(4, packets.Count);
         Assert.Equal((ushort)0, packets[1].Sequence);
@@ -62,12 +66,13 @@ public sealed class P25TxCallSessionTests
             destinationId: 2,
             streamId: 3,
             vocoder: new FakeVocoderSession(),
-            send: (payload, sequence, _) => packets.Add((payload.ToArray(), sequence)));
+            send: (payload, sequence, _) => packets.Add((payload.ToArray(), sequence)),
+            waitForNextPacket: TestPacketCadence.NoDelayAsync);
 
         session.Start();
         Assert.Equal(0, session.Process(new short[161]));
 
-        await session.EndAsync(static _ => ValueTask.CompletedTask, CancellationToken.None);
+        await session.EndAsync();
 
         Assert.Equal(3, packets.Count);
         Assert.Equal(P25DfsiFrameCodec.Ldu1Duid, packets[1].Payload[22]);
@@ -88,21 +93,54 @@ public sealed class P25TxCallSessionTests
             destinationId: 2,
             streamId: 3,
             vocoder: new FakeVocoderSession(),
-            send: (payload, sequence, _) => packets.Add((payload.ToArray(), sequence)));
-        session.Start();
-        session.Process(new short[160]);
-
-        await session.EndAsync(
-            _ =>
+            send: (payload, sequence, _) => packets.Add((payload.ToArray(), sequence)),
+            waitForNextPacket: _ =>
             {
                 packetCountsAtWait.Add(packets.Count);
                 return ValueTask.CompletedTask;
-            },
-            CancellationToken.None);
+            });
+        session.Start();
+        session.Process(new short[160]);
 
-        Assert.Equal([1, 2], packetCountsAtWait);
+        await session.EndAsync();
+
+        Assert.Equal([0, 1, 2], packetCountsAtWait);
         Assert.Equal(P25DfsiFrameCodec.Ldu1Duid, packets[1].Payload[22]);
         Assert.Equal(P25DfsiFrameCodec.TduDuid, packets[2].Payload[22]);
+    }
+
+    [Fact]
+    public async Task FailedCompletionRetriesTheTerminatorWithoutRebuildingTheCallTail()
+    {
+        bool failNextPacket = false;
+        int failedPackets = 0;
+        var packets = new List<(byte[] Payload, ushort Sequence)>();
+        using var session = new P25TxCallSession(
+            sourceId: 1,
+            destinationId: 2,
+            streamId: 3,
+            vocoder: new FakeVocoderSession(),
+            send: (payload, sequence, _) =>
+            {
+                if (failNextPacket)
+                {
+                    failNextPacket = false;
+                    failedPackets++;
+                    throw new IOException("transient transport failure");
+                }
+                packets.Add((payload.ToArray(), sequence));
+            },
+            waitForNextPacket: TestPacketCadence.NoDelayAsync);
+        session.Start();
+        failNextPacket = true;
+
+        await Assert.ThrowsAsync<IOException>(() => session.EndAsync().AsTask());
+        await session.EndAsync();
+
+        Assert.Equal(1, failedPackets);
+        Assert.True(session.IsEnded);
+        Assert.Equal(P25DfsiFrameCodec.TduDuid, packets[^1].Payload[22]);
+        Assert.Equal(P25DfsiFrameCodec.RtpCallEndSequence, packets[^1].Sequence);
     }
 
     private sealed class FakeVocoderSession : IVocoderSession

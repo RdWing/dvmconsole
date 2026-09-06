@@ -69,3 +69,37 @@ Anchors, aliases, custom tags, duplicate keys, or multiple YAML documents cannot
 be retained safely by the writer. Studio shows the file without allowing a
 rewrite. Remove those constructs in a text editor or make a simpler compatible
 copy.
+
+## Imported card positions or receive selections are missing
+
+A codeplug export contains configuration definitions, not the operator layout.
+Load the matching codeplug on the destination, then use **File > Import
+Settings…** with the source console's exported settings. FNE and channel names
+must match for positions and receive selections to apply. Enable **Restore
+selected channels on startup** before exporting if you want those channels
+turned on when the imported settings reload.
+
+Named-profile loading keeps the current receive selection, so use the full
+settings import when transferring channel on/off state. Web-stream automatic
+startup is authorized separately; start each stream on the destination. See
+[Import and export settings](../04-Operations/02-Settings%20Reference.md#import-and-export-settings).
+
+## A patched call is missing or cut short
+
+Check **View > Debug Logs** for `PATCH` warnings. An overloaded destination can
+skip a new call or shorten an existing one to avoid replaying stale audio.
+See [Groups and patching](04-Groups%20and%20Patching.md#when-a-forwarded-call-is-skipped-or-shortened)
+for the limits and other reasons a destination may be unavailable.
+
+## Settings could not be read or saved
+
+When an existing settings file is unreadable or corrupt, the console protects
+it from automatic overwrite. Close the console, preserve the original file,
+and check its folder permissions and available storage. After correcting the
+problem, restart to read it again. Restore a known-good backup if the file is
+corrupt. Defaults shown after a failed read do not mean the original settings
+were replaced.
+
+If another console changed the settings file, close the conflicting instance
+and reload before saving. For recording-folder ownership errors, see
+[Talkgroup Audio Recorder](05-Talkgroup%20Audio%20Recorder.md).

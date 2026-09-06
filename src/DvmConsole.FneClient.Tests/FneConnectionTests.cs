@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Configuration;
 using DvmConsole.FneClient;
 using fnecore;
@@ -9,6 +12,116 @@ namespace DvmConsole.FneClient.Tests;
 
 public sealed class FneConnectionTests
 {
+    [Fact]
+    public async Task AbortAlsoTerminatesAPeerAlreadyOwnedByTeardown()
+    {
+        var sessions = new RecordingPeerSessionFactory();
+        await using var connection = new FneConnection(
+            new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null),
+            TimeProvider.System, new LoopbackEndpointResolver(), sessions);
+        await connection.StartAsync();
+        RecordingPeerSession peer = sessions.Single();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        peer.BeforeStop = () => { entered.Set(); release.Wait(); };
+        Task stopping = connection.StopAsync();
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
+        try
+        {
+            connection.Abort();
+            Assert.Equal(1, peer.AbortCount);
+        }
+        finally { release.Set(); }
+        await stopping.WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connection.StartAsync());
+    }
+
+    [Fact]
+    public async Task AbortCancelsHandshakeRecoveryGraceWithoutAdoptingAnotherPeer()
+    {
+        var time = new ControlledTimerProvider();
+        var sessions = new RecordingPeerSessionFactory();
+        await using var connection = new FneConnection(
+            new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null),
+            time, new LoopbackEndpointResolver(), sessions, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2));
+        await connection.StartAsync();
+        sessions.Single().Peer.Information.State = fnecore.ConnectionState.WAITING_AUTHORISATION;
+        ControlledTimer progress = await time.WaitForTimer(TimeSpan.FromMinutes(1));
+        progress.Fire();
+        ControlledTimer grace = await time.WaitForTimer(TimeSpan.FromMinutes(2));
+        connection.Abort();
+        await connection.StopAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(grace.IsDisposed);
+        Assert.Equal(1, sessions.Count);
+        Assert.Null(connection.Peer);
+    }
+
+    private sealed class ControlledTimerProvider : TimeProvider
+    {
+        private readonly ConcurrentDictionary<TimeSpan, TaskCompletionSource<ControlledTimer>> timers = new();
+        public Task<ControlledTimer> WaitForTimer(TimeSpan delay)
+            => timers.GetOrAdd(delay, _ => new(TaskCreationOptions.RunContinuationsAsynchronously))
+                .Task.WaitAsync(TimeSpan.FromSeconds(2));
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new ControlledTimer(callback, state);
+            timers.GetOrAdd(dueTime, _ => new(TaskCreationOptions.RunContinuationsAsynchronously)).TrySetResult(timer);
+            return timer;
+        }
+    }
+
+    private sealed class ControlledTimer(TimerCallback callback, object? state) : ITimer
+    {
+        public bool IsDisposed { get; private set; }
+        public bool Change(TimeSpan dueTime, TimeSpan period) => !IsDisposed;
+        public void Fire() { if (!IsDisposed) callback(state); }
+        public void Dispose() => IsDisposed = true;
+        public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+    }
+
+    [Fact]
+    public async Task AbortFencesStartupEvenWhenResolverIgnoresCancellation()
+    {
+        var resolver = new BlockingEndpointResolver();
+        var sessions = new RecordingPeerSessionFactory();
+        await using var connection = new FneConnection(
+            new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null),
+            TimeProvider.System, resolver, sessions);
+        Task startup = connection.StartAsync();
+        await resolver.Entered.Task;
+        connection.Abort();
+        resolver.Release.SetResult(new IPEndPoint(IPAddress.Loopback, 62031));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => startup);
+        Assert.Equal(0, sessions.Count);
+        Assert.Null(connection.Peer);
+        Assert.Equal(FneConnectionState.Disconnected, connection.Status.State);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connection.StartAsync());
+    }
+
+    private sealed class BlockingEndpointResolver : IFneEndpointResolver
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<IPEndPoint> Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<IPEndPoint> ResolveAsync(string address, int port, CancellationToken cancellationToken)
+        {
+            Entered.TrySetResult();
+            return Release.Task;
+        }
+    }
+
+    [Fact]
+    public void FullArrayTrafficPayloadIsForwardedWithoutAnIntermediateCopy()
+    {
+        byte[] payload = [1, 2, 3, 4];
+
+        byte[] owned = FneConnection.GetOwnedTrafficPayload(payload);
+        byte[] sliced = FneConnection.GetOwnedTrafficPayload(payload.AsMemory(1, 2));
+
+        Assert.Same(payload, owned);
+        Assert.NotSame(payload, sliced);
+        Assert.Equal([2, 3], sliced);
+    }
+
     [Fact]
     public async Task TrafficSubscribersRemainOrderedAndFailureIsolated()
     {
@@ -91,7 +204,7 @@ public sealed class FneConnectionTests
 
         Assert.Equal("TYF_OP1", peer.Information.Details.Identity);
         Assert.Equal(FneConnection.SoftwareIdentifier, peer.Information.Details.Software);
-        Assert.Equal("NEO_0.6.2", peer.Information.Details.Software);
+        Assert.Equal("NEO_0.7.0", peer.Information.Details.Software);
         Assert.Equal(options.PeerId, peer.Information.PeerID);
         Assert.Equal(fnecore.ConnectionState.WAITING_LOGIN, peer.Information.State);
         Assert.Equal(fnecore.LogLevel.DEBUG, peer.LogLevel);
@@ -249,6 +362,25 @@ public sealed class FneConnectionTests
 
         Assert.Equal(FneConnectionState.Disconnected, connection.Status.State);
         Assert.Null(connection.Peer);
+    }
+
+    [Fact]
+    public async Task AbortSynchronouslyRevokesAndStopsTheActivePeerSession()
+    {
+        var sessions = new RecordingPeerSessionFactory();
+        await using var connection = new FneConnection(
+            new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null),
+            TimeProvider.System,
+            new LoopbackEndpointResolver(),
+            sessions);
+        await connection.StartAsync();
+        RecordingPeerSession active = sessions.Single();
+
+        connection.Abort();
+
+        Assert.Null(connection.Peer);
+        Assert.True(active.IsStopped);
+        Assert.Equal(FneConnectionState.Disconnected, connection.Status.State);
     }
 
     [Fact]
@@ -504,6 +636,29 @@ public sealed class FneConnectionTests
             FneTalkgroupAvailability.Available,
             connection.TalkgroupAuthority.GetAvailability(FneTrafficProtocol.P25, 747, 0));
         Assert.Equal(2, connection.TalkgroupAuthority.Rules.Count(rule => rule.IsActive));
+    }
+
+    [Fact]
+    public async Task TalkgroupAuthorityCapsUniqueEntriesAndReportsTheLimit()
+    {
+        var sessions = new RecordingPeerSessionFactory();
+        await using var connection = new FneConnection(
+            new FneConnectionOptions("Test", "Test", "127.0.0.1", 62031, 1, null, false, null),
+            TimeProvider.System,
+            new LoopbackEndpointResolver(),
+            sessions);
+        var logs = new List<FneLogEntry>();
+        connection.LogReceived += (_, entry) => logs.Add(entry);
+        await connection.StartAsync();
+        RecordingPeerSession session = sessions.Single();
+        FneTalkgroupAnnouncementEntry[] entries = Enumerable.Range(1, 4100)
+            .Select(id => new FneTalkgroupAnnouncementEntry((uint)id, 1, false, false))
+            .ToArray();
+
+        session.Callbacks.TalkgroupAnnouncementReceived(new FneTalkgroupAnnouncement(true, entries));
+
+        Assert.Equal(4096, connection.TalkgroupAuthority.Rules.Count);
+        Assert.Contains(logs, entry => entry.Message.Contains("4,096-entry safety limit", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -773,15 +928,24 @@ public sealed class FneConnectionTests
         public FnePeerSessionCallbacks Callbacks { get; } = callbacks;
         public bool IsStarted { get; private set; }
         public bool IsStopped { get; private set; }
+        public Action? BeforeStop { get; set; }
+        public int AbortCount { get; private set; }
 
         public void Start() => IsStarted = true;
 
         public void Stop()
         {
+            BeforeStop?.Invoke();
             IsStopped = true;
             IsStarted = false;
         }
 
         public void Dispose() => Stop();
+        public void Abort()
+        {
+            AbortCount++;
+            IsStopped = true;
+            IsStarted = false;
+        }
     }
 }

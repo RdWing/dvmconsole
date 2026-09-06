@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 
 namespace DvmConsole.Application;
@@ -16,7 +19,11 @@ public sealed record RecordingPlaybackStartupMetrics(
     TimeSpan DecoderOpen,
     TimeSpan FirstDecode,
     TimeSpan OutputOpen,
-    TimeSpan FirstOutput);
+    TimeSpan FirstOutput,
+    TimeSpan NotificationDuration = default,
+    TimeSpan NotificationCompleted = default,
+    TimeSpan FirstWritePacingWait = default,
+    TimeSpan FirstWriteDuration = default);
 
 /// <summary>
 /// Plays completed recordings through the configured portable audio backend.
@@ -34,6 +41,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
     private readonly TimeProvider timeProvider;
     private IAudioBackend? audioBackend;
     private PlaybackSession? activeSession;
+    private Task retirement = Task.CompletedTask;
     private RecordingId? currentRecordingId;
     private bool disposed;
 
@@ -71,6 +79,11 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Device discovery, decoder reads, and native output creation may
+            // complete synchronously. Leave the caller's UI thread even when
+            // the lifecycle gate is immediately available, while retaining
+            // command ordering under that gate.
+            await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
             ObjectDisposedException.ThrowIf(disposed, this);
             await StopActiveCoreAsync(cancellationToken).ConfigureAwait(false);
 
@@ -124,7 +137,10 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
                     session.PlaybackAnnounced = true;
                 }
 
+                long notificationStarted = timeProvider.GetTimestamp();
                 NotifyPlaybackStateChanged(recordingId, isPlaying: true);
+                session.NotificationDuration = timeProvider.GetElapsedTime(notificationStarted);
+                session.NotificationCompleted = timeProvider.GetElapsedTime(startedAt);
                 session.RunTask = RunAsync(session);
             }
             catch
@@ -196,7 +212,8 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
 
             if (session.PlaybackAnnounced)
                 NotifyPlaybackStateChanged(recordingId, isPlaying: false);
-            await session.StopAsync(cancellationToken).ConfigureAwait(false);
+            retirement = session.StopAsync(CancellationToken.None);
+            await retirement.WaitAsync(cancellationToken).ConfigureAwait(false);
             return true;
         }
         finally
@@ -225,6 +242,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
 
     private async Task StopActiveCoreAsync(CancellationToken cancellationToken = default)
     {
+        await retirement.WaitAsync(cancellationToken).ConfigureAwait(false);
         PlaybackSession? session;
         RecordingId? recordingId;
         lock (sync)
@@ -239,7 +257,8 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         {
             if (session.PlaybackAnnounced)
                 NotifyPlaybackStateChanged(recordingId.Value, isPlaying: false);
-            await session.StopAsync(cancellationToken).ConfigureAwait(false);
+            retirement = session.StopAsync(CancellationToken.None);
+            await retirement.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -255,7 +274,9 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
                 session.RateConverter,
                 session.Cancellation.Token,
                 () => ObserveFirstOutputAsync(session),
-                prefetchedSamples: session.PrefetchedSamples).ConfigureAwait(false);
+                prefetchedSamples: session.PrefetchedSamples,
+                firstWriteObserver: timing => session.FirstWriteTiming = timing,
+                timeProvider: timeProvider).ConfigureAwait(false);
             completedNaturally = true;
         }
         catch (OperationCanceledException) when (session.Cancellation.IsCancellationRequested)
@@ -362,7 +383,14 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         TimeSpan firstOutput = timeProvider.GetElapsedTime(session.StartedAt);
         try
         {
-            startupObserver?.Invoke(session.StartupMetrics with { FirstOutput = firstOutput });
+            startupObserver?.Invoke(session.StartupMetrics with
+            {
+                FirstOutput = firstOutput,
+                NotificationDuration = session.NotificationDuration,
+                NotificationCompleted = session.NotificationCompleted,
+                FirstWritePacingWait = session.FirstWriteTiming.PacingWait,
+                FirstWriteDuration = session.FirstWriteTiming.WriteDuration
+            });
         }
         catch (Exception exception)
         {
@@ -420,6 +448,9 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         public ReadOnlyMemory<short> PrefetchedSamples { get; } = prefetchedSamples;
         public RecordingPlaybackStartupMetrics StartupMetrics { get; } = startupMetrics;
         public long StartedAt { get; } = startedAt;
+        public TimeSpan NotificationDuration { get; set; }
+        public TimeSpan NotificationCompleted { get; set; }
+        public PcmFirstWriteTiming FirstWriteTiming { get; set; }
         public CancellationTokenSource Cancellation { get; } = new();
         public Task? RunTask { get; set; }
         public bool PlaybackAnnounced { get; set; }

@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Concentus": {
+        "type": "Transitive",
+        "resolved": "2.2.2",
+        "contentHash": "2B9YmHPKO+k7YpAAnqmiXwiMJnfjfj1C868RszOll2iZWLnGTAiC1q21L/d7CvTan7T+hyqU8dR0Dcy3cpjVfQ=="
+      },
+      "Concentus.Oggfile": {
+        "type": "Transitive",
+        "resolved": "1.0.7",
+        "contentHash": "rKWtI5oiTWqK2ol1aWvIT1BRTPi07Uo1hAet0ysQoZQqFo/mxBRwr+ERw89fIdkL3tbMf3ncoW7b3HDGx8Sk4g==",
+        "dependencies": {
+          "Concentus": "2.2.2"
+        }
+      },
+      "NAudio.Core": {
+        "type": "Transitive",
+        "resolved": "3.0.1",
+        "contentHash": "3fJ6UnkoiNBeeczKd9OozvcE85FvtyYCykmfzEbFW0uB0uT2+keKdconUGkz9qYlhaq1RJDTFptXOooQBYLijA==",
+        "dependencies": {
+          "System.Numerics.Tensors": "9.0.0"
+        }
+      },
+      "NAudio.Wasapi": {
+        "type": "Transitive",
+        "resolved": "3.0.1",
+        "contentHash": "1j8+HaeAJXFaDaIeVpnaahwAa3ZvMog2bswgmY1JSDysAbeehRx+PIeC0AbNyXZr5gvhu9PfOPD7xwuAEKJcbw==",
+        "dependencies": {
+          "NAudio.Core": "3.0.1"
+        }
+      },
+      "NLayer": {
+        "type": "Transitive",
+        "resolved": "3.0.0",
+        "contentHash": "aQrCT93NjIrJNXA7wiTSHMp9OUhGNb8YTJAwnsx2FtaNdAe74vwfguFExf6QFNU72XhNPb/bLAcdMbxvaNZgWg=="
+      },
+      "System.Numerics.Tensors": {
+        "type": "Transitive",
+        "resolved": "9.0.0",
+        "contentHash": "hyJB4UlpAi19Xr9AXzu2NuagKC4lPfHObNMEAA0HmqFz2rX7wKgzeYzO/jM/eBHDhnUGFFEjk5cOoJaxqg5J4A=="
+      },
+      "dvmconsole.audio.abstractions": {
+        "type": "Project"
+      },
+      "dvmconsole.audio.core": {
+        "type": "Project",
+        "dependencies": {
+          "Concentus.Oggfile": "[1.0.7, )",
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "NLayer": "[3.0.0, )"
+        }
+      },
+      "dvmconsole.audio.linux": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Core": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.audio.macos": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Core": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.audio.windows": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "NAudio.Wasapi": "[3.0.1, )"
+        }
+      }
+    }
+  }
+}

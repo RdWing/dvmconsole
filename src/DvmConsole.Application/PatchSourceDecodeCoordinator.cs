@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
 using DvmConsole.Media;
@@ -14,6 +17,7 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
     private readonly IP25KeyResolver? p25KeyResolver;
     private readonly IDmrKeyResolver? dmrKeyResolver;
     private readonly INxdnKeyResolver? nxdnKeyResolver;
+    private readonly Func<DmrReceiveKeyPolicy>? getDmrReceiveKeyPolicy;
     private readonly Action<ChannelId, uint, uint, ReadOnlyMemory<short>> observer;
     private readonly Func<IVocoderBackend> createVocoderBackend;
     private readonly object sync = new();
@@ -29,13 +33,15 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
         Action<ChannelId, ReadOnlyMemory<short>> observer,
         Func<IVocoderBackend> createVocoderBackend,
         IDmrKeyResolver? dmrKeyResolver = null,
-        INxdnKeyResolver? nxdnKeyResolver = null)
+        INxdnKeyResolver? nxdnKeyResolver = null,
+        Func<DmrReceiveKeyPolicy>? getDmrReceiveKeyPolicy = null)
         : this(
             p25KeyResolver,
             (channel, _, _, samples) => observer(channel, samples),
             createVocoderBackend,
             dmrKeyResolver,
-            nxdnKeyResolver)
+            nxdnKeyResolver,
+            getDmrReceiveKeyPolicy)
     {
         ArgumentNullException.ThrowIfNull(observer);
     }
@@ -45,11 +51,13 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
         Action<ChannelId, uint, uint, ReadOnlyMemory<short>> observer,
         Func<IVocoderBackend> createVocoderBackend,
         IDmrKeyResolver? dmrKeyResolver = null,
-        INxdnKeyResolver? nxdnKeyResolver = null)
+        INxdnKeyResolver? nxdnKeyResolver = null,
+        Func<DmrReceiveKeyPolicy>? getDmrReceiveKeyPolicy = null)
     {
         this.p25KeyResolver = p25KeyResolver;
         this.dmrKeyResolver = dmrKeyResolver;
         this.nxdnKeyResolver = nxdnKeyResolver;
+        this.getDmrReceiveKeyPolicy = getDmrReceiveKeyPolicy;
         this.observer = observer ?? throw new ArgumentNullException(nameof(observer));
         this.createVocoderBackend = createVocoderBackend ??
             throw new ArgumentNullException(nameof(createVocoderBackend));
@@ -148,7 +156,8 @@ public sealed class PatchSourceDecodeCoordinator : IAsyncDisposable
                             }),
                         p25KeyResolver,
                         dmrKeyResolver,
-                        nxdnKeyResolver);
+                        nxdnKeyResolver,
+                        getDmrReceiveKeyPolicy?.Invoke() ?? DmrReceiveKeyPolicy.OnAirMetadata);
                     createdVocoderSession = null;
                     lock (sync)
                     {

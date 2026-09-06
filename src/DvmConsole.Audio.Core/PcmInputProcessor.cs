@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Audio;
 
 // Cross-platform microphone processing settings. Device selection is resolved
@@ -146,10 +149,12 @@ public sealed class PcmInputProcessor
 
 // Decorates a platform capture with the shared PCM microphone processor while
 // preserving the existing capture lifecycle contract.
-public sealed class ProcessedAudioCapture : IAudioCapture
+public sealed class ProcessedAudioCapture : IAudioCapture, IBorrowedAudioCapture
 {
     private readonly IAudioCapture source;
     private readonly PcmInputProcessor? processor;
+    private readonly IBorrowedAudioCapture? borrowedSource;
+    private short[] processingBuffer = [];
     private bool disposed;
 
     public ProcessedAudioCapture(IAudioCapture source, AudioInputProcessingOptions? options = null)
@@ -161,10 +166,15 @@ public sealed class ProcessedAudioCapture : IAudioCapture
             ? new PcmInputProcessor(normalized)
             : null;
         Format = source.Format;
-        source.SamplesAvailable += HandleSamplesAvailable;
+        borrowedSource = source as IBorrowedAudioCapture;
+        if (borrowedSource is not null)
+            borrowedSource.BorrowedSamplesAvailable += HandleBorrowedSamplesAvailable;
+        else
+            source.SamplesAvailable += HandleSamplesAvailable;
     }
 
     public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
+    public event BorrowedPcmSamplesHandler? BorrowedSamplesAvailable;
     public PcmAudioFormat Format { get; }
     public bool IsRunning => source.IsRunning;
 
@@ -179,7 +189,10 @@ public sealed class ProcessedAudioCapture : IAudioCapture
         if (disposed)
             return;
 
-        source.SamplesAvailable -= HandleSamplesAvailable;
+        if (borrowedSource is not null)
+            borrowedSource.BorrowedSamplesAvailable -= HandleBorrowedSamplesAvailable;
+        else
+            source.SamplesAvailable -= HandleSamplesAvailable;
         await source.DisposeAsync().ConfigureAwait(false);
         disposed = true;
     }
@@ -188,12 +201,34 @@ public sealed class ProcessedAudioCapture : IAudioCapture
     {
         if (processor is null)
         {
+            BorrowedSamplesAvailable?.Invoke(args.Samples.Span);
             SamplesAvailable?.Invoke(this, args);
             return;
         }
+        Publish(args.Samples.Span);
+    }
 
-        short[] processed = new short[args.Samples.Length];
-        processor.Process(args.Samples.Span, processed);
-        SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(processed));
+    private void HandleBorrowedSamplesAvailable(ReadOnlySpan<short> samples)
+        => Publish(samples);
+
+    private void Publish(ReadOnlySpan<short> samples)
+    {
+        if (processor is null)
+        {
+            BorrowedSamplesAvailable?.Invoke(samples);
+            EventHandler<PcmSamplesEventArgs>? owned = SamplesAvailable;
+            if (owned is not null)
+                owned(this, new PcmSamplesEventArgs(samples.ToArray()));
+            return;
+        }
+
+        if (processingBuffer.Length < samples.Length)
+            processingBuffer = new short[samples.Length];
+        Span<short> processed = processingBuffer.AsSpan(0, samples.Length);
+        processor.Process(samples, processed);
+        BorrowedSamplesAvailable?.Invoke(processed);
+        EventHandler<PcmSamplesEventArgs>? ownedHandler = SamplesAvailable;
+        if (ownedHandler is not null)
+            ownedHandler(this, new PcmSamplesEventArgs(processed.ToArray()));
     }
 }

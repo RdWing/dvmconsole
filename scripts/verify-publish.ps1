@@ -1,6 +1,9 @@
+# SPDX-FileCopyrightText: 2025-2026 RdWing
+# SPDX-License-Identifier: AGPL-3.0-only
+
 [CmdletBinding()]
 param(
-    [ValidateSet("win-x64")]
+    [ValidateSet("win-x64", "win-arm64")]
     [string] $Runtime = "win-x64",
 
     [Parameter(Mandatory = $true)]
@@ -8,8 +11,16 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$PythonCommand = Get-Command python -ErrorAction SilentlyContinue
+if ($null -eq $PythonCommand) {
+    $PythonCommand = Get-Command python3 -ErrorAction SilentlyContinue
+}
+if ($null -eq $PythonCommand) {
+    throw "Python 3 is required to verify packaged documentation."
+}
+$Python = $PythonCommand.Source
 
-function Assert-X64PeFile([string] $Path) {
+function Assert-PeArchitecture([string] $Path, [UInt16] $ExpectedMachine, [string] $Architecture) {
     $Stream = [IO.File]::OpenRead($Path)
     try {
         $Reader = [IO.BinaryReader]::new($Stream)
@@ -24,8 +35,8 @@ function Assert-X64PeFile([string] $Path) {
         }
 
         $Stream.Position = $PeOffset
-        if ($Reader.ReadUInt32() -ne 0x00004550 -or $Reader.ReadUInt16() -ne 0x8664) {
-            throw "File is not a Windows x64 PE executable: $Path"
+        if ($Reader.ReadUInt32() -ne 0x00004550 -or $Reader.ReadUInt16() -ne $ExpectedMachine) {
+            throw "File is not a Windows $Architecture PE executable: $Path"
         }
     }
     finally {
@@ -34,49 +45,10 @@ function Assert-X64PeFile([string] $Path) {
 }
 
 $PublishDirectory = [IO.Path]::GetFullPath($PublishDirectory)
-if (-not (Test-Path -LiteralPath $PublishDirectory -PathType Container)) {
-    throw "Publish directory does not exist: $PublishDirectory"
-}
-
-$PublishFiles = @(Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File -ErrorAction Stop)
-$PublishBytes = ($PublishFiles | Measure-Object -Property Length -Sum).Sum
-$MaximumPublishBytes = 180MB
-$MaximumPublishFiles = 250
-if ($PublishBytes -gt $MaximumPublishBytes) {
-    throw "Publish exceeds the $MaximumPublishBytes byte size budget: $PublishBytes bytes."
-}
-if ($PublishFiles.Count -gt $MaximumPublishFiles) {
-    throw "Publish exceeds the $MaximumPublishFiles file budget: $($PublishFiles.Count) files."
-}
-
-foreach ($FileName in @("DvmConsole.exe", "LICENSE")) {
-    if (-not (Test-Path -LiteralPath (Join-Path $PublishDirectory $FileName) -PathType Leaf)) {
-        throw "Published output is missing required file: $FileName"
-    }
-}
-
-if (Test-Path -LiteralPath (Join-Path $PublishDirectory "Docs")) {
-    throw "Publish contains the obsolete Docs directory; documentation pages belong under Documentation."
-}
-
-$RequiredDocumentationFiles = @(
-    "Getting Started/01-Overview.md",
-    "Getting Started/02-Building.md",
-    "Getting Started/03-Configurations/01-Codeplug Creation.md",
-    "Getting Started/03-Configurations/02-Encryption Keys.md",
-    "Getting Started/03-Configurations/03-RID Aliases.md",
-    "Getting Started/03-Configurations/04-Groups and Patching.md",
-    "Getting Started/03-Configurations/05-Talkgroup Audio Recorder.md",
-    "Getting Started/04-Operations/01-Console Operation.md",
-    "Getting Started/04-Operations/02-Settings Reference.md",
-    "Getting Started/04-Operations/03-Audio Settings.md",
-    "Getting Started/04-Operations/04-Alert Tones.md"
-)
-foreach ($RelativeDocument in $RequiredDocumentationFiles) {
-    $DocumentPath = Join-Path (Join-Path $PublishDirectory "Documentation") $RelativeDocument
-    if (-not (Test-Path -LiteralPath $DocumentPath -PathType Leaf)) {
-        throw "Published output is missing documentation: $RelativeDocument"
-    }
+& $Python (Join-Path $PSScriptRoot "verify-package.py") `
+    --publish-only --publish-root $PublishDirectory --rid $Runtime
+if ($LASTEXITCODE -ne 0) {
+    throw "Publish inventory validation failed with exit code $LASTEXITCODE."
 }
 
 $DemoCodeplug = [IO.Path]::GetFullPath((Join-Path $PublishDirectory "Demo/codeplug.yml"))
@@ -101,7 +73,14 @@ foreach ($LegacyAlert in @("alert1.wav", "alert2.wav", "alert3.wav")) {
     }
 }
 
-Assert-X64PeFile (Join-Path $PublishDirectory "DvmConsole.exe")
+$ExpectedMachine = if ($Runtime -eq "win-arm64") { [UInt16]0xAA64 } else { [UInt16]0x8664 }
+$ExpectedArchitecture = if ($Runtime -eq "win-arm64") { "ARM64" } else { "x64" }
+Assert-PeArchitecture (Join-Path $PublishDirectory "DvmConsole.exe") $ExpectedMachine $ExpectedArchitecture
+$PublishFiles = @(Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File -ErrorAction Stop)
+$NativeWindowsFiles = $PublishFiles | Where-Object { $_.Extension -in @(".exe", ".dll") }
+foreach ($NativeWindowsFile in $NativeWindowsFiles) {
+    Assert-PeArchitecture $NativeWindowsFile.FullName $ExpectedMachine $ExpectedArchitecture
+}
 foreach ($UnexpectedFile in @(
     "DvmConsole.dll",
     "DvmConsole.deps.json",
@@ -135,4 +114,4 @@ if ($TextFilePaths.Count -gt 0 -and
     throw "Publish contains credential-like or test-endpoint material."
 }
 
-Write-Host "Publish verification passed: $PublishDirectory ($Runtime, $PublishBytes bytes, $($PublishFiles.Count) files)"
+Write-Host "Publish verification passed: $PublishDirectory ($Runtime)"

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Runtime.InteropServices;
 
 namespace DvmConsole.Vocoder;
@@ -6,7 +9,7 @@ namespace DvmConsole.Vocoder;
 // of each native call. No protocol operation allocates a marshalling buffer.
 internal sealed unsafe class NativeVocoderApi : IDisposable
 {
-    private const uint RequiredAbiVersion = 7;
+    private const uint RequiredAbiVersion = 8;
     private const string LibraryBaseName = "dvmconsole_vocoder";
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate uint VersionDelegate();
@@ -51,6 +54,8 @@ internal sealed unsafe class NativeVocoderApi : IDisposable
     private readonly DestroyDelegate destroy;
     private readonly ConfigureReceiveAudioProcessingDelegate configureReceiveAudioProcessing;
     private readonly ResetDelegate reset;
+    private readonly ResetDelegate deferReceiveProcessing;
+    private readonly DecodeLostDelegate processReceivePresentation;
     private readonly EncodeDelegate encode;
     private readonly EncodeP25SingleToneDelegate encodeP25SingleTone;
     private readonly FlushDelegate flush;
@@ -74,6 +79,8 @@ internal sealed unsafe class NativeVocoderApi : IDisposable
         destroy = Get<DestroyDelegate>("dvmconsole_vocoder_session_destroy");
         configureReceiveAudioProcessing = Get<ConfigureReceiveAudioProcessingDelegate>(
             "dvmconsole_vocoder_configure_rx_audio_processing");
+        deferReceiveProcessing = Get<ResetDelegate>("dvmconsole_vocoder_defer_rx_processing");
+        processReceivePresentation = Get<DecodeLostDelegate>("dvmconsole_vocoder_process_rx_presentation");
         reset = Get<ResetDelegate>("dvmconsole_vocoder_session_reset");
         encode = Get<EncodeDelegate>("dvmconsole_vocoder_encode");
         encodeP25SingleTone = Get<EncodeP25SingleToneDelegate>("dvmconsole_vocoder_encode_p25_single_tone");
@@ -185,6 +192,19 @@ internal sealed unsafe class NativeVocoderApi : IDisposable
         fixed (byte* inputPointer = input)
         fixed (short* samplesPointer = samples)
             return decode(lease.Handle, inputPointer, (nuint)input.Length, samplesPointer, (nuint)samples.Length);
+    }
+
+    public int DeferReceiveProcessing(SafeVocoderSessionHandle session)
+    {
+        using var lease = new SafeVocoderSessionLease(session);
+        return deferReceiveProcessing(lease.Handle);
+    }
+
+    public int ProcessReceivePresentation(SafeVocoderSessionHandle session, Span<short> samples)
+    {
+        using var lease = new SafeVocoderSessionLease(session);
+        fixed (short* pointer = samples)
+            return processReceivePresentation(lease.Handle, pointer, (nuint)samples.Length);
     }
 
     public int DecodeLost(SafeVocoderSessionHandle session, Span<short> samples)

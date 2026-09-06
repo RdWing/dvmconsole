@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:presentation="using:DvmConsole.Presentation"
@@ -16,6 +19,15 @@
       <Setter Property="Padding" Value="7,3" />
       <Setter Property="MinHeight" Value="0" />
     </Style>
+    <Style Selector="WrapPanel.history-actions">
+      <Setter Property="Grid.Column" Value="2" />
+      <Setter Property="Grid.RowSpan" Value="3" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="HorizontalAlignment" Value="Right" />
+    </Style>
+    <Style Selector="WrapPanel.history-narrow-details">
+      <Setter Property="IsVisible" Value="False" />
+    </Style>
     <Style Selector="ListBox.history-list > ListBoxItem">
       <Setter Property="HorizontalContentAlignment" Value="Stretch" />
       <Setter Property="Padding" Value="0" />
@@ -30,6 +42,20 @@
     </Style>
     <Style Selector="Expander /template/ ToggleButton#PART_Header">
       <Setter Property="AutomationProperties.Name" Value="Advanced history filters" />
+    </Style>
+    <Style Selector="presentation|ResponsiveCallHistoryRow:narrow Grid.history-wide-details">
+      <Setter Property="IsVisible" Value="False" />
+    </Style>
+    <Style Selector="presentation|ResponsiveCallHistoryRow:narrow WrapPanel.history-narrow-details">
+      <Setter Property="IsVisible" Value="True" />
+    </Style>
+    <Style Selector="presentation|ResponsiveCallHistoryRow:narrow WrapPanel.history-actions">
+      <Setter Property="Grid.Row" Value="3" />
+      <Setter Property="Grid.Column" Value="0" />
+      <Setter Property="Grid.RowSpan" Value="1" />
+      <Setter Property="Grid.ColumnSpan" Value="2" />
+      <Setter Property="HorizontalAlignment" Value="Left" />
+      <Setter Property="Margin" Value="0,3,0,0" />
     </Style>
   </UserControl.Styles>
 
@@ -80,10 +106,28 @@
       <ListBox.ItemTemplate>
         <DataTemplate x:DataType="presentation:ICallHistoryItemViewModel">
           <Border Classes="history-row">
-            <Grid Classes="history-row-layout" RowDefinitions="Auto,Auto,Auto" ColumnDefinitions="80,*,Auto" ColumnSpacing="7" RowSpacing="3">
+            <presentation:ResponsiveCallHistoryRow Classes="history-row-layout">
               <TextBlock Text="{Binding TimestampText}" VerticalAlignment="Center" />
               <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="{Binding DisplayChannelText}" TextTrimming="CharacterEllipsis" />
-              <WrapPanel Grid.Row="1" Grid.ColumnSpan="2" ItemSpacing="8" LineSpacing="4">
+              <Grid Grid.Row="1"
+                    Grid.ColumnSpan="2"
+                    Classes="history-wide-details"
+                    ColumnDefinitions="2*,Auto,Auto,Auto,Auto,*"
+                    ColumnSpacing="14">
+                <TextBlock Classes="history-caption" Text="{Binding SystemName}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="1" Classes="history-caption" Text="{Binding DirectionText}" />
+                <TextBlock Grid.Column="2" Classes="history-caption" Text="{Binding ProtocolText}" />
+                <TextBlock Grid.Column="3" Classes="history-caption history-duration" Text="{Binding DurationText}" />
+                <TextBlock Grid.Column="4"
+                           Classes="history-caption history-encryption"
+                           Text="{Binding EncryptionText}"
+                           TextTrimming="CharacterEllipsis" />
+              </Grid>
+              <WrapPanel Grid.Row="1"
+                         Grid.ColumnSpan="2"
+                         Classes="history-narrow-details"
+                         ItemSpacing="8"
+                         LineSpacing="4">
                 <TextBlock Classes="history-caption" Text="{Binding SystemName}" TextTrimming="CharacterEllipsis" />
                 <TextBlock Classes="history-caption" Text="{Binding DirectionText}" />
                 <TextBlock Classes="history-caption" Text="{Binding ProtocolText}" />
@@ -92,19 +136,21 @@
               </WrapPanel>
               <TextBlock Grid.Row="2" Classes="history-caption" Text="{Binding DateText}" />
               <TextBlock Grid.Row="2" Grid.Column="1" Classes="history-caption" Text="{Binding RouteText}" TextTrimming="CharacterEllipsis" />
-              <WrapPanel Grid.Column="2"
-                         Grid.RowSpan="3"
-                         Classes="history-actions"
+              <WrapPanel Classes="history-actions"
                          ItemSpacing="4"
-                         VerticalAlignment="Center"
-                         HorizontalAlignment="Right"
                          IsVisible="{Binding HasRecording}">
-                <Button Classes="history-action" Content="Play" AutomationProperties.Name="Play call recording" Tag="{Binding}" IsEnabled="{Binding HasPlayableRecording}" ToolTip.Tip="Play validated TAR recording" Click="HandlePlayClick" />
-                <Button Classes="history-action" Content="Stop" AutomationProperties.Name="Stop call recording playback" Click="HandleStopClick" />
+                <Button Classes="history-action"
+                        Content="{Binding RecordingPlaybackActionText}"
+                        AutomationProperties.Name="{Binding RecordingPlaybackActionText}"
+                        AutomationProperties.HelpText="{Binding RecordingPlaybackHelpText}"
+                        Tag="{Binding}"
+                        IsEnabled="{Binding HasPlayableRecording}"
+                        ToolTip.Tip="{Binding RecordingPlaybackHelpText}"
+                        Click="HandlePlaybackToggleClick" />
                 <Button Classes="history-action" Content="Open" AutomationProperties.Name="Open call recording" Tag="{Binding}" IsEnabled="{Binding HasPlayableRecording}" ToolTip.Tip="{Binding RecordingDetailsText}" Click="HandleOpenClick" />
                 <Button Classes="history-action" Content="Delete" AutomationProperties.Name="Delete call recording" Tag="{Binding}" Click="HandleDeleteClick" />
               </WrapPanel>
-            </Grid>
+            </presentation:ResponsiveCallHistoryRow>
           </Border>
         </DataTemplate>
       </ListBox.ItemTemplate>

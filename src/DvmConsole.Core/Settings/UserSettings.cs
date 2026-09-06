@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Text.Json.Serialization;
 
 namespace DvmConsole.Core.Settings;
@@ -17,6 +20,15 @@ public sealed class WidgetPositionSetting
 {
     public double X { get; set; }
     public double Y { get; set; }
+}
+
+public static class WidgetPositionKey
+{
+    public static string ForWebStream(string streamName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(streamName);
+        return $"web-stream\u001F{streamName.Trim()}";
+    }
 }
 
 public sealed class RxAudioProcessingModeSetting
@@ -123,6 +135,7 @@ public sealed class UserSettings
     public RxJitterBufferSetting RxJitterBuffer { get; set; } = new();
     public Dictionary<string, RxJitterBufferSetting> RxJitterBuffersBySystem { get; set; }
         = new(StringComparer.OrdinalIgnoreCase);
+    public bool RequireConfiguredDmrReceiveKey { get; set; }
     [JsonPropertyName("RxAudioProcessingEnabled")]
     public bool? LegacyRxAudioProcessingEnabled { get; set; }
     public string AudioProcessingMode { get; set; } = DvmConsoleAudioProcessingMode;
@@ -172,8 +185,10 @@ public sealed class UserSettings
     public double QuickCallToneBFrequencyHz { get; set; } = 1200;
     public List<DtmfPresetSetting> DtmfPresets { get; set; } = [];
     public List<TonePresetSetting> TonePresets { get; set; } = [];
+    public Dictionary<int, ToolbarToneAssignmentSetting> ToolbarToneAssignments { get; set; } = [];
     public List<AlertToneSetting> AlertTones { get; set; } = [];
     public int RecordingRetentionDays { get; set; } = 7;
+    public bool RecordingRetentionPolicyAccepted { get; set; }
     public string RecordingRootPath { get; set; } = string.Empty;
     public Dictionary<string, double> ChannelVolumes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, double> ChannelStereoBalances { get; set; } = new(StringComparer.OrdinalIgnoreCase);

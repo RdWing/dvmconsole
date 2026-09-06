@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Desktop;
 using Xunit;
@@ -6,6 +9,47 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class PcmPlaybackPumpTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MeasuresOnlyFirstPacingWaitAndAudioWriteWithoutObserverAffectingDelivery(bool observerThrows)
+    {
+        var clock = new ManualWriteClock();
+        var playback = new FakePlayback { OnWrite = () => clock.Advance(17) };
+        var reader = new FakeReader(new short[] { 1 }, new short[] { 2 });
+        var reports = new List<PcmFirstWriteTiming>();
+        await PcmPlaybackPump.RunAsync(reader, playback, null, CancellationToken.None,
+            pacer: new TimedPacer(clock), timeProvider: clock,
+            firstWriteObserver: timing =>
+            {
+                reports.Add(timing);
+                clock.Advance(500);
+                if (observerThrows) throw new InvalidOperationException();
+            });
+        var first = Assert.Single(reports);
+        Assert.Equal(TimeSpan.FromMilliseconds(23), first.PacingWait);
+        Assert.Equal(TimeSpan.FromMilliseconds(17), first.WriteDuration);
+        Assert.Equal(2, playback.Writes.Count);
+    }
+
+    private sealed class ManualWriteClock : TimeProvider
+    {
+        private long ticks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => ticks;
+        public void Advance(int milliseconds) => ticks += TimeSpan.FromMilliseconds(milliseconds).Ticks;
+    }
+
+    private sealed class TimedPacer(ManualWriteClock clock) : IPcmPlaybackPacer
+    {
+        public ValueTask WaitBeforeWriteAsync(CancellationToken cancellationToken)
+        {
+            clock.Advance(23);
+            return ValueTask.CompletedTask;
+        }
+        public void ObserveWrittenSamples(int sampleCount) { }
+    }
+
     [Fact]
     public async Task WritesEveryChunkAndSignalsFirstOutputOnce()
     {
@@ -131,6 +175,7 @@ public sealed class PcmPlaybackPumpTests
     private sealed class FakePlayback : IAudioPlayback
     {
         public List<short[]> Writes { get; } = [];
+        public Action? OnWrite { get; init; }
         public PcmAudioFormat Format => PcmAudioFormat.Voice8KhzMono16Bit;
 
         public ValueTask WriteAsync(
@@ -138,6 +183,7 @@ public sealed class PcmPlaybackPumpTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            OnWrite?.Invoke();
             Writes.Add(samples.ToArray());
             return ValueTask.CompletedTask;
         }

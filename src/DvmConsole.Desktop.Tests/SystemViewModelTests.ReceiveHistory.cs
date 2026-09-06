@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Media;
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
@@ -14,6 +17,35 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed partial class SystemViewModelTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RecordingFaultPreservesCurrentOperatorSelection(bool armed)
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                path, new UserSettingsStore(settingsPath), networkDisabledDemo: true);
+            ChannelViewModel channel = viewModel.Systems[0].Channels[0];
+            channel.SetRecordingEnabled(armed);
+            channel.SetAudioEnabled(true);
+
+            viewModel.PublishRecordingFault(channel, new IOException("recording storage unavailable"));
+
+            Assert.Equal(armed, channel.IsRecordingEnabled);
+            Assert.True(channel.IsAudioEnabled);
+            Assert.Contains(channel.Name, viewModel.AudioStatusText);
+            Assert.Contains("selection retained", viewModel.AudioStatusText);
+        }
+        finally
+        {
+            if (File.Exists(settingsPath))
+                File.Delete(settingsPath);
+        }
+    }
+
     [Fact]
     public async Task CoalescesRapidReplacementStreamsIntoOneHistoryEpisode()
     {
@@ -478,76 +510,102 @@ public sealed partial class SystemViewModelTests
                         slot: 1
                 """);
 
+            var dispatcher = new SerializedHistoryTestDispatcher();
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 codeplugPath,
-                new UserSettingsStore(settingsPath));
-            SystemViewModel system = Assert.Single(viewModel.Systems);
-
-            viewModel.ProcessTraffic(system, new FneTrafficFrame(
-                FneTrafficProtocol.P25,
-                1,
-                42,
-                102,
-                null,
-                "GROUP",
-                "VOICE",
-                "LDU1",
-                1,
-                80,
-                P25DfsiFrameCodec.CreateLdu1Payload(42, 102, new byte[P25DfsiFrameCodec.ImbeBytes])));
-
-            Assert.False(Assert.Single(viewModel.CallHistory).Encrypted);
-
-            viewModel.ProcessTraffic(system, new FneTrafficFrame(
-                FneTrafficProtocol.Dmr,
-                1,
-                42,
-                101,
-                0,
-                "GROUP",
-                "VOICE",
-                "VOICE",
-                1,
-                81,
-                new byte[DmrVoicePacketCodec.PacketBytes]));
-
-            byte[] dmrFrame = new byte[DmrVoicePacketCodec.FrameBytes];
-            var privacy = new PrivacyLC
+                new UserSettingsStore(settingsPath),
+                uiDispatcher: dispatcher,
+                networkDisabledDemo: true);
+            await dispatcher.InvokeAsync(() =>
             {
-                AlgId = DmrPrivacyAlgorithms.Arc4,
-                KId = 0x55,
-                FID = DmrPrivacyAlgorithms.FeatureId,
-                Group = true,
-                DstId = 101
-            };
-            FullLC.EncodePI(privacy, ref dmrFrame);
-            new SlotType { ColorCode = 0, DataType = (byte)DMRDataType.VOICE_PI_HEADER }.GetData(ref dmrFrame);
-            byte[] dmrPacket = new byte[DmrVoicePacketCodec.PacketBytes];
-            dmrFrame.CopyTo(dmrPacket, DmrVoicePacketCodec.HeaderBytes);
-            viewModel.ProcessTraffic(system, new FneTrafficFrame(
-                FneTrafficProtocol.Dmr,
-                1,
-                42,
-                101,
-                0,
-                "GROUP",
-                "DATA_SYNC",
-                "VOICE_PI_HEADER",
-                2,
-                81,
-                dmrPacket));
+                SystemViewModel system = Assert.Single(viewModel.Systems);
 
-            Assert.Equal(2, viewModel.CallHistory.Count);
-            Assert.True(viewModel.CallHistory.Single(entry => entry.Protocol == FneTrafficProtocol.Dmr).Encrypted);
-            Assert.Equal(
-                "Secure · RC4",
-                viewModel.CallHistory.Single(entry => entry.Protocol == FneTrafficProtocol.Dmr).EncryptionText);
+                viewModel.ProcessTraffic(system, new FneTrafficFrame(
+                    FneTrafficProtocol.P25,
+                    1,
+                    42,
+                    102,
+                    null,
+                    "GROUP",
+                    "VOICE",
+                    "LDU1",
+                    1,
+                    80,
+                    P25DfsiFrameCodec.CreateLdu1Payload(42, 102, new byte[P25DfsiFrameCodec.ImbeBytes])));
+
+                Assert.False(Assert.Single(viewModel.CallHistory).Encrypted);
+
+                viewModel.ProcessTraffic(system, new FneTrafficFrame(
+                    FneTrafficProtocol.Dmr,
+                    1,
+                    42,
+                    101,
+                    0,
+                    "GROUP",
+                    "VOICE",
+                    "VOICE",
+                    1,
+                    81,
+                    new byte[DmrVoicePacketCodec.PacketBytes]));
+
+                byte[] dmrFrame = new byte[DmrVoicePacketCodec.FrameBytes];
+                var privacy = new PrivacyLC
+                {
+                    AlgId = DmrPrivacyAlgorithms.Arc4,
+                    KId = 0x55,
+                    FID = DmrPrivacyAlgorithms.FeatureId,
+                    Group = true,
+                    DstId = 101
+                };
+                FullLC.EncodePI(privacy, ref dmrFrame);
+                new SlotType { ColorCode = 0, DataType = (byte)DMRDataType.VOICE_PI_HEADER }.GetData(ref dmrFrame);
+                byte[] dmrPacket = new byte[DmrVoicePacketCodec.PacketBytes];
+                dmrFrame.CopyTo(dmrPacket, DmrVoicePacketCodec.HeaderBytes);
+                viewModel.ProcessTraffic(system, new FneTrafficFrame(
+                    FneTrafficProtocol.Dmr,
+                    1,
+                    42,
+                    101,
+                    0,
+                    "GROUP",
+                    "DATA_SYNC",
+                    "VOICE_PI_HEADER",
+                    2,
+                    81,
+                    dmrPacket));
+
+                Assert.Equal(2, viewModel.CallHistory.Count);
+                Assert.True(viewModel.CallHistory.Single(entry => entry.Protocol == FneTrafficProtocol.Dmr).Encrypted);
+                Assert.Equal(
+                    "Secure · RC4",
+                    viewModel.CallHistory.Single(entry => entry.Protocol == FneTrafficProtocol.Dmr).EncryptionText);
+            });
         }
         finally
         {
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
             CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    // Model the UI's serialized callbacks without starting an Avalonia loop.
+    private sealed class SerializedHistoryTestDispatcher : IUiDispatcher
+    {
+        private readonly object sync = new();
+
+        public bool CheckAccess() => Monitor.IsEntered(sync);
+
+        public void Post(Action action, bool background = false)
+        {
+            lock (sync)
+                action();
+        }
+
+        public ValueTask InvokeAsync(Action action)
+        {
+            Post(action);
+            return ValueTask.CompletedTask;
         }
     }
 

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace DvmConsole.Desktop;
@@ -7,46 +11,44 @@ internal sealed record DocumentationPage(
     string RelativePath,
     string FilePath);
 
-internal sealed class DocumentationCatalog
+internal sealed partial class DocumentationCatalog
 {
-    private static readonly Regex SortPrefixRegex = new(@"^\d+\s*-\s*", RegexOptions.Compiled);
-    private static readonly string[] DefaultPagePaths =
-    [
-        "Getting Started/01-Overview.md",
-        "Getting Started/02-Building.md",
-        "Getting Started/03-Configurations/01-Codeplug Creation.md",
-        "Getting Started/03-Configurations/02-Encryption Keys.md",
-        "Getting Started/03-Configurations/03-RID Aliases.md",
-        "Getting Started/03-Configurations/04-Groups and Patching.md",
-        "Getting Started/03-Configurations/05-Talkgroup Audio Recorder.md",
-        "Getting Started/03-Configurations/06-Configuration Troubleshooting.md",
-        "Getting Started/04-Operations/01-Console Operation.md",
-        "Getting Started/04-Operations/02-Settings Reference.md",
-        "Getting Started/04-Operations/03-Audio Settings.md",
-        "Getting Started/04-Operations/04-Alert Tones.md"
-    ];
+    private readonly string documentationRoot;
+    private readonly HashSet<string> assetPaths;
     private readonly IReadOnlyList<DocumentationPage> pages;
 
     public DocumentationCatalog(
         string documentationRoot,
-        IEnumerable<string>? pagePaths = null)
+        IEnumerable<string> pagePaths,
+        IEnumerable<string>? assets = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(documentationRoot);
-        string rootPath = Path.GetFullPath(documentationRoot);
+        this.documentationRoot = Path.GetFullPath(documentationRoot);
+        assetPaths = (assets ?? [])
+            .Select(NormalizeRelativePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        pages = (pagePaths ?? DefaultPagePaths)
+        pages = pagePaths
             .Select(NormalizeRelativePath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(path => new DocumentationPage(
                 FormatTitle(Path.GetFileName(path)),
                 path,
-                Path.Combine(rootPath, path.Replace('/', Path.DirectorySeparatorChar))))
+                ResolveUnderRoot(path)))
             .OrderBy(page => page.RelativePath, DocumentationPathComparer.Instance)
             .ToArray();
     }
 
     public static DocumentationCatalog OpenDefault()
-        => new(Path.Combine(AppContext.BaseDirectory, "Documentation"));
+    {
+        string root = Path.Combine(AppContext.BaseDirectory, "Documentation");
+        string manifestPath = Path.Combine(root, "manifest.json");
+        DocumentationManifest manifest = JsonSerializer.Deserialize(
+            File.ReadAllText(manifestPath),
+            DesktopSettingsJsonContext.Default.DocumentationManifest)
+            ?? throw new InvalidDataException("The documentation manifest is empty.");
+        return new DocumentationCatalog(root, manifest.Pages, manifest.Assets);
+    }
 
     public async Task<IReadOnlyList<DocumentationPage>> FindAsync(
         string? searchText = null,
@@ -77,15 +79,16 @@ internal sealed class DocumentationCatalog
         if (knownPage is null)
             throw new InvalidOperationException("The documentation page is outside the configured documentation set.");
 
-        return await File.ReadAllTextAsync(
+        string markdown = await File.ReadAllTextAsync(
             knownPage.FilePath,
             cancellationToken).ConfigureAwait(false);
+        return LocalImageRegex().Replace(markdown, match => ResolveImageLink(knownPage, match));
     }
 
     public static string FormatTitle(string value)
     {
         string name = Path.GetFileNameWithoutExtension(value ?? string.Empty);
-        return SortPrefixRegex.Replace(name, string.Empty).Trim();
+        return SortPrefixRegex().Replace(name, string.Empty).Trim();
     }
 
     private static string NormalizeRelativePath(string value)
@@ -95,6 +98,55 @@ internal sealed class DocumentationCatalog
             throw new ArgumentException("Documentation paths must remain under the configured documentation root.", nameof(value));
         return path;
     }
+
+    private string ResolveUnderRoot(string relativePath)
+    {
+        string fullPath = Path.GetFullPath(
+            relativePath.Replace('/', Path.DirectorySeparatorChar),
+            documentationRoot);
+        string relative = Path.GetRelativePath(documentationRoot, fullPath);
+        if (Path.IsPathRooted(relative) || relative == ".." ||
+            relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Documentation paths must remain under the configured documentation root.",
+                nameof(relativePath));
+        }
+        return fullPath;
+    }
+
+    private string ResolveImageLink(DocumentationPage page, Match match)
+    {
+        string value = match.Groups[1].Value.Trim();
+        if (Uri.TryCreate(value, UriKind.Absolute, out Uri? absoluteUri))
+        {
+            if (absoluteUri.Scheme is "http" or "https")
+                return match.Value;
+            throw new InvalidDataException("Documentation images may use only packaged assets or HTTP(S) URLs.");
+        }
+
+        string pageDirectory = Path.GetDirectoryName(page.RelativePath) ?? string.Empty;
+        if (Path.IsPathRooted(value))
+            throw new InvalidDataException("Documentation image paths must be relative.");
+        string imagePath = Path.GetFullPath(Path.Combine(documentationRoot, pageDirectory, value));
+        string normalized = Path.GetRelativePath(documentationRoot, imagePath)
+            .Replace(Path.DirectorySeparatorChar, '/');
+        if (normalized == ".." || normalized.StartsWith("../", StringComparison.Ordinal))
+            throw new InvalidDataException("Documentation image paths must remain under the packaged asset root.");
+        if (!assetPaths.Contains(normalized))
+            throw new InvalidDataException($"Documentation image is not declared in the manifest: {value}");
+        string replacement = new Uri(imagePath).AbsoluteUri;
+        int valueOffset = match.Groups[1].Index - match.Index;
+        return match.Value[..valueOffset] +
+               replacement +
+               match.Value[(valueOffset + match.Groups[1].Length)..];
+    }
+
+    [GeneratedRegex(@"^\d+\s*-\s*")]
+    private static partial Regex SortPrefixRegex();
+
+    [GeneratedRegex(@"!\[[^\]]*\]\(([^)]+)\)")]
+    private static partial Regex LocalImageRegex();
 
     private sealed class DocumentationPathComparer : IComparer<string>
     {
@@ -115,3 +167,5 @@ internal sealed class DocumentationCatalog
         }
     }
 }
+
+internal sealed record DocumentationManifest(string[] Pages, string[] Assets);

@@ -1,5 +1,10 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Configuration;
+using DvmConsole.Core.Settings;
 using DvmConsole.Presentation;
+using Avalonia.Media;
 using System.ComponentModel;
 using System.Windows.Input;
 
@@ -18,6 +23,10 @@ public sealed class WebStreamViewModel : INotifyPropertyChanged, IWebStreamViewM
     private string outputDeviceIdText = string.Empty;
     private string statusText = "Off";
     private IReadOnlyList<AudioDeviceOptionViewModel> outputDeviceOptions = [];
+    private readonly string? idleColor;
+    private double widgetX;
+    private double widgetY;
+    private bool darkMode;
 
     public WebStreamViewModel(WebStreamConfiguration configuration)
     {
@@ -26,13 +35,16 @@ public sealed class WebStreamViewModel : INotifyPropertyChanged, IWebStreamViewM
         Url = configuration.Url.Trim();
         AuthUsername = configuration.AuthUsername?.Trim() ?? string.Empty;
         AuthPassword = configuration.AuthPassword ?? string.Empty;
+        idleColor = configuration.IdleColor;
         ToggleCommand = new AsyncRelayCommand(() => Task.CompletedTask, () => false);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public event EventHandler<double>? VolumeChanged;
+    public event EventHandler<WidgetPositionChangedEventArgs>? WidgetPositionChanged;
 
     public string Name { get; }
+    public string SettingsKey => WidgetPositionKey.ForWebStream(Name);
     public string Url { get; }
     public string AuthUsername { get; }
     public string AuthPassword { get; }
@@ -42,6 +54,32 @@ public sealed class WebStreamViewModel : INotifyPropertyChanged, IWebStreamViewM
     public bool IsFailed => isFailed;
     public string StatusText => statusText;
     public string ToggleButtonText => IsActive ? "Stop" : "Start";
+    public string CardSubtitle => "Web stream · RX only";
+    public string CardStatusText => IsReceiving ? "Live audio" : StatusText;
+    public string ToggleAutomationName => $"{ToggleButtonText} web stream {Name}";
+    public string VolumeAutomationName => $"Volume for web stream {Name}";
+    public double CardWidth => 235;
+    public double WidgetX => widgetX;
+    public double WidgetY => widgetY;
+    public IBrush CardBackgroundBrush => IsReceiving
+        ? SolidBrushCache.Get("#008A3A")
+        : IsActive
+            ? SolidBrushCache.Get(darkMode ? "#1B2B22" : "#E2F3E8")
+            : SolidBrushCache.Get(darkMode ? "#151D26" : "#FFFFFF");
+    public IBrush CardBorderBrush => IsFailed
+        ? SolidBrushCache.Get("#C73A3A")
+        : IsReceiving
+            ? SolidBrushCache.Get("#00C86A")
+            : IsConnecting
+                ? SolidBrushCache.Get("#D99920")
+                : IsActive
+                    ? SolidBrushCache.Get("#4E8060")
+                    : SolidBrushCache.Get(
+                        idleColor ?? string.Empty,
+                        darkMode ? "#2A3A4B" : "#9BA8B5");
+    public IBrush CardTextBrush => IsReceiving
+        ? SolidBrushCache.Get("#FFFFFF")
+        : SolidBrushCache.Get(darkMode ? "#DCE3EB" : "#18212B");
     public string OutputDeviceIdText
     {
         get => outputDeviceIdText;
@@ -80,8 +118,15 @@ public sealed class WebStreamViewModel : INotifyPropertyChanged, IWebStreamViewM
                 return;
             volume = normalized;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Volume)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(VolumeSliderValue)));
             VolumeChanged?.Invoke(this, normalized);
         }
+    }
+
+    public double VolumeSliderValue
+    {
+        get => NeutralSliderMath.VolumeGainToPosition(volume);
+        set => Volume = NeutralSliderMath.VolumePositionToGain(value);
     }
 
     public ICommand ToggleCommand { get; private set; }
@@ -112,6 +157,41 @@ public sealed class WebStreamViewModel : INotifyPropertyChanged, IWebStreamViewM
     public void RefreshOutputDeviceSelection()
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedOutputDevice)));
 
+    public void SetWidgetPosition(double x, double y, bool isFinal = false)
+    {
+        double nextX = double.IsFinite(x) ? Math.Clamp(x, 0, 10_000) : 0;
+        double nextY = double.IsFinite(y) ? Math.Clamp(y, 0, 10_000) : 0;
+        bool changed = false;
+        if (Math.Abs(widgetX - nextX) >= 0.01)
+        {
+            widgetX = nextX;
+            changed = true;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetX)));
+        }
+        if (Math.Abs(widgetY - nextY) >= 0.01)
+        {
+            widgetY = nextY;
+            changed = true;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetY)));
+        }
+        if (changed || isFinal)
+        {
+            WidgetPositionChanged?.Invoke(
+                this,
+                new WidgetPositionChangedEventArgs(widgetX, widgetY, isFinal));
+        }
+    }
+
+    public void SetDarkMode(bool enabled)
+    {
+        if (darkMode == enabled)
+            return;
+        darkMode = enabled;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardTextBrush)));
+    }
+
     internal void SetPlaybackState(
         bool active,
         bool connecting,
@@ -130,12 +210,17 @@ public sealed class WebStreamViewModel : INotifyPropertyChanged, IWebStreamViewM
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFailed)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ToggleButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardStatusText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ToggleAutomationName)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardTextBrush)));
         (ToggleCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
-    private async Task ToggleAsync()
+    internal async Task ToggleAsync()
     {
-        if (start is null || stop is null)
+        if (busy || start is null || stop is null)
             return;
 
         busy = true;

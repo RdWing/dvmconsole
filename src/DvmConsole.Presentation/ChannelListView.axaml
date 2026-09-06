@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <UserControl
     x:Class="DvmConsole.Presentation.ChannelListView"
     xmlns="https://github.com/avaloniaui"
@@ -5,6 +8,7 @@
     xmlns:presentation="using:DvmConsole.Presentation"
     x:DataType="presentation:ConsoleListViewModel">
   <UserControl.Styles>
+    <StyleInclude Source="avares://DvmConsole.Presentation/CompactSliderStyles.axaml" />
     <Style Selector="Button.list-control">
       <Setter Property="Template">
         <ControlTemplate>
@@ -18,10 +22,12 @@
     <Style Selector="Button.list-rx.rx-active"><Setter Property="Background" Value="#0B4D8A"/><Setter Property="BorderBrush" Value="#49A8FF"/></Style>
     <Style Selector="Button.list-selector.armed"><Setter Property="Background" Value="{DynamicResource OperationalSelectionSurfaceBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource OperationalSelectionBorderBrush}"/><Setter Property="Foreground" Value="{DynamicResource OperationalStateTextBrush}"/></Style>
     <Style Selector="Button.list-secure.armed"><Setter Property="Background" Value="#92400E"/><Setter Property="BorderBrush" Value="#F59E0B"/><Setter Property="Foreground" Value="White"/></Style>
+    <Style Selector="Button.row-disclosure"><Setter Property="BorderBrush" Value="Transparent"/></Style>
+    <Style Selector="Button.list-control:focus-visible"><Setter Property="BorderBrush" Value="{DynamicResource OperationalSelectionBorderBrush}"/></Style>
   </UserControl.Styles>
-  <ListBox Classes="channel-list" ItemsSource="{Binding Items}" SelectionMode="Single" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
+  <ListBox Classes="channel-list" ItemsSource="{Binding Items}" SelectionMode="Single" KeyboardNavigation.TabNavigation="Continue" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
     <ListBox.Styles>
-      <Style Selector="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/><Setter Property="MinHeight" Value="0"/></Style>
+      <Style Selector="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/><Setter Property="MinHeight" Value="0"/><Setter Property="KeyboardNavigation.TabNavigation" Value="Continue"/></Style>
     </ListBox.Styles>
     <ListBox.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
     <ListBox.ItemTemplate>
@@ -33,21 +39,14 @@
             <Grid RowDefinitions="Auto,Auto">
               <Grid ColumnDefinitions="Auto,*,100,Auto" ColumnSpacing="8" VerticalAlignment="Center">
                 <Button Classes="list-control list-rx" Classes.rx-enabled="{Binding ReceiveEnabled}" Classes.rx-active="{Binding ReceiveActive}" MinWidth="52" MinHeight="44" Content="{Binding ReceiveButtonText}" AutomationProperties.Name="{Binding Name, StringFormat='Toggle receive for {0}'}" Click="HandleReceiveClick"/>
-                <StackPanel Grid.Column="1" VerticalAlignment="Center" MinWidth="0">
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="5"><TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/><TextBlock Grid.Column="1" FontSize="11" Text="{Binding StateText}" TextTrimming="CharacterEllipsis"/></Grid>
-                  <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="5"><TextBlock FontSize="11" Opacity="0.75" Text="{Binding TalkgroupText}"/><TextBlock Grid.Column="1" FontSize="11" Opacity="0.75" Text="{Binding ProtocolText}"/><TextBlock Grid.Column="3" FontSize="11" Opacity="0.72" Text="{Binding LastCallerText}" TextTrimming="CharacterEllipsis"/></Grid>
-                </StackPanel>
-                <Border Grid.Column="2" Width="100" Height="5" CornerRadius="3" Background="#24303B" ClipToBounds="True" VerticalAlignment="Center">
-                  <Grid>
-                    <Border Classes="list-meter-fill-clip" Width="{Binding MeterRmsWidth}" HorizontalAlignment="Left" CornerRadius="3" ClipToBounds="True">
-                      <Border Classes="list-meter-gradient" Width="100" HorizontalAlignment="Left" CornerRadius="3">
-                        <Border.Background><LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%"><GradientStop Color="#00BE5A" Offset="0"/><GradientStop Color="#00BE5A" Offset="0.76"/><GradientStop Color="#F2B134" Offset="0.76"/><GradientStop Color="#F2B134" Offset="0.88"/><GradientStop Color="#E5484D" Offset="0.88"/><GradientStop Color="#E5484D" Offset="1"/></LinearGradientBrush></Border.Background>
-                      </Border>
-                    </Border>
-                    <Canvas IsHitTestVisible="False"><Border Canvas.Left="{Binding MeterPeakX}" Width="2" Height="5" Background="#F5F7FA" IsVisible="{Binding IsMeterPeakVisible}"/></Canvas>
-                  </Grid>
-                </Border>
-                <Button Grid.Column="3" Classes="list-control ptt" MinWidth="64" MinHeight="44" Content="{Binding PttText}" IsEnabled="{Binding IsPttEnabled}" AutomationProperties.Name="{Binding Name, StringFormat='Push to talk on {0}'}" KeyDown="HandlePttKeyDown" KeyUp="HandlePttKeyUp"/>
+                <Button Grid.Column="1" Classes="list-control row-disclosure" Padding="0" Background="Transparent" BorderThickness="1" HorizontalContentAlignment="Stretch" VerticalAlignment="Center" MinWidth="0" AutomationProperties.Name="{Binding Name, StringFormat='Expand or collapse {0}'}" Click="HandleDisclosureClick">
+                  <StackPanel MinWidth="0">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="5"><TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/><TextBlock Grid.Column="1" FontSize="11" Text="{Binding StateText}" TextTrimming="CharacterEllipsis"/></Grid>
+                    <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="5"><TextBlock FontSize="11" Opacity="0.75" Text="{Binding TalkgroupText}"/><TextBlock Grid.Column="1" FontSize="11" Opacity="0.75" Text="{Binding ProtocolText}"/><TextBlock Grid.Column="3" FontSize="11" Opacity="0.72" Text="{Binding LastCallerText}" TextTrimming="CharacterEllipsis"/></Grid>
+                  </StackPanel>
+                </Button>
+                <presentation:AudioLevelMeter Grid.Column="2" Width="100" Height="5" Meter="{Binding Meter}" ColorizePeak="False" VerticalAlignment="Center" AutomationProperties.Name="Channel audio level"/>
+                <Button Grid.Column="3" Classes="list-control ptt" MinWidth="64" MinHeight="44" Content="{Binding PttText}" IsEnabled="{Binding IsPttEnabled}" AutomationProperties.Name="{Binding Name, StringFormat='Push to talk on {0}'}" LostFocus="HandlePttLostFocus"/>
               </Grid>
               <Border Grid.Row="1" Margin="60,6,0,0" Padding="7" CornerRadius="5" Background="{DynamicResource ActivityBackgroundBrush}" IsVisible="{Binding IsExpanded}">
                 <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="5">
@@ -60,7 +59,8 @@
                   <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Foreground="#E5484D" Text="{Binding AuthorityText}" TextWrapping="Wrap" IsVisible="{Binding HasAuthorityFailure}"/>
                   <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Spacing="1">
                     <TextBlock Text="{Binding VolumeText}"/>
-                    <presentation:NeutralSnapSlider Minimum="-1"
+                    <presentation:NeutralSnapSlider Classes="compact-slider touch-slider"
+                                                    Minimum="-1"
                                                     Maximum="1"
                                                     NeutralValue="0"
                                                     SnapFraction="0.05"

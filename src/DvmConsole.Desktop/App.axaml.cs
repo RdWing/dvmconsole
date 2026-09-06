@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -18,6 +21,7 @@ namespace DvmConsole.Desktop;
 
 public sealed class App : Avalonia.Application
 {
+    private static int dispatcherExceptionBoundaryInstalled;
 #if DEBUG
     private static int developerToolsAttached;
 #endif
@@ -40,6 +44,7 @@ public sealed class App : Avalonia.Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        InstallDispatcherExceptionBoundary();
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             MainWindow mainWindow;
@@ -63,7 +68,26 @@ public sealed class App : Avalonia.Application
             }
             else
             {
-                mainWindow = new MainWindow(ConfigurationPath);
+                string settingsPath = UserSettingsStore.DefaultPath;
+                string appDataRoot = Path.GetDirectoryName(settingsPath) ?? AppContext.BaseDirectory;
+                var legacyImport = new LegacyImportAssistant(appDataRoot);
+                LegacyImportDiscovery discovery = legacyImport.Discover();
+                if (discovery.HasCandidates && !SmokeWindows && string.IsNullOrWhiteSpace(DemoCaptureDirectory))
+                {
+                    desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                    var dialog = new LegacyImportDialog(discovery);
+                    desktop.MainWindow = dialog;
+                    dialog.Show();
+                    Dispatcher.UIThread.Post(() => TaskObservation.Observe(
+                        CompleteLegacyImportStartupAsync(desktop, dialog, legacyImport, discovery)));
+                    base.OnFrameworkInitializationCompleted();
+                    return;
+                }
+                desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                Dispatcher.UIThread.Post(() => TaskObservation.Observe(
+                    CompleteMainWindowStartupAsync(desktop)));
+                base.OnFrameworkInitializationCompleted();
+                return;
             }
             desktop.MainWindow = mainWindow;
             if (!string.IsNullOrWhiteSpace(DemoCaptureDirectory))
@@ -80,6 +104,79 @@ public sealed class App : Avalonia.Application
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    private static async Task CompleteLegacyImportStartupAsync(
+        IClassicDesktopStyleApplicationLifetime desktop,
+        LegacyImportDialog dialog,
+        LegacyImportAssistant assistant,
+        LegacyImportDiscovery discovery)
+    {
+        try
+        {
+            LegacyImportDialogResult result = await dialog.Result.ConfigureAwait(true);
+            if (result.Decision == LegacyImportDialogDecision.Import)
+                await assistant.ImportAsync(discovery, result.Selection).ConfigureAwait(true);
+            else if (result.Decision == LegacyImportDialogDecision.Decline)
+                assistant.Decline();
+        }
+        catch (Exception exception)
+        {
+            DesktopCrashLog.Write("Legacy data import failed", exception);
+        }
+
+        await CompleteMainWindowStartupAsync(desktop).ConfigureAwait(true);
+    }
+
+    private static async Task CompleteMainWindowStartupAsync(
+        IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        try
+        {
+            MainWindow mainWindow = await MainWindow.CreateAsync(
+                ConfigurationPath,
+                new UserSettingsStore(UserSettingsStore.DefaultPath),
+                new OperatorViewStore(OperatorViewStore.DefaultPath),
+                demoMode: false).ConfigureAwait(true);
+            desktop.MainWindow = mainWindow;
+            desktop.ShutdownMode = ShutdownMode.OnLastWindowClose;
+            if (!string.IsNullOrWhiteSpace(DemoCaptureDirectory))
+            {
+                TaskObservation.Observe(CaptureDemoScreenshotsAsync(
+                    desktop,
+                    mainWindow,
+                    DemoCaptureDirectory));
+            }
+            else if (SmokeWindows)
+            {
+                TaskObservation.Observe(SmokeWindowsAsync(desktop, mainWindow));
+            }
+            else
+            {
+                mainWindow.Show();
+            }
+        }
+        catch (Exception exception)
+        {
+            DesktopCrashLog.Write("Main window storage startup", exception);
+            desktop.Shutdown(1);
+        }
+    }
+
+    private void InstallDispatcherExceptionBoundary()
+    {
+        if (Interlocked.Exchange(ref dispatcherExceptionBoundaryInstalled, 1) != 0)
+            return;
+        Dispatcher.UIThread.UnhandledException += (_, args) =>
+        {
+            DesktopCrashLog.Write("Unhandled Avalonia dispatcher exception", args.Exception);
+            if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop &&
+                desktop.MainWindow?.DataContext is MainWindowViewModel viewModel)
+            {
+                viewModel.ReportUnhandledUiFailure(args.Exception);
+            }
+            args.Handled = true;
+        };
     }
 
     internal static string ResolveDemoConfigurationPath(string baseDirectory)
@@ -143,14 +240,30 @@ public sealed class App : Avalonia.Application
 
             WriteSmokeResult("PASS");
             Console.WriteLine("Desktop window smoke passed.");
-            desktop.Shutdown(0);
+            RequestMainWindowShutdown(desktop, mainWindow, 0);
         }
         catch (Exception exception)
         {
             WriteSmokeResult($"FAIL{Environment.NewLine}{exception}");
             Console.Error.WriteLine($"Desktop window smoke failed: {exception}");
-            desktop.Shutdown(10);
+            RequestMainWindowShutdown(desktop, mainWindow, 10);
         }
+    }
+
+    private static void RequestMainWindowShutdown(
+        IClassicDesktopStyleApplicationLifetime desktop,
+        MainWindow mainWindow,
+        int exitCode)
+    {
+        desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        EventHandler? closed = null;
+        closed = (_, _) =>
+        {
+            mainWindow.Closed -= closed;
+            desktop.Shutdown(exitCode);
+        };
+        mainWindow.Closed += closed;
+        mainWindow.Close();
     }
 
     private static async Task SmokeLoadedConfigurationSystemActionsAsync(MainWindow mainWindow)
@@ -239,17 +352,22 @@ public sealed class App : Avalonia.Application
             string path = title.Contains("encryption", StringComparison.OrdinalIgnoreCase)
                 ? keyPath
                 : aliasPath;
-            return await studio.StorageProvider.TryGetFileFromPathAsync(path);
+            // Keep the packaged smoke independent of the active Linux desktop
+            // portal. The production picker still supplies its native storage
+            // item; this local implementation exercises the same import path.
+            return new CompanionFileSelection(
+                System.IO.Path.GetFileName(path),
+                await File.ReadAllTextAsync(path));
         };
         var exportPaths = new List<string>();
-        studio.CodeplugSaveFilePickerOverride = async (_, suggestedName) =>
+        studio.CodeplugSavePathOverride = (_, suggestedName) =>
         {
             string directory = Path.Combine(pickerRoot, $"export-{exportPaths.Count + 1}");
             Directory.CreateDirectory(directory);
             string path = Path.Combine(directory, suggestedName);
             File.WriteAllText(path, string.Empty);
             exportPaths.Add(path);
-            return await studio.StorageProvider.TryGetFileFromPathAsync(path);
+            return Task.FromResult<string?>(path);
         };
 
         studio.Show(smokeHost);
@@ -513,8 +631,12 @@ public sealed class App : Avalonia.Application
         int messageCount = messages.Count;
         await ClickStudioButtonAsync(studio, "Choose managed key file", exercised);
         await WaitUntilAsync(
-            () => messages.Count > messageCount && studio.StudioViewModel.Configuration.KeyFile == "smoke-keys.clear",
-            "The key-file browse button did not stage the selected managed key file.");
+            () => messages.Count > messageCount,
+            "The key-file browse button did not report a result.");
+        (string keyTitle, string keyMessage) = messages[^1];
+        Require(
+            studio.StudioViewModel.Configuration.KeyFile == "smoke-keys.clear",
+            $"The key-file browse button did not stage the selected managed key file. {keyTitle}: {keyMessage}");
 
         SystemConfiguration aliasSystem = studio.StudioViewModel.Systems[0];
         studio.StudioViewModel.SelectedAliasSystem = aliasSystem;
@@ -525,8 +647,12 @@ public sealed class App : Avalonia.Application
             exercised,
             button => ReferenceEquals(button.Tag, aliasSystem));
         await WaitUntilAsync(
-            () => messages.Count > messageCount && aliasSystem.AliasPath == "smoke-aliases.yml",
-            "The Files alias browse button did not stage the selected managed alias file.");
+            () => messages.Count > messageCount,
+            "The Files alias browse button did not report a result.");
+        (string aliasTitle, string aliasMessage) = messages[^1];
+        Require(
+            aliasSystem.AliasPath == "smoke-aliases.yml",
+            $"The Files alias browse button did not stage the selected managed alias file. {aliasTitle}: {aliasMessage}");
 
         int initialAliasCount = studio.StudioViewModel.Aliases.Count;
         await ClickStudioButtonAsync(studio, "Add RID alias", exercised);
@@ -568,7 +694,15 @@ public sealed class App : Avalonia.Application
 
         await ClickStudioButtonAsync(studio, "Configuration validation details", exercised);
         Require(viewModel.IsValidationDrawerOpen, "The validation button did not open the validation drawer.");
-        await ClickStudioButtonAsync(studio, "Open configuration validation issue", exercised);
+        ConfigurationValidationIssue addressIssue = viewModel.ValidationIssues.Single(
+            issue => issue.IsError &&
+                     issue.Path.EndsWith(".address", StringComparison.OrdinalIgnoreCase));
+        await ClickStudioButtonAsync(
+            studio,
+            addressIssue.AutomationName,
+            exercised,
+            button => ReferenceEquals(button.Tag, addressIssue));
+        exercised.Add("Open configuration validation issue");
         await ClickStudioButtonAsync(studio, "Close configuration validation details", exercised);
         Require(!viewModel.IsValidationDrawerOpen, "The validation Close button did not close the drawer.");
 
@@ -713,12 +847,12 @@ public sealed class App : Avalonia.Application
         try
         {
             await CaptureDemoScreenshotsCoreAsync(mainWindow, captureDirectory);
-            desktop.Shutdown(0);
+            RequestMainWindowShutdown(desktop, mainWindow, 0);
         }
         catch (Exception exception)
         {
             Console.Error.WriteLine($"Demo screenshot capture failed: {exception}");
-            desktop.Shutdown(11);
+            RequestMainWindowShutdown(desktop, mainWindow, 11);
         }
     }
 
@@ -900,7 +1034,7 @@ public sealed class App : Avalonia.Application
             new PixelSize(width, height),
             new Vector(96, 96));
         bitmap.Render(visual);
-        bitmap.Save(path);
+        DocumentationScreenshotWriter.Save(bitmap, path);
     }
 
     internal static void InitializeSmokeResult()

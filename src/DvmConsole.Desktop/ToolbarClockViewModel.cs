@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -9,7 +12,7 @@ namespace DvmConsole.Desktop;
 
 public sealed record ToolbarClockColorOption(string Label, string ColorHex) : IToolbarClockColorOption
 {
-    public IBrush ColorBrush => new SolidColorBrush(Color.Parse(ColorHex));
+    public IBrush ColorBrush => SolidBrushCache.Get(ColorHex);
 }
 
 public sealed record ToolbarClockUtcOffsetOption(int OffsetHours, string Label) : IToolbarClockUtcOffsetOption;
@@ -118,7 +121,6 @@ public sealed class ToolbarClockViewModel : INotifyPropertyChanged, IToolbarCloc
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ColorHex)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedColorOption)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ColorLabel)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ColorBrush)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(BackgroundBrush)));
         }
     }
@@ -149,10 +151,7 @@ public sealed class ToolbarClockViewModel : INotifyPropertyChanged, IToolbarCloc
     public string ColorLabel
         => colorOptions.First(option => option.ColorHex.Equals(ColorHex, StringComparison.OrdinalIgnoreCase)).Label;
 
-    public IBrush ColorBrush => new SolidColorBrush(Color.Parse(ColorHex));
-
-    public IBrush BackgroundBrush => new SolidColorBrush(Color.Parse(
-        Enabled ? ColorHex : "#1A222D"));
+    public IBrush BackgroundBrush => SolidBrushCache.Get(Enabled ? ColorHex : "#1A222D");
 
     public bool TryGetUtcOffset(out int offsetHours)
     {

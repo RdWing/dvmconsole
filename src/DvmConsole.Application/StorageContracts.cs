@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Application;
 
 public sealed record AssetDescriptor(
@@ -18,6 +21,11 @@ public interface IAssetStore
         CancellationToken cancellationToken = default);
     IAsyncEnumerable<AssetDescriptor> ListAsync(
         CancellationToken cancellationToken = default);
+    ValueTask<bool> DeleteIfUnreferencedAsync(
+        AssetId id,
+        IReadOnlyCollection<AssetId> referencedAssets,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(false);
 }
 
 public sealed record RecordingDescriptor(
@@ -136,5 +144,17 @@ public interface IExportDocumentSet
         CancellationToken cancellationToken = default);
     ValueTask<IReadableDocument?> ResolveExportedCompanionAsync(
         string safeRelativeName,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IExportDocumentTransaction : IExportDocumentSet, IAsyncDisposable
+{
+    ValueTask CommitAsync(CancellationToken cancellationToken = default);
+    ValueTask RollbackAsync(CancellationToken cancellationToken = default);
+}
+
+public interface ITransactionalExportDocumentSet : IExportDocumentSet
+{
+    ValueTask<IExportDocumentTransaction> BeginTransactionAsync(
         CancellationToken cancellationToken = default);
 }

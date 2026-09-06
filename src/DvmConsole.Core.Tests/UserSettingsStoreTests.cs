@@ -1,10 +1,262 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
+using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
+using System.Runtime.InteropServices;
 using Xunit;
 
 namespace DvmConsole.Core.Tests;
 
 public sealed class UserSettingsStoreTests
 {
+    [Theory]
+    [InlineData(SettingsImportScope.All, true, true, true)]
+    [InlineData(SettingsImportScope.All, true, false, true)]
+    [InlineData(SettingsImportScope.All, true, true, false)]
+    [InlineData(SettingsImportScope.OperatorState, true, true, true)]
+    [InlineData(SettingsImportScope.General, true, true, true)]
+    [InlineData(SettingsImportScope.Audio, false, true, true)]
+    [InlineData(SettingsImportScope.Session, false, true, true)]
+    public void ImportedChannelPresentationSurvivesDestinationConfigurationActivation(
+        SettingsImportScope scope, bool importsLayout, bool receiveEnabled, bool restoreOnStartup)
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"settings-layout-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string sourceId = Guid.NewGuid().ToString("N");
+        string targetId = Guid.NewGuid().ToString("N");
+        string targetPath = Path.Combine(root, "target", "codeplug.yml");
+        const string channel = "Training\u001FSecure Dispatch";
+        try
+        {
+            var store = new UserSettingsStore(Path.Combine(root, "UserSettings.json"));
+            var current = new UserSettings();
+            ConfigurationOperatorStateStore.Activate(current, targetId, targetPath, false);
+            current.ReceiveEnabledChannelKeys = ["Training\u001FOld selection"];
+            current.ChannelWidgetPositions[channel] = new WidgetPositionSetting { X = 10, Y = 20 };
+            ConfigurationOperatorStateStore.CaptureActive(current, targetId, targetPath);
+            store.Save(current);
+
+            var imported = new UserSettings();
+            string sourcePath = Path.Combine(root, "source", "codeplug.yml");
+            ConfigurationOperatorStateStore.Activate(imported, sourceId, sourcePath, false);
+            imported.ChannelWidgetPositions[channel] = new WidgetPositionSetting { X = 450, Y = 260 };
+            imported.ChannelWidgetPositions["stream:Training"] = new WidgetPositionSetting { X = 900, Y = 520 };
+            imported.ReceiveEnabledChannelKeys = receiveEnabled ? [channel] : [];
+            imported.RestoreSelectedChannelsOnStartup = restoreOnStartup;
+            imported.SelectedWebStreams = ["stream:Training"];
+            imported.TransmitSelectedChannelKeys = [channel];
+            ConfigurationOperatorStateStore.CaptureActive(imported, sourceId, sourcePath);
+            using var exported = new MemoryStream();
+            new UserSettingsStore(Path.Combine(root, "source-settings.json")).Export(imported, exported);
+            exported.Position = 0;
+
+            store.Import(exported, scope);
+            UserSettings reloaded = new UserSettingsStore(store.Path).Load();
+            ConfigurationOperatorStateStore.Activate(reloaded, targetId, targetPath, false);
+
+            Assert.Equal((scope & SettingsImportScope.Session) != 0
+                ? (receiveEnabled ? new[] { channel } : Array.Empty<string>())
+                : new[] { "Training\u001FOld selection" }, reloaded.ReceiveEnabledChannelKeys);
+            Assert.Equal(importsLayout ? restoreOnStartup : current.RestoreSelectedChannelsOnStartup,
+                reloaded.RestoreSelectedChannelsOnStartup);
+            Assert.Empty(reloaded.SelectedWebStreams);
+            Assert.Empty(reloaded.TransmitSelectedChannelKeys);
+            Assert.Equal(importsLayout ? 450 : 10, reloaded.ChannelWidgetPositions[channel].X);
+            Assert.Equal(importsLayout ? 260 : 20, reloaded.ChannelWidgetPositions[channel].Y);
+            if (importsLayout)
+                Assert.Equal(900, reloaded.ChannelWidgetPositions["stream:Training"].X);
+            ConfigurationOperatorStateStore.Activate(reloaded, Guid.NewGuid().ToString("N"), targetPath, false);
+            Assert.Empty(reloaded.ChannelWidgetPositions);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void UnreadableSettingsRemainProtectedUntilExplicitReload()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"settings-access-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "UserSettings.json");
+        const string original = "{\"TogglePttMode\":true}";
+        try
+        {
+            Directory.CreateDirectory(path);
+            var store = new UserSettingsStore(path);
+            UserSettings defaults = store.Load();
+            Assert.Equal(SettingsReadState.Unreadable, store.LastReadState);
+            Assert.True(store.LastLoadDiagnostics.AutomaticWritesSuppressed);
+            Directory.Delete(path);
+            File.WriteAllText(path, original);
+            Assert.Throws<InvalidOperationException>(() => store.Save(defaults));
+            Assert.Equal(original, File.ReadAllText(path));
+            Assert.True(store.Load().TogglePttMode);
+            Assert.Equal(SettingsReadState.Loaded, store.LastReadState);
+            Assert.False(store.LastLoadDiagnostics.AutomaticWritesSuppressed);
+            store.Save(store.Load());
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void ObsoleteGenerationSidecarCannotPoisonACommittedSave()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"settings-generation-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "UserSettings.json");
+        try
+        {
+            Directory.CreateDirectory(path + ".generation");
+            var store = new UserSettingsStore(path);
+            UserSettings settings = store.Load();
+            store.Save(settings);
+            settings.TogglePttMode = true;
+            store.Save(settings);
+            Assert.True(new UserSettingsStore(path).Load().TogglePttMode);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void DefaultPathUsesNeoSpecificApplicationDataDirectory()
+    {
+        string settingsPath = UserSettingsStore.DefaultPath;
+        string applicationDirectory = Path.GetDirectoryName(settingsPath)
+            ?? throw new InvalidOperationException("Default settings path has no application directory.");
+        string publisherDirectory = Path.GetDirectoryName(applicationDirectory)
+            ?? throw new InvalidOperationException("Default settings path has no publisher directory.");
+
+        Assert.Equal("UserSettings.json", Path.GetFileName(settingsPath));
+        Assert.Equal("dvmconsole-neo", Path.GetFileName(applicationDirectory));
+        Assert.Equal("DVMProject", Path.GetFileName(publisherDirectory));
+        Assert.NotEqual("dvmconsole", Path.GetFileName(applicationDirectory));
+    }
+
+    [Fact]
+    public void FileSystemPathIdentityUsesContainingFilesystemCaseRules()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"path-case-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string mixed = Path.Combine(root, "Codeplug.yml");
+        string alternate = Path.Combine(root, "codeplug.yml");
+        try
+        {
+            File.WriteAllText(mixed, "test");
+            bool filesystemIgnoresCase = File.Exists(alternate);
+
+            Assert.Equal(
+                filesystemIgnoresCase,
+                FileSystemPathIdentity.Equals(mixed, alternate));
+            Assert.Equal(
+                filesystemIgnoresCase,
+                FileSystemPathIdentity.Comparer.Equals(mixed, alternate));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FileSystemPathIdentityDistinguishesSeparateFilesWithIdenticalContents()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "dvm-file-identity", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string first = Path.Combine(root, "first.wav");
+            string second = Path.Combine(root, "second.wav");
+            File.WriteAllText(first, "same contents");
+            File.WriteAllText(second, "same contents");
+            Assert.False(FileSystemPathIdentity.AreEquivalent(first, second));
+            var paths = new Dictionary<string, int>(FileSystemPathIdentity.Comparer)
+            {
+                [first] = 1,
+                [second] = 2
+            };
+            Assert.Equal(2, paths.Count);
+            Assert.Equal(1, paths[first]);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FileSystemPathIdentityRecognizesHardLinkAndSymbolicLinkAliases()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"path-link-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string original = Path.Combine(root, "original.yml");
+        string hardLink = Path.Combine(root, "hard-link.yml");
+        string symbolicLink = Path.Combine(root, "symbolic-link.yml");
+        try
+        {
+            File.WriteAllText(original, "test");
+            CreateHardLink(hardLink, original);
+            File.CreateSymbolicLink(symbolicLink, original);
+
+            Assert.True(FileSystemPathIdentity.AreEquivalent(original, hardLink));
+            Assert.True(FileSystemPathIdentity.AreEquivalent(original, symbolicLink));
+            Assert.Equal(
+                FileSystemPathIdentity.Comparer.GetHashCode(original),
+                FileSystemPathIdentity.Comparer.GetHashCode(hardLink));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void CreateHardLink(string linkPath, string existingPath)
+    {
+        bool created = OperatingSystem.IsWindows()
+            ? CreateHardLinkWindows(linkPath, existingPath, IntPtr.Zero)
+            : CreateHardLinkUnix(existingPath, linkPath) == 0;
+        if (!created)
+            throw new IOException($"Unable to create a hard link for the path-identity test ({Marshal.GetLastPInvokeError()}).");
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateHardLinkW", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateHardLinkWindows(
+        string fileName,
+        string existingFileName,
+        IntPtr securityAttributes);
+
+    [DllImport(
+        "libc",
+        EntryPoint = "link",
+        SetLastError = true,
+        CharSet = CharSet.Ansi,
+        BestFitMapping = false,
+        ThrowOnUnmappableChar = true)]
+    private static extern int CreateHardLinkUnix(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string existingPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string linkPath);
+
+    [Fact]
+    public void FileSystemPathIdentityRejectsBrokenSymbolicLink()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"path-broken-link-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string brokenLink = Path.Combine(root, "broken.yml");
+        try
+        {
+            File.CreateSymbolicLink(brokenLink, Path.Combine(root, "missing.yml"));
+
+            Assert.Throws<InvalidDataException>(() =>
+                FileSystemPathIdentity.AreEquivalent(
+                    brokenLink,
+                    Path.Combine(root, "destination.yml")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
@@ -200,6 +452,33 @@ public sealed class UserSettingsStoreTests
     }
 
     [Fact]
+    public void OpeningAnImportedSettingsFileDoesNotChangeItsParentPermissions()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        string path = CreatePath();
+        string parent = Path.GetDirectoryName(path)!;
+        try
+        {
+            Directory.CreateDirectory(parent);
+            File.WriteAllText(path, "{}");
+            UnixFileMode original =
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                UnixFileMode.GroupRead | UnixFileMode.GroupExecute;
+            File.SetUnixFileMode(parent, original);
+
+            _ = new UserSettingsStore(path).Load();
+
+            Assert.Equal(original, File.GetUnixFileMode(parent));
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
     public void PersistsVerboseLoggingWithoutChangingTheSchemaVersion()
     {
         string path = CreatePath();
@@ -211,6 +490,26 @@ public sealed class UserSettingsStoreTests
             UserSettings loaded = store.Load();
 
             Assert.True(loaded.VerboseLoggingEnabled);
+            Assert.Equal(UserSettings.CurrentSchemaVersion, loaded.SchemaVersion);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void PersistsConfiguredDmrReceiveKeyPolicyWithTheCurrentSchema()
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings { RequireConfiguredDmrReceiveKey = true });
+
+            UserSettings loaded = store.Load();
+
+            Assert.True(loaded.RequireConfiguredDmrReceiveKey);
             Assert.Equal(UserSettings.CurrentSchemaVersion, loaded.SchemaVersion);
         }
         finally
@@ -367,16 +666,20 @@ public sealed class UserSettingsStoreTests
                 RxJitterBuffersBySystem = new Dictionary<string, RxJitterBufferSetting>
                 {
                     ["Alpha"] = new() { P25Milliseconds = 540 }
-                }
+                },
+                RequireConfiguredDmrReceiveKey = true
             });
 
             store.Import(importPath, SettingsImportScope.Audio);
             UserSettings audioOnly = store.Load();
             Assert.Equal("imported-output", audioOnly.AudioOutputDeviceId);
             Assert.Equal(180, audioOnly.RxJitterBuffersBySystem["Alpha"].P25Milliseconds);
+            Assert.False(audioOnly.RequireConfiguredDmrReceiveKey);
 
             store.Import(importPath, SettingsImportScope.Connections);
-            Assert.Equal(540, store.Load().RxJitterBuffersBySystem["Alpha"].P25Milliseconds);
+            UserSettings connections = store.Load();
+            Assert.Equal(540, connections.RxJitterBuffersBySystem["Alpha"].P25Milliseconds);
+            Assert.True(connections.RequireConfiguredDmrReceiveKey);
         }
         finally
         {
@@ -806,7 +1109,7 @@ public sealed class UserSettingsStoreTests
             Assert.Equal(4, dmrRx.CompressorRatio);
             Assert.Equal(-24, dmrRx.CompressorThresholdDbfs);
             Assert.Equal(4.5, dmrRx.CompressorMakeupGainDb);
-            Assert.Equal(UserSettings.AppleVoiceProcessingMode, loaded.AudioProcessingMode);
+            Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, loaded.AudioProcessingMode);
             Assert.True(loaded.AudioInputAgcEnabled);
             Assert.Equal(-30, loaded.AudioInputAgcTargetDbfs);
             Assert.True(loaded.KeepTransmitMicrophoneWarm);
@@ -1342,6 +1645,200 @@ public sealed class UserSettingsStoreTests
             Assert.True(imported.KeepTransmitMicrophoneWarm);
             Assert.Equal(432.1, imported.QuickCallToneAFrequencyHz);
             Assert.False(imported.RestoreSelectedChannelsOnStartup);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void StagingAnImportDoesNotMutateSettingsAndReportsRecordingPolicyChanges()
+    {
+        string path = CreatePath();
+        string importPath = Path.Combine(Path.GetDirectoryName(path)!, "staged-import.json");
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings
+            {
+                DarkMode = false,
+                RecordingRootPath = "/current",
+                RecordingRetentionDays = 30
+            });
+            new UserSettingsStore(importPath).Save(new UserSettings
+            {
+                DarkMode = true,
+                RecordingRootPath = "/imported",
+                RecordingRetentionDays = 2
+            });
+
+            SettingsImportStage stage = store.StageImport(importPath);
+
+            Assert.False(store.Load().DarkMode);
+            Assert.True(stage.Preview.RecordingPolicyWillChange);
+            Assert.Equal(Path.GetFullPath("/imported"), stage.Preview.RecordingRootPath);
+            Assert.Equal(2, stage.Preview.RecordingRetentionDays);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void ImportedRecordingPolicyRequiresExplicitAcceptance()
+    {
+        string path = CreatePath();
+        string importPath = Path.Combine(Path.GetDirectoryName(path)!, "policy-import.json");
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings { RecordingRetentionPolicyAccepted = false });
+            new UserSettingsStore(importPath).Save(new UserSettings
+            {
+                RecordingRootPath = "/imported",
+                RecordingRetentionDays = 3,
+                RecordingRetentionPolicyAccepted = true
+            });
+            SettingsImportStage stage = store.StageImport(importPath);
+
+            UserSettings withoutAcceptance = store.Import(stage, acceptRecordingPolicy: false);
+            Assert.False(withoutAcceptance.RecordingRetentionPolicyAccepted);
+
+            UserSettings accepted = store.Import(stage, acceptRecordingPolicy: true);
+            Assert.True(accepted.RecordingRetentionPolicyAccepted);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(-1, 0)]
+    [InlineData(3651, 3650)]
+    public void RecordingRetentionIsClampedCentrally(int configured, int expected)
+    {
+        string path = CreatePath();
+        try
+        {
+            var store = new UserSettingsStore(path);
+            store.Save(new UserSettings { RecordingRetentionDays = configured });
+
+            Assert.Equal(expected, store.Load().RecordingRetentionDays);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void ConcurrentSettingsWriterFailsWithoutOverwritingNewerData()
+    {
+        string path = CreatePath();
+        try
+        {
+            var first = new UserSettingsStore(path);
+            first.Save(new UserSettings { LastSelectedSystemName = "Initial" });
+            var stale = new UserSettingsStore(path);
+            UserSettings staleSettings = stale.Load();
+            var current = new UserSettingsStore(path);
+            UserSettings currentSettings = current.Load();
+            currentSettings.LastSelectedSystemName = "Newer";
+            current.Save(currentSettings);
+            staleSettings.LastSelectedSystemName = "Stale";
+
+            Assert.Throws<SettingsConflictException>(() => stale.Save(staleSettings));
+            Assert.Equal("Newer", new UserSettingsStore(path).Load().LastSelectedSystemName);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void CorruptSettingsLoadLastKnownGoodAndSuppressWritesUntilRestored()
+    {
+        string path = CreatePath();
+        try
+        {
+            var writer = new UserSettingsStore(path);
+            writer.Save(new UserSettings { LastSelectedSystemName = "Last good" });
+            writer.Save(new UserSettings { LastSelectedSystemName = "Newest" });
+            File.WriteAllText(path, "{ damaged");
+            var recovering = new UserSettingsStore(path);
+
+            UserSettings recovered = recovering.Load();
+
+            Assert.Equal("Last good", recovered.LastSelectedSystemName);
+            Assert.True(recovering.LastLoadDiagnostics.RecoveredFromBackup);
+            Assert.True(recovering.LastLoadDiagnostics.AutomaticWritesSuppressed);
+            Assert.Throws<InvalidOperationException>(() => recovering.Save(recovered));
+            Assert.NotEmpty(Directory.EnumerateFiles(
+                Path.GetDirectoryName(path)!,
+                Path.GetFileName(path) + ".corrupt.*"));
+            Assert.True(recovering.RestoreLastKnownGood());
+            Assert.Equal("Last good", recovering.Load().LastSelectedSystemName);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Fact]
+    public void ResetExplicitlyAcceptsDefaultsAfterUnrecoverableCorruption()
+    {
+        string path = CreatePath();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "not json");
+            var store = new UserSettingsStore(path);
+
+            _ = store.Load();
+            Assert.True(store.LastLoadDiagnostics.DefaultsUsed);
+            Assert.Throws<InvalidOperationException>(() => store.Save(new UserSettings()));
+
+            store.Reset();
+            store.Save(new UserSettings { LastSelectedSystemName = "Accepted defaults" });
+            Assert.Equal("Accepted defaults", store.Load().LastSelectedSystemName);
+        }
+        finally
+        {
+            Cleanup(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OversizedOrInvalidUtf8SettingsUseRecoverableDefaults(bool oversized)
+    {
+        string path = CreatePath();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            if (oversized)
+            {
+                using FileStream stream = new(path, FileMode.Create, FileAccess.Write, FileShare.None);
+                stream.SetLength((4L * 1024 * 1024) + 1);
+            }
+            else
+            {
+                File.WriteAllBytes(path, [0xFF]);
+            }
+            var store = new UserSettingsStore(path);
+
+            UserSettings settings = store.Load();
+
+            Assert.NotNull(settings);
+            Assert.True(store.LastLoadDiagnostics.DefaultsUsed);
+            Assert.True(store.LastLoadDiagnostics.AutomaticWritesSuppressed);
+            Assert.Throws<InvalidOperationException>(() => store.Save(settings));
         }
         finally
         {

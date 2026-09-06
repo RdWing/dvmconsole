@@ -1,0 +1,29 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- Fluent reserves space above horizontal tracks for ticks even when no
+       ticks are shown. These styles keep the standard template and move only
+       the track so its thumb remains centered and entirely inside the control. -->
+  <Style Selector=":is(Slider).compact-slider">
+    <Setter Property="Height" Value="32" />
+    <Setter Property="MinHeight" Value="32" />
+  </Style>
+  <Style Selector=":is(Slider).compact-slider /template/ Track#PART_Track">
+    <Setter Property="RenderTransform">
+      <TranslateTransform Y="-9" />
+    </Setter>
+  </Style>
+  <Style Selector=":is(UserControl).narrow-settings :is(Slider).compact-slider,
+                   :is(Slider).compact-slider.touch-slider">
+    <Setter Property="Height" Value="44" />
+    <Setter Property="MinHeight" Value="44" />
+  </Style>
+  <Style Selector=":is(UserControl).narrow-settings :is(Slider).compact-slider /template/ Track#PART_Track,
+                   :is(Slider).compact-slider.touch-slider /template/ Track#PART_Track">
+    <Setter Property="RenderTransform">
+      <TranslateTransform Y="-3" />
+    </Setter>
+  </Style>
+</Styles>

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Settings;
 using DvmConsole.Vocoder;
 using System.Collections.ObjectModel;
@@ -13,6 +16,7 @@ internal sealed class AudioSettingsViewModel : INotifyPropertyChanged
     private readonly ObservableCollection<RxAudioProcessingModeViewModel> rxAudioProcessingModes = [];
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioInputDevices = [];
     private readonly ObservableCollection<AudioDeviceOptionViewModel> audioOutputDevices = [];
+    private readonly FilteredPresetCollection<AudioInputPresetViewModel> filteredAudioInputPresets;
     private string audioInputDeviceIdText;
     private string audioOutputDeviceIdText;
     private string audioInputGainText;
@@ -25,6 +29,7 @@ internal sealed class AudioSettingsViewModel : INotifyPropertyChanged
     private string audioInputPresetNameText;
     private AudioDeviceOptionViewModel? selectedAudioInputDevice;
     private AudioDeviceOptionViewModel? selectedAudioOutputDevice;
+    private long editRevision;
 
     public AudioSettingsViewModel(UserSettings settings, string selectedAudioProcessingMode)
     {
@@ -57,6 +62,14 @@ internal sealed class AudioSettingsViewModel : INotifyPropertyChanged
         foreach (AudioInputPresetSetting preset in settings.AudioInputPresets)
             audioInputPresets.Add(new AudioInputPresetViewModel(preset));
 
+        filteredAudioInputPresets = new FilteredPresetCollection<AudioInputPresetViewModel>(
+            audioInputPresets,
+            preset => preset.DisplayText);
+        filteredAudioInputPresets.StateChanged += (_, _) =>
+        {
+            NotifyPropertyChanged(nameof(FilteredAudioInputPresets));
+            NotifyPropertyChanged(nameof(IsAudioInputPresetFilterVisible));
+        };
         AudioInputPresets = new ReadOnlyObservableCollection<AudioInputPresetViewModel>(audioInputPresets);
         RxAudioProcessingModes = new ReadOnlyObservableCollection<RxAudioProcessingModeViewModel>(rxAudioProcessingModes);
         AudioInputDevices = new ReadOnlyObservableCollection<AudioDeviceOptionViewModel>(audioInputDevices);
@@ -69,8 +82,17 @@ internal sealed class AudioSettingsViewModel : INotifyPropertyChanged
     internal ObservableCollection<RxAudioProcessingModeViewModel> MutableRxAudioProcessingModes => rxAudioProcessingModes;
     internal ObservableCollection<AudioDeviceOptionViewModel> MutableAudioInputDevices => audioInputDevices;
     internal ObservableCollection<AudioDeviceOptionViewModel> MutableAudioOutputDevices => audioOutputDevices;
+    internal long EditRevision => editRevision;
 
     public ReadOnlyObservableCollection<AudioInputPresetViewModel> AudioInputPresets { get; }
+    public ReadOnlyObservableCollection<AudioInputPresetViewModel> FilteredAudioInputPresets
+        => filteredAudioInputPresets.Items;
+    public bool IsAudioInputPresetFilterVisible => filteredAudioInputPresets.IsFilterVisible;
+    public string AudioInputPresetFilterText
+    {
+        get => filteredAudioInputPresets.FilterText;
+        set => filteredAudioInputPresets.FilterText = value;
+    }
     public ReadOnlyObservableCollection<RxAudioProcessingModeViewModel> RxAudioProcessingModes { get; }
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioInputDevices { get; }
     public ReadOnlyObservableCollection<AudioDeviceOptionViewModel> AudioOutputDevices { get; }
@@ -181,6 +203,7 @@ internal sealed class AudioSettingsViewModel : INotifyPropertyChanged
         if (EqualityComparer<T>.Default.Equals(field, value))
             return;
         field = value;
+        editRevision++;
         NotifyPropertyChanged(propertyName);
     }
 

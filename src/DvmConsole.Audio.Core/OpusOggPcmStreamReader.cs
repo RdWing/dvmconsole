@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Concentus;
 using Concentus.Oggfile;
 
@@ -55,7 +58,10 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            // WaitAsync can complete before the source-disposal registration
+            // runs. Close explicitly before returning cancellation to the caller.
             ObserveCancelledOpen(openTask);
+            source.Dispose();
             throw;
         }
         catch
@@ -89,8 +95,11 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            // The cancellation continuation can unregister the disposal callback
+            // before it runs. Source interruption is part of this method's contract.
             ObserveBackgroundDecode(decodeTask, operation);
             operation = null;
+            source.Dispose();
             throw;
         }
         finally
@@ -116,18 +125,20 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
     }
 
     private static void ObserveCancelledOpen(Task<OpusOggPcmStreamReader> openTask)
+        => _ = ObserveCancelledOpenAsync(openTask);
+
+    private static async Task ObserveCancelledOpenAsync(Task<OpusOggPcmStreamReader> openTask)
     {
-        _ = openTask.ContinueWith(
-            static completed =>
-            {
-                if (completed.Status == TaskStatus.RanToCompletion)
-                    completed.Result.DisposeAsync().AsTask().GetAwaiter().GetResult();
-                else
-                    _ = completed.Exception;
-            },
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+        try
+        {
+            OpusOggPcmStreamReader reader = await openTask.ConfigureAwait(false);
+            await reader.DisposeAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // The caller already observed cancellation or the primary open
+            // failure. This continuation owns only late resource cleanup.
+        }
     }
 
     private static void ObserveBackgroundDecode(Task<int> decodeTask, IDisposable operation)

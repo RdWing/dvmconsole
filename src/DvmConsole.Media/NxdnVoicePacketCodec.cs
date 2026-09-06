@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Media;
 
 // Maps the 4800-baud NXDN voice channel carried by an FNE NXDD packet. NXDN
@@ -68,6 +71,13 @@ public static class NxdnVoicePacketCodec
         byte KeyId,
         byte[] MessageIndicator);
 
+    public readonly record struct ParsedVoicePacket(
+        CallMetadata? FirstFacchMetadata,
+        CallMetadata? SecondFacchMetadata,
+        bool HasSacchFragment,
+        byte SacchStructure,
+        int AmbeCodewordCount);
+
     public static bool TryExtractFrame(ReadOnlySpan<byte> packet, Span<byte> frame)
     {
         if (packet.Length < LegacyPacketBytes || frame.Length < FrameBytes ||
@@ -106,27 +116,81 @@ public static class NxdnVoicePacketCodec
         if (frame[0] != 0xCD || frame[1] != 0xF5 || (frame[2] & 0xF0) != 0x90)
             return false;
 
+        return TryExtractAmbeFromDecodedFrame(frame, DecodeLich(frame), ambe, out codewordCount);
+    }
+
+    public static bool TryParseVoicePacket(
+        ReadOnlySpan<byte> packet,
+        Span<byte> ambe,
+        Span<byte> sacchFragment,
+        out ParsedVoicePacket parsed)
+    {
+        parsed = default;
+        if (ambe.Length < AmbeBytes || sacchFragment.Length < 3)
+            return false;
+
+        Span<byte> frame = stackalloc byte[FrameBytes];
+        if (!TryExtractFrame(packet, frame))
+            return false;
+        Scramble(frame);
         byte lich = DecodeLich(frame);
-        if (!HasValidLichParity(lich) || ((lich >> 6) & 0x03) != 0x02)
+        if (!HasValidLichParity(lich))
             return false;
 
-        byte option = (byte)((lich >> 2) & 0x03);
-        int sourceOffset = option switch
+        byte functionChannelType = (byte)((lich >> 4) & 0x03);
+        if (functionChannelType == 0)
         {
-            0x01 => VoiceOffsetBytes + (CodewordBytes * 2),
-            0x02 => VoiceOffsetBytes,
-            0x03 => VoiceOffsetBytes,
-            _ => -1
-        };
-        codewordCount = option == 0x03 ? 4 : option is 0x01 or 0x02 ? 2 : 0;
-        if (sourceOffset < 0 || codewordCount == 0)
-            return false;
+            CallMetadata? first = TryExtractFacchCallMetadataFromDecodedFrame(frame, 0, out CallMetadata firstMetadata)
+                ? firstMetadata
+                : null;
+            CallMetadata? second = TryExtractFacchCallMetadataFromDecodedFrame(frame, 1, out CallMetadata secondMetadata)
+                ? secondMetadata
+                : null;
+            parsed = new ParsedVoicePacket(first, second, false, 0, 0);
+            return first is not null || second is not null;
+        }
 
-        frame.Slice(sourceOffset, codewordCount * CodewordBytes).CopyTo(ambe);
-        return true;
+        bool hasSacch = TryExtractSacchFragmentFromDecodedFrame(
+            frame,
+            lich,
+            out byte structure,
+            sacchFragment);
+        bool hasAmbe = TryExtractAmbeFromDecodedFrame(frame, lich, ambe, out int codewordCount);
+        parsed = new ParsedVoicePacket(null, null, hasSacch, structure, hasAmbe ? codewordCount : 0);
+        return hasSacch || hasAmbe;
     }
 
     public static byte[] CreateVoicePacket(
+        uint sourceId,
+        uint destinationId,
+        bool group,
+        byte frameSequence,
+        ReadOnlySpan<byte> ambe,
+        byte ran = 0,
+        byte superframePart = 0,
+        byte cipherType = 0,
+        byte keyId = 0,
+        CallMetadata? sacchMetadata = null)
+    {
+        byte[] packet = new byte[PacketBytes];
+        WriteVoicePacket(
+            packet,
+            sourceId,
+            destinationId,
+            group,
+            frameSequence,
+            ambe,
+            ran,
+            superframePart,
+            cipherType,
+            keyId,
+            sacchMetadata);
+        return packet;
+    }
+
+    /// <summary>Writes one complete NXDN FNE voice packet into caller-owned storage.</summary>
+    public static void WriteVoicePacket(
+        Span<byte> packet,
         uint sourceId,
         uint destinationId,
         bool group,
@@ -149,9 +213,12 @@ public static class NxdnVoicePacketCodec
             throw new ArgumentOutOfRangeException(nameof(cipherType));
         if (keyId > 63)
             throw new ArgumentOutOfRangeException(nameof(keyId));
+        if (packet.Length < PacketBytes)
+            throw new ArgumentException($"Destination must contain {PacketBytes} bytes.", nameof(packet));
 
-        byte[] packet = CreatePacketHeader(sourceId, destinationId, group, VoiceCallMessageType, frameSequence);
-        Span<byte> frame = packet.AsSpan(FrameOffset, FrameBytes);
+        packet[..PacketBytes].Clear();
+        WritePacketHeader(packet, sourceId, destinationId, group, VoiceCallMessageType, frameSequence);
+        Span<byte> frame = packet.Slice(FrameOffset, FrameBytes);
         AddSync(frame);
         EncodeLich(frame, functionChannelType: 2, option: 3);
         Span<byte> linkControl = stackalloc byte[10];
@@ -166,7 +233,6 @@ public static class NxdnVoicePacketCodec
         EncodeSacch(frame, ran, (byte)(3 - superframePart), sacchData);
         ambe[..AmbeBytes].CopyTo(frame[VoiceOffsetBytes..]);
         Scramble(frame);
-        return packet;
     }
 
     // DES and AES call startup uses one FACCH frame: VCALL in the first half
@@ -284,18 +350,7 @@ public static class NxdnVoicePacketCodec
         if (!TryExtractFrame(packet, frame))
             return false;
         Scramble(frame);
-        byte lich = DecodeLich(frame);
-        // FACCH call-control frames use the non-steal control-channel LICH.
-        // Voice frames carry AMBE in the same bit region; attempting FACCH
-        // correction there can turn valid voice patterns into phantom VCALL
-        // metadata and silently suppress their audio.
-        if (((lich >> 4) & 0x03) != 0)
-            return false;
-        int offset = Facch1OffsetBits + (facchIndex * Facch1Bits);
-        if (!TryDecodeFacch1(frame, offset, out byte[] linkControl))
-            return false;
-
-        return TryParseCallMetadata(linkControl, out metadata);
+        return TryExtractFacchCallMetadataFromDecodedFrame(frame, facchIndex, out metadata);
     }
 
     public static bool TryExtractSacchFragment(
@@ -311,8 +366,65 @@ public static class NxdnVoicePacketCodec
         if (!TryExtractFrame(packet, frame))
             return false;
         Scramble(frame);
-        byte lich = DecodeLich(frame);
-        if (!HasValidLichParity(lich) || ((lich >> 4) & 0x03) != 2)
+        return TryExtractSacchFragmentFromDecodedFrame(
+            frame,
+            DecodeLich(frame),
+            out structure,
+            payload);
+    }
+
+    private static bool TryExtractAmbeFromDecodedFrame(
+        ReadOnlySpan<byte> frame,
+        byte lich,
+        Span<byte> ambe,
+        out int codewordCount)
+    {
+        codewordCount = 0;
+        if (ambe.Length < AmbeBytes || !HasValidLichParity(lich) || ((lich >> 6) & 0x03) != 0x02)
+            return false;
+
+        byte option = (byte)((lich >> 2) & 0x03);
+        int sourceOffset = option switch
+        {
+            0x01 => VoiceOffsetBytes + (CodewordBytes * 2),
+            0x02 => VoiceOffsetBytes,
+            0x03 => VoiceOffsetBytes,
+            _ => -1
+        };
+        codewordCount = option == 0x03 ? 4 : option is 0x01 or 0x02 ? 2 : 0;
+        if (sourceOffset < 0 || codewordCount == 0)
+            return false;
+
+        frame.Slice(sourceOffset, codewordCount * CodewordBytes).CopyTo(ambe);
+        return true;
+    }
+
+    private static bool TryExtractFacchCallMetadataFromDecodedFrame(
+        ReadOnlySpan<byte> frame,
+        int facchIndex,
+        out CallMetadata metadata)
+    {
+        metadata = default;
+        // FACCH call-control frames use the non-steal control-channel LICH.
+        // Voice frames carry AMBE in the same bit region; attempting FACCH
+        // correction there can turn valid voice patterns into phantom VCALL
+        // metadata and silently suppress their audio.
+        if (((DecodeLich(frame) >> 4) & 0x03) != 0)
+            return false;
+        Span<byte> linkControl = stackalloc byte[12];
+        int offset = Facch1OffsetBits + (facchIndex * Facch1Bits);
+        return TryDecodeFacch1(frame, offset, linkControl) &&
+            TryParseCallMetadata(linkControl, out metadata);
+    }
+
+    private static bool TryExtractSacchFragmentFromDecodedFrame(
+        ReadOnlySpan<byte> frame,
+        byte lich,
+        out byte structure,
+        Span<byte> payload)
+    {
+        structure = 0;
+        if (payload.Length < 3 || !HasValidLichParity(lich) || ((lich >> 4) & 0x03) != 2)
             return false;
 
         Span<int> symbols = stackalloc int[72];
@@ -371,6 +483,18 @@ public static class NxdnVoicePacketCodec
     private static byte[] CreatePacketHeader(uint sourceId, uint destinationId, bool group, byte messageType, byte frameSequence)
     {
         byte[] packet = new byte[PacketBytes];
+        WritePacketHeader(packet, sourceId, destinationId, group, messageType, frameSequence);
+        return packet;
+    }
+
+    private static void WritePacketHeader(
+        Span<byte> packet,
+        uint sourceId,
+        uint destinationId,
+        bool group,
+        byte messageType,
+        byte frameSequence)
+    {
         packet[0] = (byte)'N'; packet[1] = (byte)'X'; packet[2] = (byte)'D'; packet[3] = (byte)'D';
         packet[4] = messageType;
         WriteThreeBytes(packet, 5, sourceId);
@@ -381,7 +505,6 @@ public static class NxdnVoicePacketCodec
         packet[23] = (byte)DeclaredPacketBytes;
         packet[24] = 0x01; // dvmhost modem::TAG_DATA
         packet[25] = 0x00;
-        return packet;
     }
 
     private static bool TryExtractFrameAt(ReadOnlySpan<byte> packet, int offset, Span<byte> frame)
@@ -479,7 +602,7 @@ public static class NxdnVoicePacketCodec
         }
     }
 
-    private static bool TryDecodeFacch1(ReadOnlySpan<byte> frame, int offset, out byte[] data)
+    private static bool TryDecodeFacch1(ReadOnlySpan<byte> frame, int offset, Span<byte> data)
     {
         Span<int> symbols = stackalloc int[192];
         symbols.Fill(-1);
@@ -491,7 +614,8 @@ public static class NxdnVoicePacketCodec
             symbols[index] = GetBit(frame, offset + FacchInterleave[input++]) ? 1 : 0;
         }
 
-        data = new byte[12];
+        if (data.Length < 12)
+            return false;
         return TryDecodeConvolution(symbols, data, decodedBitCount: 96) &&
             CreateCrc(data, 80, 12, 0x80F, 0xFFF) == ReadBits(data, 80, 12);
     }
@@ -510,8 +634,10 @@ public static class NxdnVoicePacketCodec
         Span<int> next = stackalloc int[StateCount];
         metrics.Fill(UnreachableMetric);
         metrics[0] = 0;
-        int[,] previous = new int[decodedBitCount, StateCount];
-        byte[,] decisions = new byte[decodedBitCount, StateCount];
+        // SACCH and FACCH decode at most 96 bits. Flat stack scratch avoids
+        // allocating two multi-dimensional traceback matrices per packet.
+        Span<int> previous = stackalloc int[decodedBitCount * StateCount];
+        Span<byte> decisions = stackalloc byte[decodedBitCount * StateCount];
         for (int step = 0; step < decodedBitCount; step++)
         {
             next.Fill(UnreachableMetric);
@@ -536,8 +662,9 @@ public static class NxdnVoicePacketCodec
                     if (cost < next[newState])
                     {
                         next[newState] = cost;
-                        previous[step, newState] = state;
-                        decisions[step, newState] = (byte)bit;
+                        int tracebackIndex = (step * StateCount) + newState;
+                        previous[tracebackIndex] = state;
+                        decisions[tracebackIndex] = (byte)bit;
                     }
                 }
             }
@@ -548,8 +675,9 @@ public static class NxdnVoicePacketCodec
         decoded.Clear();
         for (int step = decodedBitCount - 1; step >= 0; step--)
         {
-            SetBit(decoded, step, decisions[step, finalState] != 0);
-            finalState = previous[step, finalState];
+            int tracebackIndex = (step * StateCount) + finalState;
+            SetBit(decoded, step, decisions[tracebackIndex] != 0);
+            finalState = previous[tracebackIndex];
         }
         return true;
     }

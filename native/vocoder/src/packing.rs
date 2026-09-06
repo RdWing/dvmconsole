@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 use blip25_vocoder::halfrate::frame::{
     decode_code_vectors, decode_frame, encode_code_vectors, encode_frame, DIBITS_PER_FRAME,
 };

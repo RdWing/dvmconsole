@@ -1,12 +1,13 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:presentation="using:DvmConsole.Presentation"
              x:Class="DvmConsole.Presentation.GroupSettingsView"
              x:DataType="presentation:IGroupSettingsViewModel">
   <UserControl.Styles>
-    <Style Selector="Button"><Setter Property="MinHeight" Value="44"/></Style>
-    <Style Selector="CheckBox"><Setter Property="MinHeight" Value="44"/></Style>
-    <Style Selector="ComboBox"><Setter Property="MinHeight" Value="44"/></Style>
+    <StyleInclude Source="avares://DvmConsole.Presentation/CompactSettingsStyles.axaml" />
   </UserControl.Styles>
   <ScrollViewer x:Name="GroupSettingsScroller" Margin="10">
     <StackPanel Spacing="10">

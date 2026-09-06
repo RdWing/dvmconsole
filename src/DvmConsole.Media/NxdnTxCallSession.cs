@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
@@ -6,16 +9,18 @@ namespace DvmConsole.Media;
 // SACCH call signaling, then duplicated FACCH TX_REL on the same FNE stream.
 public sealed class NxdnTxCallSession : IDisposable
 {
-    private static readonly TimeSpan FrameInterval = TimeSpan.FromMilliseconds(80);
+    internal static readonly TimeSpan PacketInterval = TimeSpan.FromMilliseconds(80);
     private readonly uint sourceId;
     private readonly uint destinationId;
     private readonly bool group;
     private readonly uint streamId;
     private readonly Action<ReadOnlyMemory<byte>, ushort, uint> send;
+    private readonly ProtocolPacketPacer<NxdnOutboundPacket> packetPacer;
     private readonly NxdnTxAudioSession audio;
     private readonly NxdnPrivacyOptions? privacy;
     private bool started;
     private bool ended;
+    private NxdnOutboundPacket? retryTerminator;
     private bool disposed;
 
     public NxdnTxCallSession(
@@ -26,6 +31,73 @@ public sealed class NxdnTxCallSession : IDisposable
         IVocoderSession vocoder,
         Action<ReadOnlyMemory<byte>, ushort, uint> send,
         NxdnPrivacyOptions? privacy = null)
+        : this(
+            sourceId,
+            destinationId,
+            group,
+            streamId,
+            vocoder,
+            send,
+            privacy,
+            waitForNextPacket: null,
+            timeProvider: null)
+    {
+    }
+
+    internal NxdnTxCallSession(
+        uint sourceId,
+        uint destinationId,
+        bool group,
+        uint streamId,
+        IVocoderSession vocoder,
+        Action<ReadOnlyMemory<byte>, ushort, uint> send,
+        Func<CancellationToken, ValueTask> waitForNextPacket,
+        NxdnPrivacyOptions? privacy = null)
+        : this(
+            sourceId,
+            destinationId,
+            group,
+            streamId,
+            vocoder,
+            send,
+            privacy,
+            waitForNextPacket ?? throw new ArgumentNullException(nameof(waitForNextPacket)),
+            timeProvider: null)
+    {
+    }
+
+    internal NxdnTxCallSession(
+        uint sourceId,
+        uint destinationId,
+        bool group,
+        uint streamId,
+        IVocoderSession vocoder,
+        Action<ReadOnlyMemory<byte>, ushort, uint> send,
+        TimeProvider timeProvider,
+        NxdnPrivacyOptions? privacy = null)
+        : this(
+            sourceId,
+            destinationId,
+            group,
+            streamId,
+            vocoder,
+            send,
+            privacy,
+            waitForNextPacket: null,
+            timeProvider ?? throw new ArgumentNullException(nameof(timeProvider)))
+    {
+    }
+
+    private NxdnTxCallSession(
+        uint sourceId,
+        uint destinationId,
+        bool group,
+        uint streamId,
+        IVocoderSession vocoder,
+        Action<ReadOnlyMemory<byte>, ushort, uint> send,
+        NxdnPrivacyOptions? privacy,
+        Func<CancellationToken, ValueTask>? waitForNextPacket,
+        TimeProvider? timeProvider)
     {
         this.sourceId = sourceId;
         this.destinationId = destinationId;
@@ -33,7 +105,17 @@ public sealed class NxdnTxCallSession : IDisposable
         this.streamId = streamId;
         this.send = send ?? throw new ArgumentNullException(nameof(send));
         this.privacy = privacy;
-        audio = new NxdnTxAudioSession(sourceId, destinationId, group, streamId, vocoder, send, privacy: privacy);
+        packetPacer = waitForNextPacket is null
+            ? new ProtocolPacketPacer<NxdnOutboundPacket>(PacketInterval, SendPacket, timeProvider)
+            : new ProtocolPacketPacer<NxdnOutboundPacket>(waitForNextPacket, SendPacket);
+        audio = new NxdnTxAudioSession(
+            sourceId,
+            destinationId,
+            group,
+            streamId,
+            vocoder,
+            QueuePacket,
+            privacy: privacy);
     }
 
     public bool IsStarted => started;
@@ -64,7 +146,7 @@ public sealed class NxdnTxCallSession : IDisposable
                 audio.FrameSequence,
                 cipherType: privacy?.AlgorithmId ?? 0,
                 keyId: privacy?.KeyId ?? 0);
-        send(header, audio.PacketSequence, streamId);
+        QueuePacket(header, audio.PacketSequence, streamId);
         audio.AdvanceSequence();
         started = true;
     }
@@ -77,41 +159,45 @@ public sealed class NxdnTxCallSession : IDisposable
         return audio.Process(samples);
     }
 
-    public ValueTask EndAsync(CancellationToken cancellationToken = default)
-        => EndAsync(WaitForNextFrameAsync, cancellationToken);
-
-    internal async ValueTask EndAsync(
-        Func<CancellationToken, ValueTask> waitForNextFrame,
-        CancellationToken cancellationToken)
+    public async ValueTask EndAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        ArgumentNullException.ThrowIfNull(waitForNextFrame);
         if (!started)
             throw new InvalidOperationException("The NXDN call has not started.");
         if (ended)
             return;
-        IReadOnlyList<NxdnOutboundPacket> completion = audio.PrepareFrameCompletion();
-        foreach (NxdnOutboundPacket packet in completion)
+        if (retryTerminator is { } pendingTerminator)
         {
-            await waitForNextFrame(cancellationToken).ConfigureAwait(false);
-            send(packet.Payload, packet.Sequence, packet.StreamId);
+            SendPacket(pendingTerminator);
+            ended = true;
+            return;
         }
-        await waitForNextFrame(cancellationToken).ConfigureAwait(false);
+
+        IReadOnlyList<NxdnOutboundPacket> completion = audio.PrepareFrameCompletion();
         byte[] terminator = NxdnVoicePacketCodec.CreateCallControlPacket(
             sourceId, destinationId, group, NxdnVoicePacketCodec.TransmitReleaseMessageType, audio.FrameSequence);
-        send(terminator, audio.PacketSequence, streamId);
+        var finalPacket = new NxdnOutboundPacket(terminator, audio.PacketSequence, streamId);
+        retryTerminator = finalPacket;
         audio.AdvanceSequence();
+        foreach (NxdnOutboundPacket packet in completion)
+            packetPacer.Enqueue(packet);
+        packetPacer.Enqueue(finalPacket);
+        await packetPacer.CompleteAsync(cancellationToken).ConfigureAwait(false);
         ended = true;
     }
-
-    private static async ValueTask WaitForNextFrameAsync(CancellationToken cancellationToken)
-        => await Task.Delay(FrameInterval, cancellationToken).ConfigureAwait(false);
 
     public void Dispose()
     {
         if (disposed)
             return;
+        packetPacer.Dispose();
         audio.Dispose();
         disposed = true;
     }
+
+    private void QueuePacket(ReadOnlyMemory<byte> payload, ushort packetSequence, uint packetStreamId)
+        => packetPacer.Enqueue(new NxdnOutboundPacket(payload, packetSequence, packetStreamId));
+
+    private void SendPacket(NxdnOutboundPacket packet)
+        => send(packet.Payload, packet.Sequence, packet.StreamId);
 }

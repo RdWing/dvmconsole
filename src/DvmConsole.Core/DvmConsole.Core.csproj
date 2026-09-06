@@ -1,10 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>DvmConsole.Core</RootNamespace>
     <IsTrimmable>true</IsTrimmable>
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
     <EnableAotAnalyzer>true</EnableAotAnalyzer>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DvmConsole.Configuration.Yaml" />
+    <InternalsVisibleTo Include="DvmConsole.Application" />
+    <InternalsVisibleTo Include="DvmConsole" />
+    <InternalsVisibleTo Include="DvmConsole.Storage" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="YamlDotNet" Version="16.2.0" />

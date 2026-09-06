@@ -1,4 +1,9 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Audio;
+
+public readonly record struct PcmFirstWriteTiming(TimeSpan PacingWait, TimeSpan WriteDuration);
 
 public static class PcmPlaybackPump
 {
@@ -11,12 +16,15 @@ public static class PcmPlaybackPump
         CancellationToken cancellationToken,
         Func<ValueTask>? firstOutputWritten = null,
         IPcmPlaybackPacer? pacer = null,
-        ReadOnlyMemory<short> prefetchedSamples = default)
+        ReadOnlyMemory<short> prefetchedSamples = default,
+        Action<PcmFirstWriteTiming>? firstWriteObserver = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(playback);
         pacer ??= new RealtimePcmPlaybackPacer(playback.Format);
 
+        TimeProvider clock = timeProvider ?? TimeProvider.System;
         bool wroteOutput = false;
         if (!prefetchedSamples.IsEmpty)
             wroteOutput = await WriteAsync(prefetchedSamples).ConfigureAwait(false);
@@ -40,8 +48,24 @@ public static class PcmPlaybackPump
             if (output.IsEmpty)
                 return false;
 
+            bool measureFirstWrite = !wroteOutput && firstWriteObserver is not null;
+            long waitingAt = measureFirstWrite ? clock.GetTimestamp() : 0;
             await pacer.WaitBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+            long writingAt = measureFirstWrite ? clock.GetTimestamp() : 0;
             await playback.WriteAsync(output, cancellationToken).ConfigureAwait(false);
+            if (measureFirstWrite)
+            {
+                var observed = new PcmFirstWriteTiming(
+                    clock.GetElapsedTime(waitingAt, writingAt), clock.GetElapsedTime(writingAt));
+                try
+                {
+                    firstWriteObserver!(observed);
+                }
+                catch
+                {
+                    // Diagnostics cannot interrupt PCM delivery.
+                }
+            }
             pacer.ObserveWrittenSamples(output.Length);
             if (!wroteOutput && firstOutputWritten is not null)
                 await firstOutputWritten().ConfigureAwait(false);

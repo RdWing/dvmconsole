@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
@@ -5,8 +8,9 @@ using System.Runtime.CompilerServices;
 
 namespace DvmConsole.Desktop;
 
-internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
+internal sealed class HistoryRecordingController : INotifyPropertyChanged
 {
+    internal const int MaximumActivityEntries = 100;
     private readonly object recordingCatalogScanSync = new();
     private readonly ObservableCollection<CallHistoryEntry> filteredCallHistoryEntries = [];
     private readonly ObservableCollection<CallHistoryEntry> activityCallHistoryEntries = [];
@@ -24,12 +28,14 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
     private string recordingAliasFilterText = string.Empty;
     private DateTimeOffset? recordingStartDateFilter;
     private DateTimeOffset? recordingEndDateFilter;
+    private bool activityCurrentZoneOnly;
+    private bool activityReceiveEnabledOnly = true;
     private CancellationTokenSource? recordingCatalogScanCancellation;
     private int recordingCatalogScanGeneration;
     private long recordingCatalogMutationRevision;
     private Task recordingCatalogScanTask = Task.CompletedTask;
 
-    public HistoryRecordingWorkspace(
+    public HistoryRecordingController(
         string recordingRetentionDaysText,
         string recordingRootPathText)
     {
@@ -55,6 +61,10 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
     public ReadOnlyObservableCollection<CallHistoryEntry> FilteredCallHistory { get; }
     public ReadOnlyObservableCollection<CallHistoryEntry> ActivityCallHistory { get; }
     public ReadOnlyObservableCollection<CallRecordingMetadata> Recordings { get; }
+    public bool ActivityCurrentZoneOnly => activityCurrentZoneOnly;
+    public bool ActivityReceiveEnabledOnly => activityReceiveEnabledOnly;
+    public string ActivityZoneFilterButtonText => ActivityCurrentZoneOnly ? "Zone Wide" : "System Wide";
+    public string ActivityReceiveFilterButtonText => ActivityReceiveEnabledOnly ? "Active" : "All";
 
     public string RecordingRetentionDaysText
     {
@@ -210,10 +220,69 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
     }
 
     public void RefreshActivityCallHistory(IEnumerable<CallHistoryEntry> entries)
-        => HistoryViewSynchronizer.Synchronize(
+    {
+        HistoryViewSynchronizer.Synchronize(
             activityCallHistoryEntries,
             entries,
             args => ActivityCallHistoryChanging?.Invoke(this, args));
+
+        // Update in place after synchronization so viewport anchoring observes
+        // the old row geometry before an insertion changes the date headers.
+        string? previousDate = null;
+        foreach (CallHistoryEntry entry in activityCallHistoryEntries)
+        {
+            string date = entry.DateText;
+            entry.SetStartsActivityDay(date != previousDate);
+            previousDate = date;
+        }
+    }
+
+    public void ToggleActivityZoneFilter()
+    {
+        activityCurrentZoneOnly = !activityCurrentZoneOnly;
+        NotifyPropertyChanged(nameof(ActivityCurrentZoneOnly));
+        NotifyPropertyChanged(nameof(ActivityZoneFilterButtonText));
+    }
+
+    public void ToggleActivityReceiveFilter()
+    {
+        activityReceiveEnabledOnly = !activityReceiveEnabledOnly;
+        NotifyPropertyChanged(nameof(ActivityReceiveEnabledOnly));
+        NotifyPropertyChanged(nameof(ActivityReceiveFilterButtonText));
+    }
+
+    public void RefreshActivityCallHistory(
+        string? selectedSystemName,
+        IEnumerable<string>? selectedZoneChannelNames,
+        IEnumerable<string>? receiveEnabledChannelNames)
+        => RefreshActivityCallHistory(SelectActivityHistory(
+            CallHistory,
+            selectedSystemName,
+            ActivityCurrentZoneOnly ? selectedZoneChannelNames : null,
+            ActivityReceiveEnabledOnly ? receiveEnabledChannelNames : null));
+
+    internal static CallHistoryEntry[] SelectActivityHistory(
+        IEnumerable<CallHistoryEntry> history,
+        string? selectedSystemName,
+        IEnumerable<string>? selectedZoneChannelNames,
+        IEnumerable<string>? receiveEnabledChannelNames = null)
+    {
+        if (selectedSystemName is null)
+            return [];
+
+        HashSet<string>? selectedChannels = selectedZoneChannelNames is null
+            ? null
+            : new HashSet<string>(selectedZoneChannelNames, StringComparer.OrdinalIgnoreCase);
+        HashSet<string>? receiveEnabledChannels = receiveEnabledChannelNames is null
+            ? null
+            : new HashSet<string>(receiveEnabledChannelNames, StringComparer.OrdinalIgnoreCase);
+        return history
+            .Where(entry => entry.SystemName.Equals(selectedSystemName, StringComparison.OrdinalIgnoreCase))
+            .Where(entry => selectedChannels is null || selectedChannels.Contains(entry.ChannelName))
+            .Where(entry => receiveEnabledChannels is null || receiveEnabledChannels.Contains(entry.ChannelName))
+            .Take(MaximumActivityEntries)
+            .ToArray();
+    }
 
     public RecordingCatalogScanSnapshot BeginRecordingCatalogScan()
     {
@@ -269,6 +338,16 @@ internal sealed class HistoryRecordingWorkspace : INotifyPropertyChanged
             return true;
         }
     }
+
+    internal static bool IsRecordingCatalogSnapshotCurrent(
+        int snapshotGeneration,
+        int currentGeneration,
+        long snapshotMutationRevision,
+        long currentMutationRevision,
+        bool isCancellationRequested)
+        => !isCancellationRequested &&
+           snapshotGeneration == currentGeneration &&
+           snapshotMutationRevision == currentMutationRevision;
 
     public void RecordRecordingCatalogMutation()
     {

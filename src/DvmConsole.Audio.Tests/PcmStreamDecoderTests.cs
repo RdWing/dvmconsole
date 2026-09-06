@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using Xunit;
 
@@ -71,7 +74,7 @@ public sealed class PcmStreamDecoderTests
         using var source = new BlockingReadStream();
         using var cancellation = new CancellationTokenSource();
         Task<MpegPcmStreamReader> open = MpegPcmStreamReader.OpenAsync(source, cancellation.Token);
-        Assert.True(source.ReadStarted.Wait(TimeSpan.FromSeconds(2)));
+        await source.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         cancellation.Cancel();
 
@@ -85,7 +88,7 @@ public sealed class PcmStreamDecoderTests
         private readonly ManualResetEventSlim released = new();
         private bool disposed;
 
-        public ManualResetEventSlim ReadStarted { get; } = new();
+        public TaskCompletionSource ReadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool WasDisposed => disposed;
         public override bool CanRead => true;
         public override bool CanSeek => true;
@@ -95,14 +98,14 @@ public sealed class PcmStreamDecoderTests
 
         public override int Read(byte[] buffer, int offset, int count)
         {
-            ReadStarted.Set();
+            ReadStarted.TrySetResult();
             released.Wait();
             throw new ObjectDisposedException(nameof(BlockingReadStream));
         }
 
         public override int Read(Span<byte> buffer)
         {
-            ReadStarted.Set();
+            ReadStarted.TrySetResult();
             released.Wait();
             throw new ObjectDisposedException(nameof(BlockingReadStream));
         }
@@ -113,7 +116,6 @@ public sealed class PcmStreamDecoderTests
             {
                 disposed = true;
                 released.Set();
-                ReadStarted.Dispose();
                 released.Dispose();
             }
             base.Dispose(disposing);

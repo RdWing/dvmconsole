@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Core.Configuration;
 using DvmConsole.FneClient;
@@ -49,6 +52,32 @@ public sealed class DmrVoicePacketCodecTests
         Assert.Equal(new byte[] { 0xA0, 0xB0, 0xC0 }, packet[8..11]);
         Assert.Equal((byte)0x83, packet[15]);
         Assert.Equal(ambe, DmrVoicePacketCodec.ExtractAmbe(packet));
+    }
+
+    [Fact]
+    public void CallerOwnedVoiceWriterMatchesAllocatedPacketWithoutAllocating()
+    {
+        byte[] ambe = Enumerable.Range(0, DmrVoicePacketCodec.AmbeBytes)
+            .Select(value => (byte)value)
+            .ToArray();
+        byte[] expected = DmrVoicePacketCodec.CreateVoicePacket(
+            0x010203, 0xA0B0C0, 1, true, 0, 7, ambe);
+        byte[] packet = new byte[DmrVoicePacketCodec.PacketBytes];
+        byte[] frame = new byte[DmrVoicePacketCodec.FrameBytes];
+
+        DmrVoicePacketCodec.WriteVoicePacket(
+            packet, 0x010203, 0xA0B0C0, 1, true, 0, 7, ambe, frameWorkspace: frame);
+        Assert.Equal(expected, packet);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int index = 0; index < 10_000; index++)
+        {
+            DmrVoicePacketCodec.WriteVoicePacket(
+                packet, 0x010203, 0xA0B0C0, 1, true, 0, 7, ambe, frameWorkspace: frame);
+        }
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(0, allocated);
     }
 
     [Fact]
@@ -399,7 +428,7 @@ public sealed class DmrVoicePacketCodecTests
     }
 
     [Fact]
-    public async Task SelectableReceiverUsesLateEntryMetadataWhenStartupHeadersWereMissed()
+    public async Task StrictReceiverUsesMatchingLateEntryMetadataWhenStartupHeadersWereMissed()
     {
         byte[] key = Convert.FromHexString("0102030405");
         var options = new DmrPrivacyOptions(
@@ -415,6 +444,7 @@ public sealed class DmrVoicePacketCodecTests
             streamId: 99,
             vocoder: new FakeVocoderSession(),
             send: (payload, _, _) => packets.Add(payload.ToArray()),
+            waitForNextPacket: TestPacketCadence.NoDelayAsync,
             privacy: options))
         {
             transmitter.Start();
@@ -443,7 +473,10 @@ public sealed class DmrVoicePacketCodecTests
             playback,
             keys,
             "System A",
-            privacyMayVary: true);
+            privacyMayVary: true,
+            receiveKeyPolicy: DmrReceiveKeyPolicy.ConfiguredChannel,
+            configuredAlgorithm: "arc4",
+            configuredKeyId: "7");
 
         for (int index = 0; index < voicePackets.Length; index++)
         {

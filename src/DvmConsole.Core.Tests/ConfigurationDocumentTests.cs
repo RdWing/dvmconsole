@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 using Xunit;
@@ -50,6 +53,58 @@ public sealed class ConfigurationDocumentTests
           - name: Dispatch Patch
             type: patch
         """;
+
+    [Fact]
+    public void DuplicateRadioIdentitiesUseUniqueNamesWhenPreservingExtensions()
+    {
+        ConfigurationDocument document = ConfigurationDocument.Parse(BuildExtendedChannels(3, sameIdentity: true));
+        document.Configuration.Zones[0].Channels.Reverse();
+        string yaml = document.Serialize();
+        for (int index = 0; index < 3; index++)
+        {
+            int name = yaml.IndexOf($"name: Channel{index}", StringComparison.Ordinal);
+            int extension = yaml.IndexOf($"vendorFlag: extension{index}", StringComparison.Ordinal);
+            Assert.True(name >= 0 && extension > name);
+            int nextName = yaml.IndexOf("name: Channel", name + 1, StringComparison.Ordinal);
+            Assert.True(nextName < 0 || extension < nextName);
+        }
+    }
+
+    [Fact]
+    public void AmbiguousNamesAndRadioIdentitiesDoNotCopyAnArbitraryExtension()
+    {
+        string source = BuildExtendedChannels(2, sameIdentity: true).Replace("Channel1", "Channel0", StringComparison.Ordinal);
+        ConfigurationDocument document = ConfigurationDocument.Parse(source);
+        Assert.DoesNotContain("vendorFlag", document.Serialize());
+    }
+
+    [Fact]
+    public void UnknownFieldSerializationAllocationsGrowWithChannelCount()
+    {
+        ConfigurationDocument small = ConfigurationDocument.Parse(BuildExtendedChannels(200));
+        ConfigurationDocument large = ConfigurationDocument.Parse(BuildExtendedChannels(800));
+        small.Serialize();
+        large.Serialize();
+        static long Allocated(ConfigurationDocument document)
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int repetition = 0; repetition < 3; repetition++)
+                document.Serialize();
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        long smallBytes = Allocated(small);
+        long largeBytes = Allocated(large);
+        Assert.True(largeBytes < smallBytes * 6,
+            $"Four times as many channels allocated {largeBytes / (double)smallBytes:F2} times as much memory.");
+    }
+
+    private static string BuildExtendedChannels(int count, bool sameIdentity = false)
+    {
+        var yaml = new System.Text.StringBuilder("systems: []\nzones:\n  - name: Dispatch\n    channels:\n");
+        for (int index = 0; index < count; index++)
+            yaml.Append($"      - name: Channel{index}\n        system: North\n        tgid: '{(sameIdentity ? 101 : 101 + index)}'\n        mode: p25\n        vendorFlag: extension{index}\n");
+        return yaml.ToString();
+    }
 
     [Fact]
     public void RoundTripPreservesUnknownFieldsAndCanonicalizesLegacyGroups()
@@ -160,6 +215,135 @@ public sealed class ConfigurationDocumentTests
     }
 
     [Fact]
+    public void NestedEmptyKnownCollectionsAreNotReportedAsUnknownFields()
+    {
+        ConfigurationDocument document = ConfigurationDocument.Parse("""
+            systems: []
+            zones:
+              - name: Dispatch
+                channels: []
+                web_streams: []
+            groups: []
+            patchGroups: []
+            """);
+
+        Assert.Empty(document.UnknownFields);
+    }
+
+    [Fact]
+    public void TypedCodecRoundTripsEveryConfigurationFieldAndSchemaAlias()
+    {
+        var source = new ConsoleConfiguration
+        {
+            KeyFile = "./keys.clear",
+            PatchSourceIdPassthrough = true,
+            Systems =
+            [
+                new SystemConfiguration
+                {
+                    Name = "true",
+                    Identity = "Console",
+                    Address = "192.0.2.10",
+                    Port = 62031,
+                    Password = "password",
+                    PresharedKey = "001122",
+                    KmfPresharedKey = "334455",
+                    Encrypted = true,
+                    TransportEncryptionMode = "cbc",
+                    PeerId = 1001,
+                    Rid = "02001",
+                    AliasPath = "./aliases.yml"
+                }
+            ],
+            Zones =
+            [
+                new ZoneConfiguration
+                {
+                    Name = "Dispatch",
+                    TabColor = "#112233",
+                    TabTextColor = "#FFFFFF",
+                    Channels =
+                    [
+                        new ChannelConfiguration
+                        {
+                            Name = "Primary",
+                            System = "true",
+                            Tgid = "00101",
+                            Slot = 2,
+                            Algo = "aes",
+                            KeyId = "0x50",
+                            Mode = "dmr",
+                            ResourceColor = "#445566",
+                            RxOnly = true,
+                            SelectableEncryption = true,
+                            CardSize = "large"
+                        }
+                    ],
+                    WebStreams =
+                    [
+                        new WebStreamConfiguration
+                        {
+                            Name = "Dispatch audio",
+                            Url = "https://example.test/live",
+                            AuthUsername = "operator",
+                            AuthPassword = "secret",
+                            IdleColor = "#778899"
+                        }
+                    ]
+                }
+            ],
+            Groups = [new GroupConfiguration { Name = "Patch", Type = "patch" }]
+        };
+        ConfigurationDocument writable = ConfigurationDocument.CreateNew();
+        writable.Configuration.KeyFile = source.KeyFile;
+        writable.Configuration.PatchSourceIdPassthrough = source.PatchSourceIdPassthrough;
+        writable.Configuration.Systems = source.Systems;
+        writable.Configuration.Zones = source.Zones;
+        writable.Configuration.Groups = source.Groups;
+
+        string yaml = writable.Serialize();
+        ConfigurationDocument roundTrip = ConfigurationDocument.Parse(yaml);
+
+        Assert.Contains("web_streams:", yaml, StringComparison.Ordinal);
+        Assert.Contains("rx_only: true", yaml, StringComparison.Ordinal);
+        Assert.Contains("selectable_encryption: true", yaml, StringComparison.Ordinal);
+        Assert.Contains("card_size: large", yaml, StringComparison.Ordinal);
+        Assert.Contains("name: 'true'", yaml, StringComparison.Ordinal);
+        Assert.Contains("tgid: '00101'", yaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("sourcePath", yaml, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ridAlias", yaml, StringComparison.OrdinalIgnoreCase);
+
+        SystemConfiguration system = Assert.Single(roundTrip.Configuration.Systems);
+        Assert.Equal("true", system.Name);
+        Assert.Equal("02001", system.Rid);
+        Assert.Equal("334455", system.KmfPresharedKey);
+        ChannelConfiguration channel = Assert.Single(roundTrip.Configuration.Zones[0].Channels);
+        Assert.Equal("00101", channel.Tgid);
+        Assert.Equal(2, channel.Slot);
+        Assert.True(channel.RxOnly);
+        Assert.True(channel.SelectableEncryption);
+        WebStreamConfiguration stream = Assert.Single(roundTrip.Configuration.Zones[0].WebStreams);
+        Assert.Equal("operator", stream.AuthUsername);
+        Assert.Equal("secret", stream.AuthPassword);
+        Assert.True(roundTrip.Configuration.PatchSourceIdPassthrough);
+    }
+
+    [Fact]
+    public void TypedCodecReportsThePathOfAnInvalidScalar()
+    {
+        InvalidDataException exception = Assert.Throws<InvalidDataException>(() =>
+            ConfigurationDocument.Parse("""
+                systems:
+                  - name: North
+                    port: not-a-number
+                zones: []
+                groups: []
+                """));
+
+        Assert.Contains("$.systems[0].port", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AnchorsOpenReadOnlyInsteadOfBeingRewritten()
     {
         ConfigurationDocument document = ConfigurationDocument.Parse("""
@@ -206,13 +390,14 @@ public sealed class ConfigurationDocumentTests
         Assert.DoesNotContain("stream-password", sanitized, StringComparison.Ordinal);
         Assert.DoesNotContain("192.0.2.10", sanitized, StringComparison.Ordinal);
         Assert.DoesNotContain("stream.example.test", sanitized, StringComparison.Ordinal);
+        Assert.DoesNotContain("port: 62031", sanitized, StringComparison.Ordinal);
         Assert.DoesNotContain("tgid: '101'", sanitized, StringComparison.Ordinal);
         Assert.Contains("redacted.invalid", sanitized, StringComparison.Ordinal);
         ConfigurationDocument reparsed = ConfigurationDocument.Parse(sanitized);
         Assert.DoesNotContain(reparsed.Validate(), issue => issue.IsError);
         Assert.All(
             reparsed.Configuration.Zones.SelectMany(zone => zone.Channels),
-            channel => Assert.Equal("1", channel.Tgid));
+            channel => Assert.Equal("10001", channel.Tgid));
     }
 
     [Fact]

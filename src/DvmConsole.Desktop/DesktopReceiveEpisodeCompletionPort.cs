@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 
 namespace DvmConsole.Desktop;
@@ -7,7 +10,9 @@ namespace DvmConsole.Desktop;
 /// the stable-ID application boundary. Presentation objects do not cross into
 /// the application coordinator.
 /// </summary>
-internal sealed class DesktopReceiveEpisodeCompletionPort : IReceiveEpisodeCompletionPort
+internal sealed class DesktopReceiveEpisodeCompletionPort :
+    IReceiveEpisodeCompletionPort,
+    ICancellableReceiveEpisodeCompletionPort
 {
     private readonly ChannelReceiveWorkQueue receiveWork;
     private readonly ChannelReceiveAudioCoordinator receiveAudio;
@@ -38,6 +43,21 @@ internal sealed class DesktopReceiveEpisodeCompletionPort : IReceiveEpisodeCompl
 
     public Task CompletePlaybackAsync(ChannelId channelId, long episodeId)
         => receiveAudio.CompleteEpisodeAsync(Resolve(channelId), episodeId);
+
+    Task ICancellableReceiveEpisodeCompletionPort.RunAfterStreamsAsync(
+        ChannelId channelId,
+        IReadOnlyCollection<uint> streamIds,
+        Func<CancellationToken, Task> continuation)
+        => receiveWork.RunAfterStreamsAsync(channelId, streamIds, continuation);
+
+    Task ICancellableReceiveEpisodeCompletionPort.CompletePlaybackAsync(
+        ChannelId channelId,
+        long episodeId,
+        CancellationToken cancellationToken)
+        => receiveAudio.CompleteEpisodeAsync(
+            Resolve(channelId),
+            episodeId,
+            cancellationToken);
 
     public ChannelId? ResolveRecordingTarget(ChannelId channelId)
     {

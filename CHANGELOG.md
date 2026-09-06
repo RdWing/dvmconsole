@@ -6,6 +6,154 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-09
+
+Changes since 0.6.2.
+
+### Added
+
+- Assign saved Alert/QCII patterns or imported audio to the three toolbar
+  alert buttons through their right-click menus. Both use ALERT-enabled
+  channels; button names use the first word, capped at seven uppercase
+  characters without an ellipsis. Preserve custom assignments by asset identity
+  when imported files share a display name.
+- Add Linux x64 and ARM64 AppImages with PipeWire audio, device discovery,
+  hotplug recovery, and global keyboard PTT through X11 or the Wayland
+  GlobalShortcuts portal. Add Windows ARM64 packages alongside Windows x64
+  and both macOS architectures.
+- Extend release automation to all six desktop targets with package smoke
+  checks, native-library verification, SBOMs, checksums, and attestations.
+  Linux packages use a Debian 12 build baseline and a GLIBC 2.34 ceiling,
+  with distribution compatibility checks. Add package-size and public-privacy
+  gates, and select the Linux builder architecture explicitly for cross-builds.
+- Add a codeplug-wide option to preserve inbound source IDs in patches.
+- Scope local encryption keys to their FNE system, allowing systems to reuse
+  key IDs independently while retaining support for older unscoped keys.
+  Add optional DMR channel-key matching for receive; the default follows
+  on-air identifiers within the same FNE, and clear calls remain receivable.
+
+### Changed
+
+- Simplify recording playback and tone actions, show ALERT/PAGE destinations,
+  and add navigation between tone sections. Virtualize preset lists and update
+  filtered rows incrementally. Coalesce target summaries and settings snapshot
+  capture while preserving explicit saves and Studio settings adoption.
+- Apply optional RX filters and compression only to local listening, keeping
+  TAR recordings and outbound patches unaffected. Applying local RX options
+  no longer restarts patch-source decoders.
+
+- Refresh the README with the NEO wordmark, clearer download and setup sections,
+  and links into the user guide. Update the guide and release notes with simpler
+  wording and current settings-transfer, audio, recording, and patch behavior.
+- Give NEO its own `DVMProject/dvmconsole-neo` data directory. A pristine first
+  launch can selectively copy recognized settings, profiles, configurations,
+  companions, and referenced assets from the earlier shared directory.
+  Nothing is preselected; recordings, logs, unknown files, and originals stay
+  in place.
+- Show receive-only web streams as movable cards in their zones, with direct
+  Start/Stop controls and saved layouts. Their volume sliders match channel
+  cards, with unity gain at the midpoint; compact button labels remain visible.
+- Reduce allocation during idle and busy receive activity, audio transmission,
+  and large-configuration editing. Studio preserves custom YAML fields and
+  their channel associations while doing less work to find and save them.
+- Reduce unnecessary card and meter updates, realize offscreen cards only as
+  needed, update affected List rows, and suspend hidden List presentation.
+  Preserve card geometry, colors, saved positions, and active control owners.
+- Keep Studio's full channel grid at desktop widths, with a compact summary
+  below 600 logical pixels. Simplify Console Settings spacing and RX-processing
+  rows; improve fractional-scale sliders, resource-color selection, and History
+  layouts. Channel navigation reveals the relevant card automatically.
+- Start warming the microphone immediately on PTT. With the permit tone enabled,
+  hold microphone audio until playback and a short settling guard finish.
+  Ordinary tone-output preparation uses 40 ms instead of 300 ms; cold Bluetooth
+  retains its separate preparation and microphone-readiness checks.
+- Normalize legacy Apple Voice Processing selections to DVM Console processing.
+  Windows communications processing remains available on supported endpoints.
+  Remove the retired Apple path and its native exports.
+- Use unity post-vocoder receive gain for all modes. Generated DMR and NXDN
+  tones use nominal -25 dBFS audio, with complete-packet buffering for digital
+  transmission and steadier local monitor playback.
+- Separate settings transfer, PTT, receive, audio/tone presentation, and Studio
+  workflows into focused internal controllers. Consolidate Studio edits and
+  undo/redo without changing public bindings, settings, or wire contracts.
+- Use explicit AOT-safe YAML serialization and FNE memory operations. Add
+  first-party copyright/SPDX headers and CI enforcement. Share the macOS 12
+  deployment target across native components and packaging; macOS 14 and newer
+  remains supported, with macOS 12 and 13 treated as best effort.
+
+### Fixed
+
+- Distinguish separate files correctly on Intel macOS, including recording
+  playback and same-file checks. Complete source disposal when canceling
+  Opus or MPEG playback startup.
+- Preserve RX and TAR selections after receive or recording failures. Retry
+  unavailable outputs without deselecting channels, keep recovery outside
+  receive-worker shutdown, and ignore recovery for replaced sessions.
+- Serialize alert sends through muting, monitoring, transmission, and cleanup.
+  Restore listening after partial mute failures, retain failed restoration for
+  retry, and prevent PTT startup from overlapping an alert send. Cancel and
+  finish old alert work before session replacement or shutdown.
+- Keep Event History responsive during TAR playback and update playback
+  controls promptly. Keep an active preset search visible after deleting its
+  final match, so the remaining library can still be reached.
+- Keep Studio navigation and focus on Web Streams, Groups, and Encryption Keys
+  after channel editing. Create starter zones with new FNEs or the first web
+  stream, assign new zones to the selected FNE, and refresh edited list labels.
+- Save a newly encrypted channel and its new scoped key in one Studio session.
+  Export to a new YAML destination using the managed draft and companions,
+  with interoperable key fields and no internal managed paths in `keys.clear`.
+- Transfer imported card positions and receive on/off selections to the active
+  configuration even when installations have different managed library IDs.
+  Keep successful configuration imports active if retiring the old session
+  reports cleanup errors, and preserve the original error when activation fails.
+- Keep overloaded patch destinations from falling progressively behind:
+  limit unfinished calls, discard stale queued audio, and report skipped or
+  shortened forwarding without discarding source TAR recordings. Stop pending
+  patch audio on session close or replacement while completing active call-end
+  signaling; queue diagnostics also account for calls still finishing.
+- Release multi-channel PTT together so a slow target cannot prolong microphone
+  transmission on other channels. Keep starting/releasing feedback current,
+  preserve accepted microphone frames during unkey, and prevent recording or
+  meter failures from interrupting transmit audio.
+- Improve keyboard PTT ownership, toggle release, and repeated-key handling.
+  Reject new duplicate global/active-system bindings and warn about existing
+  conflicts. Fall back to window-local PTT if global capture cannot start;
+  release held or latched keyboard PTT if active global capture fails.
+  List row titles support Tab/Enter expansion with visible focus.
+- Restore global and zone receive on/off commands, continuing past individual
+  audio-route failures. Preserve pending microphone edits during transmission
+  and apply new gain, EQ, or AGC to the next warm capture after unkeying.
+- Preserve protocol timing for call-start signaling, first voice packets, and
+  NXDN receive playout across brief queue gaps. Retry unanswered P25 KMM key
+  requests once, canceling pending work on disconnect or shutdown.
+- Prevent late startup or reconnect work from reviving an aborted FNE
+  connection. Retain capture and playback ownership until stopping finishes,
+  and clean up failed transmit preparation or Linux playback construction.
+  Keep throwing state observers from stranding transmit or tone cleanup.
+- Retry recording-folder ownership after a previous session releases it, so
+  configuration changes do not leave TAR unavailable. Protect a live console's
+  recording root from another process, and retain ownership until background
+  finalization finishes.
+- Finish cleanup of every recording after individual failures, preserve
+  recoverable work, and show recording faults in channel presentation. Prevent
+  recording-state updates from deadlocking the UI. Use portable filenames and
+  private permissions for app-owned recording and recovery files.
+- Protect unreadable settings from automatic overwrite, use one settings save
+  commit point, and recover interrupted managed-asset changes. Bound and
+  validate configuration, media, recording, and settings inputs, serialize
+  persistence, and restore settings from durable backups when possible.
+- Redact IPv6 endpoints, credential-bearing URLs, and paths in diagnostic
+  exports, and prevent embedded tabs or newlines from changing export columns.
+- Keep storage contention and global keyboard-hook startup/teardown off the UI
+  thread. Bound shutdown waits while preserving recording recovery and accepted
+  call-end signaling. Fix card realization during small scrolls and prevent
+  macOS configuration fields from requesting Security Code AutoFill.
+- Repair Windows global keyboard hook startup, Linux portal identity setup,
+  and macOS native-library loading. Preserve Wayland caller cancellation and
+  refresh PipeWire routes even when visible device names do not change.
+- Align dependency-advisory restores with Release lockfiles and keep packaged
+  Studio smoke checks independent of desktop file-picker portals.
+
 ## [0.6.2] - 2026-09-01
 
 ### Added
@@ -994,7 +1142,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/RdWing/dvmconsole/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/RdWing/dvmconsole/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/RdWing/dvmconsole/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/RdWing/dvmconsole/compare/v0.5.5...v0.6.0

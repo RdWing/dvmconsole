@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Operations;
 
@@ -18,6 +21,7 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
     private static readonly TimeSpan CallbackCadenceMargin = TimeSpan.FromMilliseconds(50);
 
     private readonly IAudioCapture source;
+    private readonly IBorrowedAudioCapture? borrowedSource;
     private readonly object sync = new();
     private readonly object publicationSync = new();
     private readonly SemaphoreSlim lifecycleGate = new(1, 1);
@@ -26,7 +30,8 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
     private readonly TimeProvider timeProvider;
     private readonly TimeSpan staleAfter;
     private TaskCompletionSource<bool> samplesReady = CreateReadinessSource();
-    private TaskCompletionSource<bool> nextPhysicalSamples = CreatePhysicalSamplesSource();
+    private TaskCompletionSource<bool>? nextPhysicalSamples;
+    private long nextPhysicalSamplesNotBefore;
     private long readinessStartedTimestamp;
     private long captureStartCompletedTimestamp;
     private long firstSamplesTimestamp;
@@ -48,7 +53,11 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
         if (this.staleAfter <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(staleAfter));
         this.timeProvider = timeProvider ?? TimeProvider.System;
-        source.SamplesAvailable += HandleSamplesAvailable;
+        borrowedSource = source as IBorrowedAudioCapture;
+        if (borrowedSource is not null)
+            borrowedSource.BorrowedSamplesAvailable += HandleBorrowedSamplesAvailable;
+        else
+            source.SamplesAvailable += HandleSamplesAvailable;
     }
 
     public Lease CreateLease()
@@ -134,10 +143,13 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
     // after that route transition, not merely before it.
     public async Task<TimeSpan> WaitForNextPhysicalSamplesAsync(
         TimeSpan timeout,
+        TimeSpan minimumSuppressedDuration = default,
         CancellationToken cancellationToken = default)
     {
         if (timeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(timeout));
+        if (minimumSuppressedDuration < TimeSpan.Zero || minimumSuppressedDuration >= timeout)
+            throw new ArgumentOutOfRangeException(nameof(minimumSuppressedDuration));
 
         Task observed;
         long started;
@@ -147,6 +159,11 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
             if (runningLeases.Length == 0)
                 throw new InvalidOperationException("The microphone capture path is not running.");
             started = timeProvider.GetTimestamp();
+            long notBefore = checked(started + (long)Math.Ceiling(
+                minimumSuppressedDuration.TotalSeconds * timeProvider.TimestampFrequency));
+            nextPhysicalSamplesNotBefore = nextPhysicalSamples is null
+                ? notBefore : Math.Max(nextPhysicalSamplesNotBefore, notBefore);
+            nextPhysicalSamples ??= CreatePhysicalSamplesSource();
             observed = nextPhysicalSamples.Task;
         }
 
@@ -171,13 +188,22 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
                     leases.Clear();
                     runningLeases = [];
                 }
-                source.SamplesAvailable -= HandleSamplesAvailable;
+                if (borrowedSource is not null)
+                    borrowedSource.BorrowedSamplesAvailable -= HandleBorrowedSamplesAvailable;
+                else
+                    source.SamplesAvailable -= HandleSamplesAvailable;
             }
 
             foreach (Lease lease in current)
                 lease.MarkDisposed();
             samplesReady.TrySetCanceled();
-            nextPhysicalSamples.TrySetCanceled();
+            TaskCompletionSource<bool>? physicalSamplesWaiter;
+            lock (sync)
+            {
+                physicalSamplesWaiter = nextPhysicalSamples;
+                nextPhysicalSamples = null;
+            }
+            physicalSamplesWaiter?.TrySetCanceled();
             await source.DisposeAsync().ConfigureAwait(false);
         }
         finally
@@ -302,41 +328,48 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
     }
 
     private void HandleSamplesAvailable(object? sender, PcmSamplesEventArgs args)
+        => PublishSamples(args.Samples.Span);
+
+    private void HandleBorrowedSamplesAvailable(ReadOnlySpan<short> samples)
+        => PublishSamples(samples);
+
+    private void PublishSamples(ReadOnlySpan<short> samples)
     {
-        if (args.Samples.IsEmpty)
+        if (samples.IsEmpty)
             return;
 
-        lock (sync)
-        {
-            // Observe physical capture before honoring suppression. The first
-            // non-empty callback proves that the selected input has started;
-            // cold Bluetooth release still requires another callback after
-            // the output transition completes.
-            long now = timeProvider.GetTimestamp();
-            if (firstSamplesTimestamp == 0)
-            {
-                firstSamplesTimestamp = now;
-                samplesReady.TrySetResult(true);
-            }
-            if (previousSamplesTimestamp != 0)
-                callbackCadence = timeProvider.GetElapsedTime(previousSamplesTimestamp, now);
-            previousSamplesTimestamp = now;
-            lastSamplesTimestamp = now;
-            captureFault = null;
-            TaskCompletionSource<bool> observedSamples = nextPhysicalSamples;
-            nextPhysicalSamples = CreatePhysicalSamplesSource();
-            observedSamples.TrySetResult(true);
-        }
-
-        // Keep suppression and lifecycle changes serialized with publication.
-        // Subscriber code runs outside the state lock, so a reentrant stop
-        // cannot deadlock the capture callback.
+        // Serialize the callback with gate changes. A callback proving post-cue
+        // recovery must still be discarded before its waiter can open the gate.
         lock (publicationSync)
         {
+            lock (sync)
+            {
+                long now = timeProvider.GetTimestamp();
+                if (firstSamplesTimestamp == 0)
+                {
+                    firstSamplesTimestamp = now;
+                    samplesReady.TrySetResult(true);
+                }
+                if (previousSamplesTimestamp != 0)
+                    callbackCadence = timeProvider.GetElapsedTime(previousSamplesTimestamp, now);
+                previousSamplesTimestamp = now;
+                lastSamplesTimestamp = now;
+                captureFault = null;
+                // A delayed input buffer or acoustic tail can outlive output
+                // presentation. Only a physical callback at the guard deadline
+                // may release the waiter; that callback is still discarded.
+                if (now >= nextPhysicalSamplesNotBefore)
+                {
+                    TaskCompletionSource<bool>? observedSamples = nextPhysicalSamples;
+                    nextPhysicalSamples = null;
+                    observedSamples?.TrySetResult(true);
+                }
+            }
+
             if (samplesSuppressed)
                 return;
             foreach (Lease lease in runningLeases)
-                lease.Publish(args);
+                lease.Publish(samples);
         }
     }
 
@@ -426,7 +459,7 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
             adaptiveMilliseconds));
     }
 
-    internal sealed class Lease : IAudioCapture
+    internal sealed class Lease : IAudioCapture, IBorrowedAudioCapture
     {
         private readonly SharedAudioCapture owner;
         private bool disposed;
@@ -439,6 +472,7 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
         }
 
         public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
+        public event BorrowedPcmSamplesHandler? BorrowedSamplesAvailable;
         public PcmAudioFormat Format { get; }
         public bool IsRunning => running;
         internal bool IsDisposed => disposed;
@@ -460,6 +494,12 @@ internal sealed class SharedAudioCapture : IAsyncDisposable
             disposed = true;
         }
 
-        internal void Publish(PcmSamplesEventArgs args) => SamplesAvailable?.Invoke(this, args);
+        internal void Publish(ReadOnlySpan<short> samples)
+        {
+            BorrowedSamplesAvailable?.Invoke(samples);
+            EventHandler<PcmSamplesEventArgs>? owned = SamplesAvailable;
+            if (owned is not null)
+                owned(this, new PcmSamplesEventArgs(samples.ToArray()));
+        }
     }
 }

@@ -1,4 +1,8 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Threading.Channels;
+using DvmConsole.Audio;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
 
@@ -15,27 +19,39 @@ internal sealed class PatchTransmitPump
     private readonly object sync = new();
     private readonly PatchTransmitSession session;
     private readonly Channel<QueuedFrame> frames;
-    private readonly Queue<DateTimeOffset> enqueuedAt = new();
+    private readonly Queue<long> enqueuedAt = new();
+    private readonly TimeSpan? maximumQueuedAge;
+    private readonly ITimer? backlogTimer;
     private readonly Func<CancellationToken, ValueTask> waitForNextFrame;
     private readonly TimeProvider timeProvider;
     private readonly CancellationTokenSource cancellation = new();
     private readonly TaskCompletionSource<bool> started = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Task completion;
+    private readonly BoundedPcmBufferPool framePool;
     private int completionRequested;
     private int queuedFrameCount;
     private int peakQueuedFrameCount;
+    private bool workerFinished;
+    private bool releasing;
 
     public PatchTransmitPump(
         PatchTransmitSession session,
         Task? startAfter = null,
         Func<TimeSpan, CancellationToken, ValueTask>? delay = null,
         TimeProvider? timeProvider = null,
-        int capacity = DefaultCapacity)
+        int capacity = DefaultCapacity,
+        TimeSpan? maximumQueuedAge = null)
     {
         this.session = session ?? throw new ArgumentNullException(nameof(session));
         if (capacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(capacity));
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        if (maximumQueuedAge <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(maximumQueuedAge));
+        this.maximumQueuedAge = maximumQueuedAge;
+        if (maximumQueuedAge is not null)
+            backlogTimer = this.timeProvider.CreateTimer(
+                _ => ExpireStaleAudio(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         TransmitFrameCadence cadence =
             TransmitFrameCadence.StartAfterFrameInterval(this.timeProvider, delay);
         waitForNextFrame = cadence.WaitForNextFrameAsync;
@@ -47,6 +63,9 @@ internal sealed class PatchTransmitPump
             FullMode = BoundedChannelFullMode.Wait
         });
         Capacity = capacity;
+        framePool = new BoundedPcmBufferPool(
+            VocoderFrameSizes.PcmSamplesPerFrame,
+            Math.Min(capacity, 64));
         completion = RunAsync(startAfter);
     }
 
@@ -54,6 +73,7 @@ internal sealed class PatchTransmitPump
     public Task Completion => completion;
     public Exception? Failure { get; private set; }
     public int Capacity { get; }
+    public bool WasOverloaded { get; private set; }
 
     public TransmitQueueHealth CaptureHealth()
     {
@@ -61,7 +81,7 @@ internal sealed class PatchTransmitPump
         {
             TimeSpan? oldestAge = enqueuedAt.Count == 0
                 ? null
-                : timeProvider.GetUtcNow() - enqueuedAt.Peek();
+                : timeProvider.GetElapsedTime(enqueuedAt.Peek());
             return new TransmitQueueHealth(
                 queuedFrameCount,
                 peakQueuedFrameCount,
@@ -84,13 +104,15 @@ internal sealed class PatchTransmitPump
 
             for (int offset = 0; offset < samples.Length; offset += VocoderFrameSizes.PcmSamplesPerFrame)
             {
-                var frame = new short[VocoderFrameSizes.PcmSamplesPerFrame];
+                short[] frame = framePool.Rent();
                 samples.Slice(offset, frame.Length).CopyTo(frame);
-                DateTimeOffset now = timeProvider.GetUtcNow();
-                if (!frames.Writer.TryWrite(new QueuedFrame(frame)))
+                long now = timeProvider.GetTimestamp();
+                if (!frames.Writer.TryWrite(new QueuedFrame(frame, now)))
                 {
-                    var exception = new InvalidOperationException(
+                    framePool.Return(frame);
+                    var exception = new PatchBacklogException(
                         $"The patch transmit backlog reached its {Capacity}-frame safety limit.");
+                    WasOverloaded = true;
                     Failure = exception;
                     completionRequested = 1;
                     // Cancel before completing the channel. The worker owns
@@ -102,6 +124,8 @@ internal sealed class PatchTransmitPump
                 enqueuedAt.Enqueue(now);
                 queuedFrameCount++;
                 peakQueuedFrameCount = Math.Max(peakQueuedFrameCount, queuedFrameCount);
+                if (queuedFrameCount == 1)
+                    ScheduleExpiration();
             }
             return true;
         }
@@ -118,12 +142,27 @@ internal sealed class PatchTransmitPump
         }
     }
 
+    // Final owner shutdown must not key a waiting replacement call or play
+    // seconds of stale PCM. The worker still completes the current protocol
+    // packet and terminator before releasing its session.
+    public void DiscardPendingAudioAndComplete()
+    {
+        lock (sync)
+        {
+            if (workerFinished)
+                return;
+            completionRequested = 1;
+            cancellation.Cancel();
+            frames.Writer.TryComplete();
+        }
+    }
+
     private async Task RunAsync(Task? startAfter)
     {
         try
         {
             if (startAfter is not null)
-                await startAfter.ConfigureAwait(false);
+                await startAfter.WaitAsync(cancellation.Token).ConfigureAwait(false);
             if (!await frames.Reader.WaitToReadAsync(cancellation.Token).ConfigureAwait(false) ||
                 !frames.Reader.TryRead(out QueuedFrame firstFrame))
             {
@@ -131,20 +170,18 @@ internal sealed class PatchTransmitPump
                 return;
             }
 
-            session.Start();
-            started.TrySetResult(true);
             MarkDequeued();
-            await ProcessFrameAsync(firstFrame.Samples).ConfigureAwait(false);
+            await ProcessFrameAndReturnAsync(firstFrame).ConfigureAwait(false);
             await foreach (QueuedFrame frame in frames.Reader.ReadAllAsync(cancellation.Token).ConfigureAwait(false))
             {
                 MarkDequeued();
-                await ProcessFrameAsync(frame.Samples).ConfigureAwait(false);
+                await ProcessFrameAndReturnAsync(frame).ConfigureAwait(false);
             }
 
         }
-        catch (OperationCanceledException) when (Failure is not null)
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
-            // A bounded-backlog failure discards queued stale patch audio.
+            // Final shutdown and bounded-backlog failure discard pending PCM.
         }
         catch (Exception exception)
         {
@@ -152,6 +189,18 @@ internal sealed class PatchTransmitPump
         }
         finally
         {
+            lock (sync)
+            {
+                completionRequested = 1;
+                releasing = true;
+                backlogTimer?.Dispose();
+                frames.Writer.TryComplete();
+            }
+            while (frames.Reader.TryRead(out QueuedFrame abandoned))
+            {
+                MarkDequeued();
+                framePool.Return(abandoned.Samples);
+            }
             started.TrySetResult(false);
             try
             {
@@ -160,10 +209,26 @@ internal sealed class PatchTransmitPump
             }
             catch (Exception exception)
             {
-                Failure ??= exception;
+                Failure = Failure is null ? exception
+                    : new AggregateException("Patch cleanup failed after an earlier forwarding failure.", Failure, exception);
             }
-            session.Dispose();
-            cancellation.Dispose();
+            try
+            {
+                session.Dispose();
+            }
+            catch (Exception exception)
+            {
+                Failure = Failure is null ? exception
+                    : new AggregateException("Patch cleanup failed after an earlier forwarding failure.", Failure, exception);
+            }
+            finally
+            {
+                lock (sync)
+                {
+                    workerFinished = true;
+                    cancellation.Dispose();
+                }
+            }
         }
     }
 
@@ -174,14 +239,81 @@ internal sealed class PatchTransmitPump
             if (enqueuedAt.Count > 0)
                 enqueuedAt.Dequeue();
             queuedFrameCount = Math.Max(0, queuedFrameCount - 1);
+            if (completionRequested == 0 || !cancellation.IsCancellationRequested)
+                ScheduleExpiration();
         }
     }
 
-    private async Task ProcessFrameAsync(short[] frame)
+    private void ScheduleExpiration()
     {
-        await waitForNextFrame(cancellation.Token).ConfigureAwait(false);
-        session.Process(frame);
+        if (maximumQueuedAge is not TimeSpan limit || releasing || workerFinished)
+            return;
+        TimeSpan remaining = enqueuedAt.Count == 0
+            ? Timeout.InfiniteTimeSpan
+            : TimeSpan.FromTicks(Math.Max(0, (limit - timeProvider.GetElapsedTime(enqueuedAt.Peek())).Ticks));
+        backlogTimer?.Change(remaining, Timeout.InfiniteTimeSpan);
     }
 
-    private readonly record struct QueuedFrame(short[] Samples);
+    private void ExpireStaleAudio()
+    {
+        lock (sync)
+        {
+            if (workerFinished || releasing || cancellation.IsCancellationRequested || enqueuedAt.Count == 0)
+                return;
+            if (timeProvider.GetElapsedTime(enqueuedAt.Peek()) < maximumQueuedAge!.Value)
+            {
+                ScheduleExpiration();
+                return;
+            }
+            FailStaleAudio();
+        }
+    }
+
+    private void FailStaleAudio()
+    {
+        WasOverloaded = true;
+        Failure ??= new PatchBacklogException(
+            "Patch audio exceeded the one-second queue-age limit; stale unencoded audio was discarded.");
+        completionRequested = 1;
+        cancellation.Cancel();
+        frames.Writer.TryComplete();
+    }
+
+    private async Task ProcessFrameAsync(QueuedFrame frame)
+    {
+        await waitForNextFrame(cancellation.Token).ConfigureAwait(false);
+        ThrowIfFrameExpired(frame);
+        session.Process(frame.Samples);
+    }
+
+    private void ThrowIfFrameExpired(QueuedFrame frame)
+    {
+        lock (sync)
+        {
+            if (maximumQueuedAge is TimeSpan limit &&
+                timeProvider.GetElapsedTime(frame.EnqueuedAt) >= limit && !cancellation.IsCancellationRequested)
+                FailStaleAudio();
+        }
+        cancellation.Token.ThrowIfCancellationRequested();
+    }
+
+    private async Task ProcessFrameAndReturnAsync(QueuedFrame frame)
+    {
+        try
+        {
+            ThrowIfFrameExpired(frame);
+            if (!session.IsStarted)
+            {
+                session.Start();
+                started.TrySetResult(true);
+            }
+            await ProcessFrameAsync(frame).ConfigureAwait(false);
+        }
+        finally
+        {
+            framePool.Return(frame.Samples);
+        }
+    }
+
+    private readonly record struct QueuedFrame(short[] Samples, long EnqueuedAt);
 }

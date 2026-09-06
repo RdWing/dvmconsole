@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Vocoder;
 
 public enum VocoderMode
@@ -89,4 +92,13 @@ public interface IHalfRateVocoderSession : IVocoderSession
         Span<byte> parameters)
         => HalfRateFecStatus.FromNative(ExtractParameters(codeword, parameters));
     void BuildCodeword(ReadOnlySpan<byte> parameters, Span<byte> codeword);
+}
+
+// Optional processing is deferred until raw decoded samples have reached observers.
+// The session owner serializes decode, processing, reset and disposal.
+public interface IReceiveAudioProcessingSession
+{
+    bool HasReceiveAudioProcessing { get; }
+    void DeferReceiveAudioProcessing();
+    void ProcessReceiveAudio(Span<short> samples);
 }

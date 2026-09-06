@@ -1,22 +1,23 @@
-#nullable enable
+// SPDX-FileCopyrightText: 2025-2026 RdWing
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#nullable enable
+
 using System.Security.Cryptography;
+using System.Buffers;
 
 namespace fnecore;
 
 internal static class FneTransportCryptoCodec
 {
-    private const ushort AesWrappedPacketMagic = 0xC0FE;
-    private const int AesBlockBytes = 16;
-
     public static byte[] Wrap(
         byte[] message,
         byte[] key,
         FneTransportEncryptionMode mode)
-        => mode == FneTransportEncryptionMode.Cbc
-            ? WrapCbc(message, key)
-            : WrapEcb(message, key);
+    {
+        using var context = new FneTransportCryptoContext(key);
+        return context.Wrap(message, mode);
+    }
 
     public static bool TryUnwrap(
         byte[] wire,
@@ -24,40 +25,8 @@ internal static class FneTransportCryptoCodec
         FneTransportEncryptionMode mode,
         out byte[] decrypted)
     {
-        decrypted = [];
-        if (wire.Length < 2 || FneUtils.ToUInt16(wire, 0) != AesWrappedPacketMagic)
-            return false;
-
-        try
-        {
-            if (mode == FneTransportEncryptionMode.Cbc)
-            {
-                int encryptedLength = wire.Length - 2 - AesBlockBytes;
-                if (encryptedLength < AesBlockBytes || encryptedLength % AesBlockBytes != 0)
-                    return false;
-
-                byte[] encrypted = wire.AsSpan(2, encryptedLength).ToArray();
-                byte[] iv = wire.AsSpan(wire.Length - AesBlockBytes, AesBlockBytes).ToArray();
-                decrypted = Transform(encrypted, key, CipherMode.CBC, encrypt: false, iv);
-                return true;
-            }
-
-            int ecbLength = wire.Length - 2;
-            if (ecbLength < AesBlockBytes || ecbLength % AesBlockBytes != 0)
-                return false;
-
-            decrypted = Transform(
-                wire.AsSpan(2, ecbLength).ToArray(),
-                key,
-                CipherMode.ECB,
-                encrypt: false);
-            return true;
-        }
-        catch (CryptographicException)
-        {
-            decrypted = [];
-            return false;
-        }
+        using var context = new FneTransportCryptoContext(key);
+        return context.TryUnwrap(wire, mode, out decrypted);
     }
 
     public static bool LooksLikeFneFrame(byte[] message)
@@ -72,59 +41,115 @@ internal static class FneTransportCryptoCodec
             payloadType is Constants.DVMRtpPayloadType or Constants.DVMRtpPayloadType + 1;
     }
 
-    private static byte[] WrapEcb(byte[] message, byte[] key)
-    {
-        byte[] padded = PadToBlock(message);
-        byte[] encrypted = Transform(padded, key, CipherMode.ECB, encrypt: true);
-        return BuildWirePacket(encrypted, null);
-    }
+}
 
-    private static byte[] WrapCbc(byte[] message, byte[] key)
-    {
-        byte[] padded = PadToBlock(message);
-        byte[] iv = RandomNumberGenerator.GetBytes(AesBlockBytes);
-        byte[] encrypted = Transform(padded, key, CipherMode.CBC, encrypt: true, iv);
-        return BuildWirePacket(encrypted, iv);
-    }
+// Owns configured AES state for one FNE UDP session. Wire buffers remain
+// caller-owned results, while padding uses a bounded shared rental.
+internal sealed class FneTransportCryptoContext : IDisposable
+{
+    private const ushort AesWrappedPacketMagic = 0xC0FE;
+    private const int AesBlockBytes = 16;
+    private readonly object sync = new();
+    private readonly byte[] key;
+    private readonly Aes aes;
+    private bool disposed;
 
-    private static byte[] Transform(
-        byte[] input,
-        byte[] key,
-        CipherMode mode,
-        bool encrypt,
-        byte[]? iv = null)
+    public FneTransportCryptoContext(ReadOnlySpan<byte> key)
     {
-        using Aes aes = Aes.Create();
+        this.key = key.ToArray();
+        aes = Aes.Create();
         aes.KeySize = 256;
-        aes.Key = key;
         aes.BlockSize = 128;
-        aes.Mode = mode;
-        aes.Padding = PaddingMode.None;
-        if (mode == CipherMode.CBC)
-            aes.IV = iv ?? throw new ArgumentNullException(nameof(iv));
-
-        using ICryptoTransform transform = encrypt ? aes.CreateEncryptor() : aes.CreateDecryptor();
-        return transform.TransformFinalBlock(input, 0, input.Length);
+        aes.Key = this.key;
     }
 
-    private static byte[] PadToBlock(byte[] message)
+    public byte[] Wrap(ReadOnlySpan<byte> message, FneTransportEncryptionMode mode)
     {
-        int paddedLength = ((message.Length + AesBlockBytes - 1) / AesBlockBytes) * AesBlockBytes;
-        if (paddedLength == message.Length)
-            return message.ToArray();
-
-        byte[] padded = new byte[paddedLength];
-        Buffer.BlockCopy(message, 0, padded, 0, message.Length);
-        return padded;
-    }
-
-    private static byte[] BuildWirePacket(byte[] encrypted, byte[]? iv)
-    {
-        byte[] wire = new byte[2 + encrypted.Length + (iv?.Length ?? 0)];
+        ObjectDisposedException.ThrowIf(disposed, this);
+        int paddedLength = checked((message.Length + AesBlockBytes - 1) / AesBlockBytes * AesBlockBytes);
+        int ivLength = mode == FneTransportEncryptionMode.Cbc ? AesBlockBytes : 0;
+        byte[] wire = new byte[checked(2 + paddedLength + ivLength)];
         FneUtils.WriteBytes(AesWrappedPacketMagic, ref wire, 0);
-        Buffer.BlockCopy(encrypted, 0, wire, 2, encrypted.Length);
-        if (iv is not null)
-            Buffer.BlockCopy(iv, 0, wire, 2 + encrypted.Length, iv.Length);
-        return wire;
+
+        byte[] rented = ArrayPool<byte>.Shared.Rent(paddedLength);
+        try
+        {
+            Span<byte> padded = rented.AsSpan(0, paddedLength);
+            padded.Clear();
+            message.CopyTo(padded);
+            Span<byte> encrypted = wire.AsSpan(2, paddedLength);
+            lock (sync)
+            {
+                if (mode == FneTransportEncryptionMode.Cbc)
+                {
+                    Span<byte> iv = wire.AsSpan(2 + paddedLength, AesBlockBytes);
+                    RandomNumberGenerator.Fill(iv);
+                    aes.EncryptCbc(padded, iv, encrypted, PaddingMode.None);
+                }
+                else
+                {
+                    aes.EncryptEcb(padded, encrypted, PaddingMode.None);
+                }
+            }
+            return wire;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(rented.AsSpan(0, paddedLength));
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    public bool TryUnwrap(
+        ReadOnlySpan<byte> wire,
+        FneTransportEncryptionMode mode,
+        out byte[] decrypted)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        decrypted = [];
+        if (wire.Length < 2 || wire[0] != 0xC0 || wire[1] != 0xFE)
+            return false;
+
+        int ivLength = mode == FneTransportEncryptionMode.Cbc ? AesBlockBytes : 0;
+        int encryptedLength = wire.Length - 2 - ivLength;
+        if (encryptedLength < AesBlockBytes || encryptedLength % AesBlockBytes != 0)
+            return false;
+
+        byte[] candidate = new byte[encryptedLength];
+        try
+        {
+            ReadOnlySpan<byte> encrypted = wire.Slice(2, encryptedLength);
+            lock (sync)
+            {
+                if (mode == FneTransportEncryptionMode.Cbc)
+                {
+                    ReadOnlySpan<byte> iv = wire.Slice(2 + encryptedLength, AesBlockBytes);
+                    aes.DecryptCbc(encrypted, iv, candidate, PaddingMode.None);
+                }
+                else
+                {
+                    aes.DecryptEcb(encrypted, candidate, PaddingMode.None);
+                }
+            }
+            decrypted = candidate;
+            return true;
+        }
+        catch (CryptographicException)
+        {
+            CryptographicOperations.ZeroMemory(candidate);
+            return false;
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (sync)
+        {
+            if (disposed)
+                return;
+            disposed = true;
+            aes.Dispose();
+            CryptographicOperations.ZeroMemory(key);
+        }
     }
 }

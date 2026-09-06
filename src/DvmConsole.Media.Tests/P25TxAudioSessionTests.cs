@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
@@ -115,11 +118,11 @@ public sealed class P25TxAudioSessionTests
         Assert.True(P25DfsiFrameCodec.TryExtractEncryptionMetadata(ldu2, out P25DfsiFrameCodec.P25EncryptionMetadata nextMetadata));
         Assert.Equal(algorithmId, firstMetadata.AlgorithmId);
         Assert.Equal(keyId, firstMetadata.KeyId);
-        Assert.Equal(messageIndicator, firstMetadata.MessageIndicator);
+        Assert.Equal(messageIndicator, firstMetadata.MessageIndicator.ToArray());
 
         byte[] expectedNextMessageIndicator = messageIndicator.ToArray();
         P25Crypto.CycleP25Lfsr(expectedNextMessageIndicator);
-        Assert.Equal(expectedNextMessageIndicator, nextMetadata.MessageIndicator);
+        Assert.Equal(expectedNextMessageIndicator, nextMetadata.MessageIndicator.ToArray());
 
         var decryptor = new P25Crypto();
         decryptor.SetKey(keyId, algorithmId, key);

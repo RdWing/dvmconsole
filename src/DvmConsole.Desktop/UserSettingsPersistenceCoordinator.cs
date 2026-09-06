@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 
@@ -12,22 +15,58 @@ internal sealed class UserSettingsPersistenceCoordinator : IAsyncDisposable
     private readonly UserSettingsStore store;
     private readonly UserSettings settings;
     private readonly LatestUserSettingsWriter writer;
+    private readonly CoalescedUiAction? capture;
+    private readonly IUiDispatcher? dispatcher;
+    private readonly Action? beforeCapture;
+    private Exception? captureFailure;
 
     public UserSettingsPersistenceCoordinator(
         UserSettingsStore store,
         UserSettings settings,
-        Action<Exception>? faultHandler = null)
+        Action<Exception>? faultHandler = null,
+        IUiDispatcher? dispatcher = null,
+        Action? beforeCapture = null)
     {
         this.store = store ?? throw new ArgumentNullException(nameof(store));
         this.settings = settings ?? throw new ArgumentNullException(nameof(settings));
         writer = new LatestUserSettingsWriter(store.SaveSnapshot, faultHandler);
+        this.beforeCapture = beforeCapture;
+        this.dispatcher = dispatcher;
+        if (dispatcher is not null)
+            capture = new CoalescedUiAction(dispatcher, Capture, faultHandler);
     }
 
     public void Schedule()
-        => writer.Schedule(store.CaptureSnapshot(settings));
+    {
+        if (capture is null)
+            Capture();
+        else
+            capture.Schedule();
+    }
 
-    public Task FlushAsync()
-        => writer.FlushAsync();
+    private void Capture()
+    {
+        try
+        {
+            beforeCapture?.Invoke();
+            writer.Schedule(store.CaptureSnapshot(settings));
+            captureFailure = null;
+        }
+        catch (Exception exception)
+        {
+            captureFailure = exception;
+            throw;
+        }
+    }
+
+    public async Task FlushAsync()
+    {
+        if (capture is not null)
+            await capture.FlushAsync().ConfigureAwait(false);
+        if (captureFailure is not null)
+            throw new InvalidOperationException("The latest settings snapshot could not be captured.", captureFailure);
+        await writer.FlushAsync().ConfigureAwait(false);
+    }
 
     public Task AdoptStudioSnapshotAsync(ConfigurationSavePlan plan)
     {
@@ -45,11 +84,28 @@ internal sealed class UserSettingsPersistenceCoordinator : IAsyncDisposable
 
     private async Task AdoptSerializedSnapshotAsync(string json)
     {
-        store.ApplySerializedSnapshot(settings, json);
-        Schedule();
+        void Adopt()
+        {
+            store.ApplySerializedSnapshot(settings, json);
+            Schedule();
+        }
+        if (dispatcher is null)
+            Adopt();
+        else
+            await dispatcher.InvokeAsync(Adopt).ConfigureAwait(false);
         await FlushAsync().ConfigureAwait(false);
     }
 
-    public ValueTask DisposeAsync()
-        => writer.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await FlushAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            capture?.Dispose();
+            await writer.DisposeAsync().ConfigureAwait(false);
+        }
+    }
 }

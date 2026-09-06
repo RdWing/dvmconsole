@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Media;
 using DvmConsole.Application;
 using DvmConsole.Audio;
@@ -19,7 +22,8 @@ internal sealed record DesktopRuntimeDependencies(
     IAssetStore AssetStore,
     IAudioBackendFactory AudioBackendFactory,
     IVocoderFactory VocoderFactory,
-    bool NetworkDisabledDemo = false)
+    bool NetworkDisabledDemo = false,
+    Action<ConsoleSessionServiceDisposalTiming>? ServiceDisposalObserved = null)
 {
     public static DesktopRuntimeDependencies CreateDefault()
     {
@@ -100,6 +104,7 @@ internal sealed class ConsoleSessionLoader
 internal sealed class ConsoleSessionFactory
 {
     private readonly DesktopRuntimeDependencies dependencies;
+    private readonly MainWindowSessionComposition sessionComposition = new();
 
     public ConsoleSessionFactory(DesktopRuntimeDependencies dependencies)
     {
@@ -128,7 +133,7 @@ internal sealed class ConsoleSessionFactory
         CodeplugStudioState studioState = CodeplugStudioStateStore.Get(
             sessionSettings,
             topology.CodeplugPath);
-        var services = new ConsoleSessionServices();
+        var services = new ConsoleSessionServices(dependencies.ServiceDisposalObserved);
         return ConsoleSessionConstruction.Create(services, () =>
         {
             (P25KeyRing p25KeyRing, DmrKeyRing dmrKeyRing, NxdnKeyRing nxdnKeyRing) = LoadKeyRings(
@@ -150,26 +155,29 @@ internal sealed class ConsoleSessionFactory
                 CreateSystemViewModels(
                     configuration,
                     zones,
+                    studioState.ZoneSystemAssignments,
                     studioState.CallPrioritySystemNames),
                 zones,
                 new MainWindowViewModelOptions(
-                    P25KeyResolver: p25KeyRing,
-                    UserSettingsStore: dependencies.UserSettingsStore,
-                    GroupDefinitions: configuration.EffectiveGroups(),
-                    PatchSourceIdPassthrough: configuration.PatchSourceIdPassthrough,
-                    SerialPortProvider: dependencies.SerialPortProvider,
-                    SerialPttFactory: dependencies.SerialPttFactory,
-                    DmrKeyResolver: dmrKeyRing,
-                    NxdnKeyResolver: nxdnKeyRing,
-                    CodeplugPath: topology.CodeplugPath,
-                    UiDispatcher: dependencies.UiDispatcher,
-                    SessionServices: services,
-                    NetworkDisabledDemo: dependencies.NetworkDisabledDemo,
-                    ConfigurationReference: topology.ConfigurationReference,
-                    MigrateLegacyConfigurationOperatorState: topology.MigrateLegacyConfigurationOperatorState,
-                    AssetStore: dependencies.AssetStore,
-                    AudioBackendFactory: dependencies.AudioBackendFactory,
-                    VocoderFactory: dependencies.VocoderFactory));
+                    Security: new(p25KeyRing, dmrKeyRing, nxdnKeyRing),
+                    Document: new(
+                        dependencies.UserSettingsStore,
+                        dependencies.AssetStore,
+                        topology.CodeplugPath,
+                        topology.ConfigurationReference,
+                        topology.MigrateLegacyConfigurationOperatorState),
+                    Host: new(
+                        dependencies.SerialPortProvider,
+                        dependencies.SerialPttFactory,
+                        dependencies.UiDispatcher,
+                        services,
+                        AudioBackendFactory: dependencies.AudioBackendFactory,
+                        VocoderFactory: dependencies.VocoderFactory,
+                        SessionComposition: sessionComposition),
+                    Features: new(
+                        configuration.EffectiveGroups(),
+                        configuration.PatchSourceIdPassthrough,
+                        dependencies.NetworkDisabledDemo)));
             if (topology.ConfigurationReference is null)
                 viewModel.RecordLoadedCodeplug(topology.CodeplugPath);
             return viewModel;
@@ -178,47 +186,51 @@ internal sealed class ConsoleSessionFactory
 
     private MainWindowViewModel CreateEmpty(string status)
     {
-        var services = new ConsoleSessionServices();
+        var services = new ConsoleSessionServices(dependencies.ServiceDisposalObserved);
         return ConsoleSessionConstruction.Create(services, () => new MainWindowViewModel(
             status,
             [],
             [],
             new MainWindowViewModelOptions(
-                UserSettingsStore: dependencies.UserSettingsStore,
-                GroupDefinitions: [],
-                SerialPortProvider: dependencies.SerialPortProvider,
-                SerialPttFactory: dependencies.SerialPttFactory,
-                UiDispatcher: dependencies.UiDispatcher,
-                SessionServices: services,
-                NetworkDisabledDemo: dependencies.NetworkDisabledDemo,
-                AssetStore: dependencies.AssetStore,
-                AudioBackendFactory: dependencies.AudioBackendFactory,
-                VocoderFactory: dependencies.VocoderFactory)));
+                Document: new(dependencies.UserSettingsStore, dependencies.AssetStore),
+                Host: new(
+                    dependencies.SerialPortProvider,
+                    dependencies.SerialPttFactory,
+                    dependencies.UiDispatcher,
+                    services,
+                    AudioBackendFactory: dependencies.AudioBackendFactory,
+                    VocoderFactory: dependencies.VocoderFactory,
+                    SessionComposition: sessionComposition),
+                Features: new([], NetworkDisabledDemo: dependencies.NetworkDisabledDemo))));
     }
 
     private MainWindowViewModel CreateRejected(string status, ConsoleTopology topology)
     {
         ConsoleConfiguration configuration = topology.Configuration;
         IReadOnlyList<ZoneViewModel> zones = CreateZones(configuration, null, null, null);
-        var services = new ConsoleSessionServices();
+        var services = new ConsoleSessionServices(dependencies.ServiceDisposalObserved);
         return ConsoleSessionConstruction.Create(services, () => new MainWindowViewModel(
             status,
             [],
             zones,
             new MainWindowViewModelOptions(
-                UserSettingsStore: dependencies.UserSettingsStore,
-                GroupDefinitions: configuration.EffectiveGroups(),
-                PatchSourceIdPassthrough: configuration.PatchSourceIdPassthrough,
-                SerialPortProvider: dependencies.SerialPortProvider,
-                SerialPttFactory: dependencies.SerialPttFactory,
-                CodeplugPath: topology.CodeplugPath,
-                UiDispatcher: dependencies.UiDispatcher,
-                SessionServices: services,
-                NetworkDisabledDemo: dependencies.NetworkDisabledDemo,
-                ConfigurationReference: topology.ConfigurationReference,
-                AssetStore: dependencies.AssetStore,
-                AudioBackendFactory: dependencies.AudioBackendFactory,
-                VocoderFactory: dependencies.VocoderFactory)));
+                Document: new(
+                    dependencies.UserSettingsStore,
+                    dependencies.AssetStore,
+                    topology.CodeplugPath,
+                    topology.ConfigurationReference),
+                Host: new(
+                    dependencies.SerialPortProvider,
+                    dependencies.SerialPttFactory,
+                    dependencies.UiDispatcher,
+                    services,
+                    AudioBackendFactory: dependencies.AudioBackendFactory,
+                    VocoderFactory: dependencies.VocoderFactory,
+                    SessionComposition: sessionComposition),
+                Features: new(
+                    configuration.EffectiveGroups(),
+                    configuration.PatchSourceIdPassthrough,
+                    dependencies.NetworkDisabledDemo))));
     }
 
     private static IReadOnlyList<ZoneViewModel> CreateZones(
@@ -283,6 +295,7 @@ internal sealed class ConsoleSessionFactory
     private static IReadOnlyList<SystemViewModel> CreateSystemViewModels(
         ConsoleConfiguration configuration,
         IReadOnlyList<ZoneViewModel> zones,
+        IReadOnlyDictionary<string, string> zoneSystemAssignments,
         IReadOnlyCollection<string> callPrioritySystemNames)
     {
         var channelsBySystem = new Dictionary<string, List<ChannelViewModel>>(StringComparer.OrdinalIgnoreCase);
@@ -303,16 +316,22 @@ internal sealed class ConsoleSessionFactory
             SystemConfiguration system = configuration.Systems[systemIndex];
             IBrush systemAccent = SystemAccentPalette.GetBrush(systemIndex);
             IReadOnlyList<ZoneViewModel> systemZones = zones
-                .Select(zone => new ZoneViewModel(
+                .Select((zone, zoneIndex) => new ZoneViewModel(
                     zone.Name,
                     zone.Channels.Where(channel => channel.Definition.SystemName.Equals(
                         system.Name,
                         StringComparison.OrdinalIgnoreCase)).ToArray(),
-                    zone.WebStreams,
+                    IsZoneAssignedToSystem(
+                        configuration,
+                        configuration.Zones[zoneIndex],
+                        system.Name,
+                        zoneSystemAssignments)
+                            ? zone.WebStreams
+                            : [],
                     zone.TabColor,
                     zone.TabTextColor,
                     systemAccent))
-                .Where(zone => zone.Channels.Count > 0)
+                .Where(zone => zone.Channels.Count > 0 || zone.WebStreams.Count > 0)
                 .ToArray();
 
             FneConnectionOptions options = FneConnectionOptions.FromConfiguration(system);
@@ -333,6 +352,33 @@ internal sealed class ConsoleSessionFactory
                 radioSessionFactory,
                 callPrioritySystemNames.Contains(system.Name, StringComparer.OrdinalIgnoreCase));
         });
+    }
+
+    private static bool IsZoneAssignedToSystem(
+        ConsoleConfiguration configuration,
+        ZoneConfiguration zone,
+        string systemName,
+        IReadOnlyDictionary<string, string> zoneSystemAssignments)
+    {
+        if (zoneSystemAssignments.TryGetValue(zone.Name, out string? assignedSystem) &&
+            !string.IsNullOrWhiteSpace(assignedSystem))
+        {
+            return assignedSystem.Equals(systemName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        string[] channelSystems = zone.Channels
+            .Select(channel => channel.System?.Trim() ?? string.Empty)
+            .Where(candidate => candidate.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (channelSystems.Length == 1)
+            return channelSystems[0].Equals(systemName, StringComparison.OrdinalIgnoreCase);
+        if (channelSystems.Length > 1)
+            return false;
+
+        return configuration.Systems.FirstOrDefault()?.Name.Equals(
+            systemName,
+            StringComparison.OrdinalIgnoreCase) == true;
     }
 }
 

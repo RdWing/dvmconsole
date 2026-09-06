@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 
@@ -8,6 +11,7 @@ public sealed partial class ToneSettingsView : UserControl
     public ToneSettingsView()
     {
         InitializeComponent();
+        ResponsiveSettingsDensity.Attach(this);
     }
 
     public event EventHandler<DtmfPresetEventArgs>? UseDtmfPresetRequested;
@@ -25,6 +29,28 @@ public sealed partial class ToneSettingsView : UserControl
     public event EventHandler? ImportAlertToneRequested;
     public event EventHandler<AlertToneEventArgs>? SendAlertToneRequested;
     public event EventHandler<AlertToneEventArgs>? DeleteAlertToneRequested;
+
+    private void HandleSectionClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string sectionName })
+            this.FindControl<Control>(sectionName)?.BringIntoView();
+    }
+
+    private void HandlePresetRowSizeChanged(object? sender, SizeChangedEventArgs e)
+    {
+        if (sender is not Grid row || row.Children.Count != 2)
+            return;
+
+        // Preserve room for the preset name beside the row actions.
+        // Change layout only at the breakpoint to avoid repeated layout work.
+        bool stackActions = e.NewSize.Width < 560;
+        if (stackActions == (row.ColumnDefinitions.Count == 1))
+            return;
+        row.ColumnDefinitions = new ColumnDefinitions(stackActions ? "*" : "*,Auto");
+        row.RowDefinitions = new RowDefinitions(stackActions ? "Auto,Auto" : "Auto");
+        Grid.SetColumn(row.Children[1], stackActions ? 0 : 1);
+        Grid.SetRow(row.Children[1], stackActions ? 1 : 0);
+    }
 
     private void HandleUseDtmfPresetClick(object? sender, RoutedEventArgs e)
         => PublishDtmfPreset(sender, UseDtmfPresetRequested);

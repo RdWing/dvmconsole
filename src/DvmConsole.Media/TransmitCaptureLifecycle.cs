@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 
 namespace DvmConsole.Media;
@@ -45,16 +48,22 @@ internal sealed class DelegateTransmitCall(
 internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
 {
     private readonly IAudioCapture capture;
+    private readonly IBorrowedAudioCapture? borrowedCapture;
     private readonly ITransmitCall call;
     private readonly string faultedMessage;
     private readonly Action<Exception> publishFault;
     private readonly TransmitFramePacer framePacer;
+    private readonly bool drainAcceptedFramesWithoutDelayOnStop;
     private readonly SemaphoreSlim lifecycleGate = new(1, 1);
     private readonly object sync = new();
     private bool running;
+    private bool captureStarted;
+    private bool captureStopConfirmed;
     private bool activated;
     private bool faulted;
     private bool stopped;
+    private bool framePacerStopStarted;
+    private bool framePacerSettled;
     private bool disposeRequested;
     private bool disposed;
     private int faultStopStarted;
@@ -65,12 +74,15 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
         ITransmitCall call,
         string faultedMessage,
         Action<Exception> publishFault,
-        Func<CancellationToken, ValueTask>? waitForNextFrame = null)
+        Func<CancellationToken, ValueTask>? waitForNextFrame = null,
+        bool drainAcceptedFramesWithoutDelayOnStop = false)
     {
         this.capture = capture ?? throw new ArgumentNullException(nameof(capture));
+        borrowedCapture = capture as IBorrowedAudioCapture;
         this.call = call ?? throw new ArgumentNullException(nameof(call));
         this.faultedMessage = faultedMessage ?? throw new ArgumentNullException(nameof(faultedMessage));
         this.publishFault = publishFault ?? throw new ArgumentNullException(nameof(publishFault));
+        this.drainAcceptedFramesWithoutDelayOnStop = drainAcceptedFramesWithoutDelayOnStop;
         framePacer = new TransmitFramePacer(call.Process, HandleFramePacerFault, waitForNextFrame);
     }
 
@@ -110,16 +122,20 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
                     throw new InvalidOperationException(faultedMessage);
             }
 
-            capture.SamplesAvailable += HandleSamplesAvailable;
+            SubscribeToCapture();
             try
             {
                 await capture.StartAsync(cancellationToken).ConfigureAwait(false);
                 lock (sync)
+                {
+                    captureStarted = true;
+                    captureStopConfirmed = false;
                     running = true;
+                }
             }
             catch
             {
-                capture.SamplesAvailable -= HandleSamplesAvailable;
+                UnsubscribeFromCapture();
                 throw;
             }
         }
@@ -153,7 +169,7 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
         try
         {
             ThrowIfUnavailable();
-            await StopCoreAsync(sendTerminator: !faulted, cancellationToken).ConfigureAwait(false);
+            await StopCoreAsync(sendTerminator: true, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -176,7 +192,7 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
         await lifecycleGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await StopCoreAsync(sendTerminator: !faulted, CancellationToken.None).ConfigureAwait(false);
+            await StopCoreAsync(sendTerminator: true, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -184,7 +200,7 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
         }
         finally
         {
-            capture.SamplesAvailable -= HandleSamplesAvailable;
+            UnsubscribeFromCapture();
             framePacer.Complete();
             await framePacer.Completion.ConfigureAwait(false);
             try
@@ -207,7 +223,12 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
             finally
             {
                 lock (sync)
+                {
+                    running = false;
+                    activated = false;
+                    stopped = true;
                     disposed = true;
+                }
                 lifecycleGate.Release();
             }
         }
@@ -218,60 +239,122 @@ internal sealed class TransmitCaptureLifecycle : IAsyncDisposable
 
     private async Task StopCoreAsync(bool sendTerminator, CancellationToken cancellationToken)
     {
-        bool wasRunning;
-        bool wasActivated;
+        bool stopCapture;
+        bool stopFramePacer;
+        bool endCall;
         lock (sync)
         {
-            wasRunning = running;
-            wasActivated = activated;
+            if (stopped)
+                return;
             running = false;
-            activated = false;
-            stopped = true;
+            stopCapture = captureStarted && !captureStopConfirmed;
+            stopFramePacer = !framePacerStopStarted;
+            framePacerStopStarted = true;
+            endCall = sendTerminator && activated;
         }
 
-        if (!wasRunning)
-            return;
-
-        capture.SamplesAvailable -= HandleSamplesAvailable;
-        Exception? stopFailure = null;
-        try
+        UnsubscribeFromCapture();
+        var failures = new List<Exception>();
+        if (stopCapture)
         {
-            await capture.StopAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await capture.StopAsync(cancellationToken).ConfigureAwait(false);
+                lock (sync)
+                    captureStopConfirmed = true;
+            }
+            catch (Exception exception)
+            {
+                failures.Add(exception);
+            }
         }
-        catch (Exception exception)
+        else if (!captureStarted)
         {
-            stopFailure = exception;
+            lock (sync)
+                captureStopConfirmed = true;
         }
 
-        framePacer.Complete();
-        await framePacer.Completion.ConfigureAwait(false);
+        if (stopFramePacer)
+            framePacer.Complete(drainAcceptedFramesWithoutDelayOnStop);
+        if (!framePacerSettled)
+        {
+            try
+            {
+                await framePacer.Completion.ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                // The media worker is settled even when it faulted. Report the
+                // media failure, but do not confuse it with an unconfirmed
+                // terminator or capture stop.
+                try
+                {
+                    publishFault(exception);
+                }
+                catch
+                {
+                    // Observers cannot interrupt the stop transition.
+                }
+            }
+            finally
+            {
+                lock (sync)
+                    framePacerSettled = true;
+            }
+        }
 
-        if (sendTerminator && wasActivated && framePacer.Failure is null)
+        if (endCall)
         {
             try
             {
                 await call.EndAsync(cancellationToken).ConfigureAwait(false);
+                lock (sync)
+                    activated = false;
             }
             catch (Exception exception)
             {
-                stopFailure ??= exception;
+                failures.Add(exception);
             }
         }
 
-        if (stopFailure is not null)
-            throw stopFailure;
+        lock (sync)
+            stopped = captureStopConfirmed && framePacerSettled && !activated;
+
+        if (failures.Count == 1)
+            throw failures[0];
+        if (failures.Count > 1)
+            throw new AggregateException("Transmit capture shutdown failed.", failures);
     }
 
     private void HandleSamplesAvailable(object? sender, PcmSamplesEventArgs args)
+        => HandleBorrowedSamplesAvailable(args.Samples.Span);
+
+    private void HandleBorrowedSamplesAvailable(ReadOnlySpan<short> samples)
     {
         lock (sync)
         {
             if (!running || !activated)
                 return;
 
-            if (!framePacer.Enqueue(args.Samples.Span))
+            if (!framePacer.Enqueue(samples))
                 return;
         }
+    }
+
+    private void SubscribeToCapture()
+    {
+        if (borrowedCapture is not null)
+            borrowedCapture.BorrowedSamplesAvailable += HandleBorrowedSamplesAvailable;
+        else
+            capture.SamplesAvailable += HandleSamplesAvailable;
+    }
+
+    private void UnsubscribeFromCapture()
+    {
+        if (borrowedCapture is not null)
+            borrowedCapture.BorrowedSamplesAvailable -= HandleBorrowedSamplesAvailable;
+        else
+            capture.SamplesAvailable -= HandleSamplesAvailable;
     }
 
     private void HandleFramePacerFault(Exception exception)

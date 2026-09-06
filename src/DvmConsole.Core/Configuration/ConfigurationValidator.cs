@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Core.Configuration;
 
 public enum ConfigurationValidationSeverity
@@ -13,6 +16,9 @@ public sealed record ConfigurationValidationIssue(
     string Message)
 {
     public bool IsError => Severity == ConfigurationValidationSeverity.Error;
+
+    public string AutomationName =>
+        $"{Severity}. {Domain}. {Message} YAML path {Path}.";
 }
 
 public static class ConfigurationValidator

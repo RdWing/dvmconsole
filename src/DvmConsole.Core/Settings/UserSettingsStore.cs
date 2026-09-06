@@ -1,5 +1,11 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Text.Json;
 using System.Reflection;
+using System.Security.Cryptography;
+using DvmConsole.Core.Configuration;
+using DvmConsole.Core.IO;
 
 namespace DvmConsole.Core.Settings;
 
@@ -8,6 +14,8 @@ namespace DvmConsole.Core.Settings;
 // platform-specific profile location.
 public sealed class UserSettingsStore
 {
+    private const string ApplicationDataDirectoryName = "dvmconsole-neo";
+
     private static readonly PropertyInfo[] WritableSettingsProperties = typeof(UserSettings)
         .GetProperties(BindingFlags.Instance | BindingFlags.Public)
         .Where(property => property.CanRead && property.SetMethod?.IsPublic == true)
@@ -16,11 +24,28 @@ public sealed class UserSettingsStore
     private readonly AtomicTextFileStore fileStore;
     private readonly SettingsProfileRepository profiles;
     private readonly UserSettingsNormalizationPipeline normalization;
+    private readonly object generationSync = new();
+    private string? observedFingerprint;
+    private bool hasObservedFingerprint;
+    private bool writesSuppressed;
+
+    public SettingsLoadDiagnostics LastLoadDiagnostics { get; private set; } = SettingsLoadDiagnostics.None;
+    public SettingsReadState LastReadState { get; private set; } = SettingsReadState.NotRead;
 
     public UserSettingsStore(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         Path = System.IO.Path.GetFullPath(path);
+        string? appDataDirectory = System.IO.Path.GetDirectoryName(Path);
+        if (!string.IsNullOrWhiteSpace(appDataDirectory))
+        {
+            bool isDefaultManagedRoot = string.Equals(
+                Path,
+                System.IO.Path.GetFullPath(DefaultPath),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+            if (isDefaultManagedRoot)
+                AppDataFileProtection.EnsureDirectory(appDataDirectory, repairExistingTree: true);
+        }
         serializer = new UserSettingsSerializer();
         fileStore = new AtomicTextFileStore(Path);
         profiles = new SettingsProfileRepository(ProfilesDirectoryPath);
@@ -34,7 +59,7 @@ public sealed class UserSettingsStore
             System.IO.Path.GetDirectoryName(Path) ?? AppContext.BaseDirectory,
             "Profiles");
 
-    public static string DefaultPath
+    private static string DefaultDirectoryPath
     {
         get
         {
@@ -43,27 +68,49 @@ public sealed class UserSettingsStore
                 baseDirectory = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             if (string.IsNullOrWhiteSpace(baseDirectory))
                 baseDirectory = AppContext.BaseDirectory;
-            return System.IO.Path.Combine(baseDirectory, "DVMProject", "dvmconsole", "UserSettings.json");
+            return System.IO.Path.Combine(baseDirectory, "DVMProject", ApplicationDataDirectoryName);
         }
     }
 
+    public static string DefaultPath
+        => System.IO.Path.Combine(DefaultDirectoryPath, "UserSettings.json");
+
     public UserSettings Load()
     {
-        if (!fileStore.Exists)
-            return new UserSettings();
-
         try
         {
-            UserSettings settings = serializer.Deserialize(fileStore.ReadAllText())
-                ?? new UserSettings();
+            string json = fileStore.ReadAllText(ManagedResourceLimits.SettingsBytes, "Settings file");
+            UserSettings settings = serializer.Deserialize(json)
+                ?? throw new InvalidDataException("The settings document must contain an object.");
+            ObserveFingerprint(ComputeFingerprint(json));
+            writesSuppressed = false;
+            LastReadState = SettingsReadState.Loaded;
+            LastLoadDiagnostics = SettingsLoadDiagnostics.None;
             return normalization.NormalizeAfterLoad(settings);
         }
-        catch (JsonException)
+        catch (Exception exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
         {
+            LastReadState = SettingsReadState.Missing;
+            ObserveFingerprint(MissingFingerprint);
+            if (!writesSuppressed)
+                LastLoadDiagnostics = SettingsLoadDiagnostics.None;
             return new UserSettings();
+        }
+        catch (Exception exception) when (
+            exception is JsonException or InvalidDataException or System.Text.DecoderFallbackException)
+        {
+            LastReadState = SettingsReadState.Corrupt;
+            return RecoverMalformedSettings(exception);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
+            writesSuppressed = true;
+            LastReadState = SettingsReadState.Unreadable;
+            LastLoadDiagnostics = new SettingsLoadDiagnostics(
+                RecoveredFromBackup: false,
+                DefaultsUsed: true,
+                AutomaticWritesSuppressed: true,
+                "Settings could not be read. Automatic writes are paused; reload settings when access is restored or explicitly reset them. " + exception.Message);
             return new UserSettings();
         }
     }
@@ -83,7 +130,29 @@ public sealed class UserSettingsStore
     public void SaveSnapshot(UserSettingsSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        if (writesSuppressed)
+        {
+            throw new InvalidOperationException(
+                "Automatic settings writes are disabled because settings could not be loaded safely. " +
+                "Reload settings, restore their backup, or explicitly reset settings before saving.");
+        }
+        using FileStream storeLock = CrossProcessStoreLock.Acquire(Path + ".lock");
+        string currentFingerprint = ReadCurrentFingerprint();
+        lock (generationSync)
+        {
+            if (hasObservedFingerprint && !string.Equals(
+                    observedFingerprint,
+                    currentFingerprint,
+                    StringComparison.Ordinal))
+            {
+                throw new SettingsConflictException(
+                    "Settings changed in another DVM Console process. Reload them or save this configuration separately.");
+            }
+        }
+
         fileStore.WriteAllText(snapshot.Json);
+        string savedFingerprint = ComputeFingerprint(snapshot.Json);
+        ObserveFingerprint(savedFingerprint);
     }
 
     public void ApplySerializedSnapshot(UserSettings target, string json)
@@ -103,7 +172,7 @@ public sealed class UserSettingsStore
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
 
         string destination = System.IO.Path.GetFullPath(destinationPath);
-        if (destination.Equals(Path, StringComparison.OrdinalIgnoreCase))
+        if (FileSystemPathIdentity.Equals(destination, Path))
         {
             Save(settings);
             return;
@@ -134,14 +203,37 @@ public sealed class UserSettingsStore
     }
 
     public SettingsImportPreview PreviewImport(string sourcePath)
+        => StageImport(sourcePath).Preview;
+
+    public SettingsImportStage StageImport(string sourcePath)
     {
         string source = ResolveSettingsFilePath(sourcePath);
         UserSettings settings = ReadSettingsFile(source);
-        return SettingsImportPolicy.CreatePreview(source, settings);
+        return new SettingsImportStage(
+            settings,
+            SettingsImportPolicy.CreatePreview(source, settings, Load()));
+    }
+
+    public SettingsImportStage StageImport(Stream source, string sourceName)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
+        if (!source.CanRead)
+            throw new ArgumentException("The settings source must be readable.", nameof(source));
+        UserSettings settings = ReadSettingsJson(BoundedResourceReader.ReadUtf8(
+            source,
+            ManagedResourceLimits.SettingsBytes,
+            "Settings import"));
+        return new SettingsImportStage(
+            settings,
+            SettingsImportPolicy.CreatePreview(sourceName, settings, Load()));
     }
 
     public SettingsImportPreview PreviewNamedProfile(string profileName)
         => PreviewImport(GetNamedProfilePath(profileName));
+
+    public SettingsImportStage StageNamedProfile(string profileName)
+        => StageImport(GetNamedProfilePath(profileName));
 
     public IReadOnlyList<string> ListNamedProfiles()
         => profiles.ListNames();
@@ -171,44 +263,39 @@ public sealed class UserSettingsStore
 
     public UserSettings Import(
         string sourcePath,
-        SettingsImportScope scope = SettingsImportScope.All)
-    {
-        string source = ResolveSettingsFilePath(sourcePath);
-        UserSettings imported = ReadSettingsFile(source);
-        if (scope == SettingsImportScope.All)
-        {
-            Save(imported);
-            return Load();
-        }
-
-        UserSettings current = Load();
-        SettingsImportPolicy.Merge(current, imported, scope);
-        Save(current);
-        return Load();
-    }
+        SettingsImportScope scope = SettingsImportScope.All,
+        bool acceptRecordingPolicy = false)
+        => Import(StageImport(sourcePath), scope, acceptRecordingPolicy);
 
     public UserSettings Import(
         Stream source,
-        SettingsImportScope scope = SettingsImportScope.All)
+        SettingsImportScope scope = SettingsImportScope.All,
+        bool acceptRecordingPolicy = false)
+        => Import(StageImport(source, "Imported settings"), scope, acceptRecordingPolicy);
+
+    public UserSettings Import(
+        SettingsImportStage stage,
+        SettingsImportScope scope = SettingsImportScope.All,
+        bool acceptRecordingPolicy = false)
     {
-        ArgumentNullException.ThrowIfNull(source);
-        if (!source.CanRead)
-            throw new ArgumentException("The settings source must be readable.", nameof(source));
-        using var reader = new StreamReader(
-            source,
-            System.Text.Encoding.UTF8,
-            detectEncodingFromByteOrderMarks: true,
-            bufferSize: 4096,
-            leaveOpen: true);
-        UserSettings imported = ReadSettingsJson(reader.ReadToEnd());
+        ArgumentNullException.ThrowIfNull(stage);
+        UserSettings imported = stage.Settings;
+        UserSettings current = Load();
+        bool policyAccepted = acceptRecordingPolicy || current.RecordingRetentionPolicyAccepted;
         if (scope == SettingsImportScope.All)
         {
+            imported.RecordingRetentionPolicyAccepted = policyAccepted;
+            SettingsImportPolicy.ApplyChannelPresentationToActiveConfiguration(
+                imported, imported, current.ActiveConfigurationOperatorStateId, scope);
             Save(imported);
             return Load();
         }
 
-        UserSettings current = Load();
+        string? destinationConfigurationId = current.ActiveConfigurationOperatorStateId;
         SettingsImportPolicy.Merge(current, imported, scope);
+        SettingsImportPolicy.ApplyChannelPresentationToActiveConfiguration(
+            current, imported, destinationConfigurationId, scope);
+        current.RecordingRetentionPolicyAccepted = policyAccepted;
         Save(current);
         return Load();
     }
@@ -223,7 +310,10 @@ public sealed class UserSettingsStore
     }
 
     private UserSettings ReadSettingsFile(string source)
-        => ReadSettingsJson(File.ReadAllText(source));
+        => ReadSettingsJson(BoundedResourceReader.ReadUtf8File(
+            source,
+            ManagedResourceLimits.SettingsBytes,
+            "Settings file"));
 
     private UserSettings ReadSettingsJson(string json)
     {
@@ -243,11 +333,137 @@ public sealed class UserSettingsStore
 
 
     public void Reset()
-        => fileStore.Delete();
+    {
+        using FileStream storeLock = CrossProcessStoreLock.Acquire(Path + ".lock");
+        fileStore.Delete();
+        string generationPath = Path + ".generation";
+        if (File.Exists(generationPath))
+            File.Delete(generationPath);
+        string backupPath = Path + ".backup";
+        if (File.Exists(backupPath))
+            File.Delete(backupPath);
+        writesSuppressed = false;
+        LastLoadDiagnostics = SettingsLoadDiagnostics.None;
+        ObserveFingerprint(MissingFingerprint);
+        LastReadState = SettingsReadState.Missing;
+    }
+
+    public bool RestoreLastKnownGood()
+    {
+        using FileStream storeLock = CrossProcessStoreLock.Acquire(Path + ".lock");
+        string backupPath = Path + ".backup";
+        if (!File.Exists(backupPath))
+            return false;
+        string json = BoundedResourceReader.ReadUtf8File(
+            backupPath,
+            ManagedResourceLimits.SettingsBytes,
+            "Settings backup");
+        _ = ReadSettingsJson(json);
+        fileStore.WriteAllText(json, preserveBackup: true);
+        writesSuppressed = false;
+        LastLoadDiagnostics = SettingsLoadDiagnostics.None;
+        ObserveFingerprint(ComputeFingerprint(json));
+        LastReadState = SettingsReadState.Loaded;
+        return true;
+    }
+
+    private UserSettings RecoverMalformedSettings(Exception failure)
+    {
+        string backupPath = Path + ".backup";
+        if (File.Exists(backupPath))
+        {
+            try
+            {
+                string backupJson = BoundedResourceReader.ReadUtf8File(
+                    backupPath,
+                    ManagedResourceLimits.SettingsBytes,
+                    "Settings backup");
+                UserSettings backup = serializer.Deserialize(backupJson)
+                    ?? throw new JsonException("The backup did not contain a settings object.");
+                QuarantineMalformedPrimary();
+                writesSuppressed = true;
+                ObserveFingerprint(ReadDamagedFingerprint());
+                LastLoadDiagnostics = new SettingsLoadDiagnostics(
+                    RecoveredFromBackup: true,
+                    DefaultsUsed: false,
+                    AutomaticWritesSuppressed: true,
+                    "The primary settings file was damaged. DVM Console loaded the last-known-good backup and paused settings writes until the backup is restored or settings are reset.");
+                return normalization.NormalizeAfterLoad(backup);
+            }
+            catch (Exception exception) when (
+                exception is IOException or JsonException or InvalidDataException or
+                System.Text.DecoderFallbackException or UnauthorizedAccessException)
+            {
+            }
+        }
+
+        QuarantineMalformedPrimary();
+        writesSuppressed = true;
+        ObserveFingerprint(ReadDamagedFingerprint());
+        LastLoadDiagnostics = new SettingsLoadDiagnostics(
+            RecoveredFromBackup: false,
+            DefaultsUsed: true,
+            AutomaticWritesSuppressed: true,
+            $"The settings file was damaged and no usable backup was available ({failure.Message}). Defaults are loaded, but writes remain paused until settings are reset.");
+        return new UserSettings();
+    }
+
+    private void QuarantineMalformedPrimary()
+    {
+        if (!File.Exists(Path))
+            return;
+        string quarantinePath = Path + $".corrupt.{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}";
+        try
+        {
+            File.Copy(Path, quarantinePath, overwrite: false);
+            AppDataFileProtection.EnsureFile(quarantinePath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private const string MissingFingerprint = "missing";
+
+    private string ReadCurrentFingerprint()
+        => fileStore.Exists
+            ? ComputeFingerprint(fileStore.ReadAllText(ManagedResourceLimits.SettingsBytes, "Settings file"))
+            : MissingFingerprint;
+
+    private string ReadDamagedFingerprint()
+    {
+        if (!fileStore.Exists)
+            return MissingFingerprint;
+        var file = new FileInfo(Path);
+        return $"damaged:{file.Length}:{file.LastWriteTimeUtc.Ticks}";
+    }
+
+    private static string ComputeFingerprint(string content)
+        => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(content)));
+
+    private void ObserveFingerprint(string fingerprint)
+    {
+        lock (generationSync)
+        {
+            observedFingerprint = fingerprint;
+            hasObservedFingerprint = true;
+        }
+    }
 
     private string GetNamedProfilePath(string profileName)
         => profiles.GetPath(profileName);
 
+}
+
+public enum SettingsReadState { NotRead, Missing, Loaded, Corrupt, Unreadable }
+
+public sealed record SettingsLoadDiagnostics(
+    bool RecoveredFromBackup,
+    bool DefaultsUsed,
+    bool AutomaticWritesSuppressed,
+    string? Warning)
+{
+    public static SettingsLoadDiagnostics None { get; } = new(false, false, false, null);
 }
 
 public sealed class UserSettingsSnapshot

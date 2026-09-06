@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using System.Collections.Specialized;
@@ -5,12 +8,39 @@ using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
 
-public sealed class HistoryRecordingWorkspaceTests
+public sealed class HistoryRecordingControllerTests
 {
+    [Fact]
+    public void ActivityDatesFollowVisibleDayBoundariesWithoutReplacingRows()
+    {
+        var workspace = new HistoryRecordingController("30", "recordings");
+        var today = new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero);
+        CallHistoryEntry first = CreateHistoryEntry(1, today);
+        CallHistoryEntry second = CreateHistoryEntry(2, today.AddMinutes(-1));
+        CallHistoryEntry yesterday = CreateHistoryEntry(3, today.AddDays(-1));
+        workspace.RefreshActivityCallHistory([first, second, yesterday]);
+        Assert.Equal([true, false, true], workspace.ActivityCallHistory.Select(entry => entry.StartsActivityDay));
+
+        var changes = new List<NotifyCollectionChangedAction>();
+        ((INotifyCollectionChanged)workspace.ActivityCallHistory).CollectionChanged += (_, e) => changes.Add(e.Action);
+        CallHistoryEntry newer = CreateHistoryEntry(4, today.AddMinutes(1));
+        bool oldHeaderVisibleBeforeInsertion = false;
+        workspace.ActivityCallHistoryChanging += (_, _) => oldHeaderVisibleBeforeInsertion = first.StartsActivityDay;
+        workspace.RefreshActivityCallHistory([newer, first, second, yesterday]);
+        Assert.True(oldHeaderVisibleBeforeInsertion);
+        Assert.Equal([true, false, false, true], workspace.ActivityCallHistory.Select(entry => entry.StartsActivityDay));
+        Assert.DoesNotContain(NotifyCollectionChangedAction.Reset, changes);
+        Assert.Same(first, workspace.ActivityCallHistory[1]);
+
+        workspace.RefreshActivityCallHistory([second, yesterday]);
+        Assert.True(second.StartsActivityDay);
+        Assert.True(yesterday.StartsActivityDay);
+    }
+
     [Fact]
     public void ActivityHistorySignalsBeforeInsertingANewTopRow()
     {
-        var workspace = new HistoryRecordingWorkspace("30", "recordings");
+        var workspace = new HistoryRecordingController("30", "recordings");
         CallHistoryEntry older = CreateHistoryEntry(1, DateTimeOffset.UtcNow.AddSeconds(-1));
         CallHistoryEntry newer = CreateHistoryEntry(2, DateTimeOffset.UtcNow);
         workspace.RefreshActivityCallHistory([older]);
@@ -37,7 +67,7 @@ public sealed class HistoryRecordingWorkspaceTests
     [Fact]
     public void AdvancedFilterPreservesFacadeNotificationOrder()
     {
-        var workspace = new HistoryRecordingWorkspace("30", "recordings");
+        var workspace = new HistoryRecordingController("30", "recordings");
         var changed = new List<string?>();
         workspace.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
 
@@ -45,9 +75,9 @@ public sealed class HistoryRecordingWorkspaceTests
 
         Assert.Equal(
             [
-                nameof(HistoryRecordingWorkspace.RecordingProtocolFilter),
-                nameof(HistoryRecordingWorkspace.HasAdvancedHistoryFilters),
-                nameof(HistoryRecordingWorkspace.HistoryFilterSummary)
+                nameof(HistoryRecordingController.RecordingProtocolFilter),
+                nameof(HistoryRecordingController.HasAdvancedHistoryFilters),
+                nameof(HistoryRecordingController.HistoryFilterSummary)
             ],
             changed);
     }
@@ -55,7 +85,7 @@ public sealed class HistoryRecordingWorkspaceTests
     [Fact]
     public void CatalogMutationInvalidatesSnapshotAndRequestsRestart()
     {
-        var workspace = new HistoryRecordingWorkspace("30", "recordings");
+        var workspace = new HistoryRecordingController("30", "recordings");
         RecordingCatalogScanSnapshot snapshot = workspace.BeginRecordingCatalogScan();
         bool applied = false;
 

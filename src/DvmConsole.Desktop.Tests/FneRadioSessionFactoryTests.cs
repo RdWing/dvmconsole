@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.FneClient;
 using Xunit;
@@ -23,6 +26,9 @@ public sealed class FneRadioSessionFactoryTests
         Assert.DoesNotContain(
             factory.Descriptor.ConnectionParameters.Values,
             value => value.Contains("secret", StringComparison.Ordinal));
+
+        await using IFneRadioSession desktopSession = factory.Create();
+        Assert.Equal(factory.Descriptor.Id, desktopSession.SystemId);
 
         await using IRadioSession session = await factory.CreateAsync(factory.Descriptor);
         Assert.Equal(factory.Descriptor.Id, session.SystemId);

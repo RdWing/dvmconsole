@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Core.Settings;
 
 public static class AudioPresetStepKinds
@@ -40,4 +43,14 @@ public sealed class TonePresetSetting
     public double FrequencyHz { get; set; } = 1000;
     public double DurationSeconds { get; set; } = 1.0;
     public List<TonePresetStepSetting> Steps { get; set; } = [];
+}
+
+// Generated presets use their unique name. Custom audio uses asset identity;
+// FilePath supports legacy audio that has not yet moved into the asset library.
+public sealed class ToolbarToneAssignmentSetting
+{
+    public string PresetName { get; set; } = string.Empty;
+    public bool IsCustomAudio { get; set; }
+    public string? AssetId { get; set; }
+    public string? FilePath { get; set; }
 }

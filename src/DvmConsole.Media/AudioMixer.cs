@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using System.Buffers;
 using System.Diagnostics;
@@ -222,7 +225,10 @@ public sealed class AudioMixer : IAsyncDisposable
             foreach (MixerLaneBuffer channel in channels.Values)
             {
                 while (channel.Frames.TryDequeue(out short[]? frame))
+                {
                     diagnostics.AddTransitionDiscardedSamples(frame.Length);
+                    ReturnFrameLocked(channel, frame);
+                }
                 diagnostics.AddTransitionDiscardedSamples(channel.PartialCount);
                 channel.PartialCount = 0;
                 channel.PlayoutStarted = false;
@@ -267,6 +273,7 @@ public sealed class AudioMixer : IAsyncDisposable
             var channel = new MixerLaneBuffer(id, frameSamples, label, laneDiagnostics);
             channel.FrameHandedOff = (sampleCount, presentationDelay) =>
                 MarkFrameHandedOff(channel, sampleCount, presentationDelay);
+            channel.FrameReleased = frame => ReturnPresentedFrame(channel, frame);
             channels.Add(channel.Id, channel);
             return new ChannelPlayback(this, channel);
         }
@@ -546,6 +553,7 @@ public sealed class AudioMixer : IAsyncDisposable
                 presented[presentedCount++] = new MixerPresentationNotification(
                     channel,
                     channel.PresentationObserver,
+                    source,
                     source);
 
                 int count = PcmMixKernel.Accumulate(
@@ -679,7 +687,7 @@ public sealed class AudioMixer : IAsyncDisposable
                     continue;
 
                 short[] completedFrame = channel.PartialFrame;
-                channel.PartialFrame = new short[frameSamples];
+                channel.PartialFrame = RentFrameLocked(channel);
                 channel.PartialCount = 0;
                 QueueFrameLocked(channel, completedFrame);
             }
@@ -697,6 +705,7 @@ public sealed class AudioMixer : IAsyncDisposable
                 overflowCorrected = true;
                 RecordDroppedFrameLocked(channel, discarded.Length, aged: false);
                 channel.HandedOffSamples = checked(channel.HandedOffSamples + discarded.Length);
+                ReturnFrameLocked(channel, discarded);
             }
         }
         if (overflowCorrected)
@@ -732,6 +741,7 @@ public sealed class AudioMixer : IAsyncDisposable
         {
             RecordDroppedFrameLocked(channel, discarded.Length, aged: true);
             channel.HandedOffSamples = checked(channel.HandedOffSamples + discarded.Length);
+            ReturnFrameLocked(channel, discarded);
             droppedFrames++;
         }
         int droppedPartialSamples = channel.PartialCount;
@@ -878,7 +888,7 @@ public sealed class AudioMixer : IAsyncDisposable
             if (enabled)
                 return;
 
-            channel.Frames.Clear();
+            ReturnQueuedFramesLocked(channel);
             channel.PartialCount = 0;
             channel.HandedOffSamples = channel.AcceptedSamples;
             channel.DrainedSamples = channel.AcceptedSamples;
@@ -898,7 +908,7 @@ public sealed class AudioMixer : IAsyncDisposable
             if (channel.Disposed)
                 return;
 
-            channel.Frames.Clear();
+            ReturnQueuedFramesLocked(channel);
             channel.PartialCount = 0;
             channel.PlaybackDrainCompletion?.TrySetException(
                 new ObjectDisposedException(nameof(IAudioPlayback)));
@@ -930,7 +940,7 @@ public sealed class AudioMixer : IAsyncDisposable
             {
                 short[] completedFrame = channel.PartialFrame;
                 Array.Clear(completedFrame, channel.PartialCount, completedFrame.Length - channel.PartialCount);
-                channel.PartialFrame = new short[frameSamples];
+                channel.PartialFrame = RentFrameLocked(channel);
                 channel.PartialCount = 0;
                 QueueFrameLocked(channel, completedFrame);
             }
@@ -1011,7 +1021,7 @@ public sealed class AudioMixer : IAsyncDisposable
         {
             short[] completedFrame = channel.PartialFrame;
             Array.Clear(completedFrame, channel.PartialCount, completedFrame.Length - channel.PartialCount);
-            channel.PartialFrame = new short[frameSamples];
+            channel.PartialFrame = RentFrameLocked(channel);
             channel.PartialCount = 0;
             QueueFrameLocked(channel, completedFrame);
         }
@@ -1031,6 +1041,29 @@ public sealed class AudioMixer : IAsyncDisposable
         channel.PlaybackDrainCompletion?.TrySetResult(TimeSpan.Zero);
         channel.PlaybackDrainCompletion = null;
         channel.DrainCompletion.TrySetResult();
+    }
+
+    private short[] RentFrameLocked(MixerLaneBuffer channel)
+        => channel.ReusableFrames.TryDequeue(out short[]? frame)
+            ? frame
+            : new short[frameSamples];
+
+    private static void ReturnFrameLocked(MixerLaneBuffer channel, short[] frame)
+        => channel.ReusableFrames.Enqueue(frame);
+
+    private static void ReturnQueuedFramesLocked(MixerLaneBuffer channel)
+    {
+        while (channel.Frames.TryDequeue(out short[]? frame))
+            ReturnFrameLocked(channel, frame);
+    }
+
+    private void ReturnPresentedFrame(MixerLaneBuffer channel, short[] frame)
+    {
+        lock (sync)
+        {
+            if (!channel.Disposed && channels.ContainsKey(channel.Id))
+                ReturnFrameLocked(channel, frame);
+        }
     }
 
     private void SignalDataAvailable()

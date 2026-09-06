@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:presentation="using:DvmConsole.Presentation"
@@ -85,6 +88,15 @@
       <Setter Property="CornerRadius" Value="14"/>
       <Setter Property="BorderBrush" Value="{DynamicResource StudioLineBrush}"/>
       <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Name="SwatchSurface"
+                  Background="{TemplateBinding Background}"
+                  BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}"
+                  CornerRadius="{TemplateBinding CornerRadius}"/>
+        </ControlTemplate>
+      </Setter>
     </Style>
     <Style Selector="ToggleButton.color-swatch:checked">
       <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}"/>
@@ -132,7 +144,10 @@
         </Grid>
       </Border>
       <Grid Grid.Row="1" RowDefinitions="*,Auto" Background="{DynamicResource StudioCanvasBrush}" ClipToBounds="True">
-        <Grid x:Name="DesktopChannelTable" RowDefinitions="37,*">
+        <ScrollViewer x:Name="DesktopChannelTableScroller"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Disabled">
+        <Grid x:Name="DesktopChannelTable" MinWidth="860" RowDefinitions="37,*">
           <Border Background="{DynamicResource StudioPanelBrush}"
                   BorderBrush="{DynamicResource StudioLineBrush}"
                   BorderThickness="0,0,0,1">
@@ -242,6 +257,7 @@
             </ListBox.ItemTemplate>
           </ListBox>
         </Grid>
+        </ScrollViewer>
         <ListBox x:Name="narrowChannelList"
                  IsVisible="False"
                  Classes="channel-grid"
@@ -254,22 +270,19 @@
                  AutomationProperties.Name="Channels">
           <ListBox.ItemTemplate>
             <DataTemplate x:DataType="presentation:ConfigurationChannelRow">
-              <Border MinHeight="72" Padding="10,8" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1">
-                <StackPanel Spacing="4">
+              <Border MinHeight="58" Padding="10,6" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1">
+                <StackPanel Spacing="3">
                   <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
                     <TextBlock Classes="caption" VerticalAlignment="Center" Text="{Binding Number, StringFormat='#{0}'}"/>
                     <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
-                    <TextBlock Grid.Column="2" Text="{Binding DestinationText}" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Grid.Column="2" Text="{Binding CompactDestinationText}" TextTrimming="CharacterEllipsis"/>
                   </Grid>
-                  <WrapPanel ItemSpacing="12" LineSpacing="3">
+                  <WrapPanel Margin="22,0,0,0" ItemSpacing="10" LineSpacing="2">
                     <TextBlock Text="{Binding ModeText}"/>
-                    <TextBlock Text="{Binding SlotText, StringFormat='Slot {0}'}"/>
+                    <TextBlock Text="{Binding SlotSummaryText}"/>
                     <TextBlock Text="{Binding EncryptionText}"/>
-                    <CheckBox Content="RX only"
-                              IsChecked="{Binding RxOnly}"
-                              IsHitTestVisible="False"
-                              AutomationProperties.Name="Receive only"/>
-                    <TextBlock Text="{Binding CardSizeText, StringFormat='Card {0}'}"/>
+                    <TextBlock Text="{Binding ReceiveCapabilityText}"/>
+                    <TextBlock Text="{Binding CardSizeText, StringFormat='Card: {0}'}"/>
                   </WrapPanel>
                 </StackPanel>
               </Border>
@@ -355,6 +368,10 @@
       <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="18,18,18,20" Spacing="8" IsEnabled="{Binding CanEdit}">
           <TextBlock FontSize="16" FontWeight="SemiBold" Text="Zone settings"/>
+          <TextBlock Classes="caption" Text="Zone name"/>
+          <TextBox Text="{Binding SelectedZoneName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                   LostFocus="HandleDraftFieldEdit"
+                   AutomationProperties.Name="Zone name"/>
           <TextBlock Classes="caption" Text="Assigned FNE system"/>
           <ComboBox x:Name="zoneSystemEditor"
                     ItemsSource="{Binding Systems}"
@@ -368,9 +385,9 @@
           <Border Height="1" Margin="0,8" Background="{DynamicResource StudioLineBrush}"/>
           <TextBlock Margin="0,0,0,8" FontSize="16" FontWeight="SemiBold" Text="Channel settings"/>
           <TextBlock Text="Name *"/>
-          <TextBox Text="{Binding SelectedChannelRow.Name, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Channel name"/>
+          <TextBox Text="{Binding SelectedChannelRow.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Channel name"/>
           <TextBlock Margin="0,8,0,0" Text="Destination ID *"/>
-          <TextBox Text="{Binding SelectedChannelRow.DestinationId, Mode=TwoWay}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Channel destination ID"/>
+          <TextBox Text="{Binding SelectedChannelRow.DestinationId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" LostFocus="HandleDraftFieldEdit" AutomationProperties.Name="Channel destination ID"/>
           <TextBlock Margin="0,8,0,0" Text="Mode *"/>
           <ComboBox x:Name="channelModeEditor"
                     ItemsSource="{Binding ModeOptions}"
@@ -411,7 +428,7 @@
                        Grid.Column="1"
                        MinHeight="32"
                        BorderThickness="0"
-                       Text="{Binding SelectedChannelKeyIdHexDigits, Mode=TwoWay}"
+                       Text="{Binding SelectedChannelKeyIdHexDigits, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                        LostFocus="HandleDraftFieldEdit"
                        AutomationProperties.Name="Channel encryption key ID"/>
             </Grid>

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 
 namespace DvmConsole.Presentation;
@@ -7,13 +10,28 @@ namespace DvmConsole.Presentation;
 // to call more than once and while a slow transmitter is still starting.
 public sealed class ChannelPttController : IAsyncDisposable
 {
+    private enum LifecycleState
+    {
+        Idle,
+        Starting,
+        Active,
+        StopPending,
+        FailedStop
+    }
+
+    private sealed class ChannelState
+    {
+        public bool Held { get; set; }
+        public bool Latched { get; set; }
+        public LifecycleState Lifecycle { get; set; }
+        public bool Requested => Held || Latched;
+    }
+
     private readonly Func<ChannelId, CancellationToken, ValueTask<bool>> start;
     private readonly Func<ChannelId, CancellationToken, ValueTask> stop;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly object sync = new();
-    private readonly HashSet<ChannelId> held = [];
-    private readonly HashSet<ChannelId> latched = [];
-    private readonly HashSet<ChannelId> active = [];
+    private readonly Dictionary<ChannelId, ChannelState> channels = [];
     private Task? disposeTask;
     private bool disposed;
 
@@ -31,8 +49,12 @@ public sealed class ChannelPttController : IAsyncDisposable
     {
         lock (sync)
         {
-            if (disposed || !held.Add(channelId))
+            if (disposed)
                 return;
+            ChannelState state = GetOrCreateState(channelId);
+            if (state.Held)
+                return;
+            state.Held = true;
         }
         await ReconcileAsync(channelId, cancellationToken);
     }
@@ -43,8 +65,9 @@ public sealed class ChannelPttController : IAsyncDisposable
     {
         lock (sync)
         {
-            if (disposed || !held.Remove(channelId))
+            if (disposed || !channels.TryGetValue(channelId, out ChannelState? state) || !state.Held)
                 return;
+            state.Held = false;
         }
         await ReconcileAsync(channelId, cancellationToken);
     }
@@ -57,8 +80,8 @@ public sealed class ChannelPttController : IAsyncDisposable
         {
             if (disposed)
                 return;
-            if (!latched.Add(channelId))
-                latched.Remove(channelId);
+            ChannelState state = GetOrCreateState(channelId);
+            state.Latched = !state.Latched;
         }
         await ReconcileAsync(channelId, cancellationToken);
     }
@@ -75,16 +98,15 @@ public sealed class ChannelPttController : IAsyncDisposable
         {
             if (disposed)
                 return;
-            held.Remove(channelId);
-            latched.Remove(channelId);
+            ChannelState state = GetOrCreateState(channelId);
+            state.Held = false;
+            state.Latched = false;
         }
 
         await gate.WaitAsync(cancellationToken);
         try
         {
-            lock (sync)
-                active.Remove(channelId);
-            await stop(channelId, cancellationToken);
+            await StopKnownOrExternalAsync(channelId, cancellationToken);
         }
         finally
         {
@@ -96,8 +118,11 @@ public sealed class ChannelPttController : IAsyncDisposable
     {
         lock (sync)
         {
-            held.Clear();
-            latched.Clear();
+            foreach (ChannelState state in channels.Values)
+            {
+                state.Held = false;
+                state.Latched = false;
+            }
         }
 
         await gate.WaitAsync(cancellationToken);
@@ -105,25 +130,29 @@ public sealed class ChannelPttController : IAsyncDisposable
         {
             ChannelId[] activeChannels;
             lock (sync)
-            {
-                activeChannels = active.ToArray();
-                active.Clear();
-            }
+                activeChannels = channels
+                    .Where(pair => pair.Value.Lifecycle != LifecycleState.Idle)
+                    .Select(pair => pair.Key)
+                    .ToArray();
 
-            Exception? firstFailure = null;
+            var failures = new List<Exception>();
             foreach (ChannelId channelId in activeChannels)
             {
                 try
                 {
-                    await stop(channelId, CancellationToken.None);
+                    await StopKnownOrExternalAsync(channelId, CancellationToken.None);
                 }
                 catch (Exception exception)
                 {
-                    firstFailure ??= exception;
+                    failures.Add(new InvalidOperationException(
+                        $"PTT release failed for channel '{channelId}'.",
+                        exception));
                 }
             }
-            if (firstFailure is not null)
-                throw firstFailure;
+            if (failures.Count == 1)
+                throw failures[0].InnerException ?? failures[0];
+            if (failures.Count > 1)
+                throw new AggregateException("One or more PTT releases failed.", failures);
         }
         finally
         {
@@ -145,35 +174,63 @@ public sealed class ChannelPttController : IAsyncDisposable
         await gate.WaitAsync(cancellationToken);
         try
         {
-            bool shouldBeActive;
-            bool isActive;
+            bool shouldStart;
             lock (sync)
             {
                 if (disposed)
                     return;
-                shouldBeActive = held.Contains(channelId) || latched.Contains(channelId);
-                isActive = active.Contains(channelId);
+                ChannelState state = GetOrCreateState(channelId);
+                if (!state.Requested)
+                {
+                    shouldStart = false;
+                }
+                else if (state.Lifecycle == LifecycleState.Idle)
+                {
+                    state.Lifecycle = LifecycleState.Starting;
+                    shouldStart = true;
+                }
+                else
+                {
+                    // Active and failed-stop both still represent owned or
+                    // potentially owned transport. Never start a duplicate.
+                    return;
+                }
             }
-            if (shouldBeActive == isActive)
-                return;
 
-            if (shouldBeActive)
+            if (!shouldStart)
+            {
+                await StopKnownOrExternalAsync(channelId, cancellationToken);
+                return;
+            }
+
+            try
             {
                 bool started = await start(channelId, cancellationToken);
                 lock (sync)
                 {
+                    ChannelState state = GetOrCreateState(channelId);
                     if (started)
-                        active.Add(channelId);
+                    {
+                        state.Lifecycle = LifecycleState.Active;
+                    }
                     else
-                        latched.Remove(channelId);
+                    {
+                        RollBackIntent(state);
+                        RemoveIfIdle(channelId, state);
+                    }
                 }
             }
-            else
+            catch
             {
-                await stop(channelId, cancellationToken);
                 lock (sync)
-                    active.Remove(channelId);
+                {
+                    ChannelState state = GetOrCreateState(channelId);
+                    RollBackIntent(state);
+                    RemoveIfIdle(channelId, state);
+                }
+                throw;
             }
+
         }
         finally
         {
@@ -186,5 +243,58 @@ public sealed class ChannelPttController : IAsyncDisposable
         lock (sync)
             disposed = true;
         await ReleaseAllAsync(CancellationToken.None);
+    }
+
+    private async ValueTask StopKnownOrExternalAsync(
+        ChannelId channelId,
+        CancellationToken cancellationToken)
+    {
+        lock (sync)
+        {
+            ChannelState state = GetOrCreateState(channelId);
+            if (state.Lifecycle == LifecycleState.Starting)
+                throw new InvalidOperationException("Cannot stop PTT while its start transition still owns the gate.");
+            state.Lifecycle = LifecycleState.StopPending;
+        }
+
+        try
+        {
+            await stop(channelId, cancellationToken);
+            lock (sync)
+            {
+                if (!channels.TryGetValue(channelId, out ChannelState? state))
+                    return;
+                state.Lifecycle = LifecycleState.Idle;
+                RemoveIfIdle(channelId, state);
+            }
+        }
+        catch
+        {
+            lock (sync)
+                GetOrCreateState(channelId).Lifecycle = LifecycleState.FailedStop;
+            throw;
+        }
+    }
+
+    private ChannelState GetOrCreateState(ChannelId channelId)
+    {
+        if (channels.TryGetValue(channelId, out ChannelState? state))
+            return state;
+        state = new ChannelState();
+        channels.Add(channelId, state);
+        return state;
+    }
+
+    private static void RollBackIntent(ChannelState state)
+    {
+        state.Held = false;
+        state.Latched = false;
+        state.Lifecycle = LifecycleState.Idle;
+    }
+
+    private void RemoveIfIdle(ChannelId channelId, ChannelState state)
+    {
+        if (!state.Requested && state.Lifecycle == LifecycleState.Idle)
+            channels.Remove(channelId);
     }
 }

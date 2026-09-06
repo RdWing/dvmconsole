@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
@@ -9,6 +12,16 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class ConfigurationStudioManagedCompanionTests
 {
+    [Fact]
+    public void KeyFileDisplayReferenceDoesNotExposeAbsoluteHostPaths()
+    {
+        string absolute = Path.Combine(Path.GetTempPath(), "private-session", "keys.clear");
+
+        Assert.Equal("keys.clear", ConfigurationStudioViewModel.DisplayFileReference(absolute));
+        Assert.Equal("companions/keys.clear", ConfigurationStudioViewModel.DisplayFileReference(
+            Path.Combine("companions", "keys.clear")));
+    }
+
     [Fact]
     public async Task SelectingAliasOwnerUsesExactManagedFileAndAddCreatesMissingFile()
     {
@@ -140,16 +153,39 @@ public sealed class ConfigurationStudioManagedCompanionTests
 
             studio.AddSystem();
             SystemConfiguration system = Assert.Single(studio.Systems);
+            ZoneConfiguration zone = Assert.Single(studio.Zones);
             Assert.Equal(string.Empty, system.AliasPath);
+            Assert.Equal("New Zone", zone.Name);
+            Assert.Equal(system.Name, studio.SelectedZoneSystemName);
+
+            studio.Undo();
+            Assert.Empty(studio.Systems);
+            Assert.Empty(studio.Zones);
+            studio.Redo();
+            system = Assert.Single(studio.Systems);
+            zone = Assert.Single(studio.Zones);
+
+            string? changedProperty = null;
+            system.PropertyChanged += (_, args) => changedProperty = args.PropertyName;
+            system.Name = "Regional FNE";
+            Assert.Equal(nameof(SystemConfiguration.Name), changedProperty);
+            studio.CommitFieldEdit();
+            Assert.Equal("Regional FNE", Assert.Single(studio.Systems).Name);
+            Assert.Equal("Regional FNE", studio.SelectedZoneSystemName);
+            studio.SelectedZoneName = "Regional Dispatch";
+            studio.CommitFieldEdit();
+            Assert.Equal("Regional Dispatch", zone.Name);
 
             studio.AddChannelToSelectedSystem();
-            ZoneConfiguration zone = Assert.Single(studio.Zones);
+            Assert.Same(zone, Assert.Single(studio.Zones));
             ChannelConfiguration channel = Assert.Single(zone.Channels);
             Assert.Equal(system.Name, channel.System);
             Assert.Equal("p25", channel.Mode);
 
             studio.AddKey();
             KeyEntry key = Assert.Single(studio.KeyEntries);
+            Assert.Equal("Key 1", key.Name);
+            Assert.Equal(system.Name, key.System);
             key.Key = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F";
             studio.SelectedKeyIdHexDigits = "not-hex";
             studio.CommitKeyEdit();
@@ -203,7 +239,10 @@ public sealed class ConfigurationStudioManagedCompanionTests
 
             ConfigurationStudioSaveState state = studio.CaptureSaveState();
             Assert.Equal("keys.clear", studio.Configuration.KeyFile);
-            Assert.Contains("keyId: 1", state.KeyFileContent, StringComparison.Ordinal);
+            Assert.Contains("name: Key 1", state.KeyFileContent, StringComparison.Ordinal);
+            Assert.Contains("system: Regional FNE", state.KeyFileContent, StringComparison.Ordinal);
+            Assert.Contains("keyId: 0x1", state.KeyFileContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("requiredLength", state.KeyFileContent, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("New User Alias", state.AliasContents["aliases.yml"], StringComparison.Ordinal);
         }
         finally
@@ -254,13 +293,16 @@ public sealed class ConfigurationStudioManagedCompanionTests
         try
         {
             var source = new ConfigurationStudioExportDocumentSet(
-                new DesktopConfigurationDocumentSet(sourcePath),
+                yaml,
+                "codeplug.yml",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["keys.clear"] = "current-key-content",
                     ["alias.yml"] = "current-alias-content"
                 });
             var destination = new DesktopConfigurationDocumentSet(destinationPath);
+
+            Directory.Delete(sourceDirectory, recursive: true);
 
             ConfigurationBundleExportResult result = await ConfigurationBundleExporter.ExportAsync(
                 yaml,
@@ -314,7 +356,8 @@ public sealed class ConfigurationStudioManagedCompanionTests
             Assert.True(studio.IsKeyFileDirty);
             Assert.Single(studio.KeyEntries);
             Assert.Same(studio.KeyEntries[0], studio.SelectedKey);
-            Assert.Contains("keyId: 1", studio.CaptureSaveState().KeyFileContent, StringComparison.Ordinal);
+            Assert.Contains("name: Key 1", studio.CaptureSaveState().KeyFileContent, StringComparison.Ordinal);
+            Assert.Contains("keyId: 0x1", studio.CaptureSaveState().KeyFileContent, StringComparison.Ordinal);
 
             studio.Undo();
             Assert.False(studio.HasKeyFile);
@@ -380,7 +423,7 @@ public sealed class ConfigurationStudioManagedCompanionTests
             Assert.Equal("aliases-2.yml", firstSystem.AliasPath);
             Assert.True(studio.IsKeyFileDirty);
             Assert.True(studio.AliasFilesDirty);
-            Assert.Contains("keyId: 25", state.KeyFileContent, StringComparison.Ordinal);
+            Assert.Contains("keyId: 0x19", state.KeyFileContent, StringComparison.Ordinal);
             Assert.Contains("Selected Unit", state.AliasContents[aliasReference], StringComparison.Ordinal);
             Assert.DoesNotContain("outside", state.Yaml, StringComparison.OrdinalIgnoreCase);
         }
@@ -389,5 +432,135 @@ public sealed class ConfigurationStudioManagedCompanionTests
             if (Directory.Exists(directory))
                 Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task DesktopExportTransactionRollbackPreservesExistingFiles()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-export-rollback-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string primaryPath = Path.Combine(directory, "codeplug.yml");
+        string companionPath = Path.Combine(directory, "keys.clear");
+        File.WriteAllText(primaryPath, "original-primary");
+        File.WriteAllText(companionPath, "original-companion");
+
+        try
+        {
+            var destination = new DesktopConfigurationDocumentSet(primaryPath);
+            await using IExportDocumentTransaction transaction = await destination.BeginTransactionAsync();
+            await WriteAsync(transaction.Primary, "replacement-primary");
+            IWritableDocument companion = await transaction.CreateCompanionAsync("keys.clear");
+            await WriteAsync(companion, "replacement-companion");
+
+            await transaction.RollbackAsync();
+
+            Assert.Equal("original-primary", File.ReadAllText(primaryPath));
+            Assert.Equal("original-companion", File.ReadAllText(companionPath));
+            Assert.Empty(Directory.EnumerateDirectories(directory, ".dvmconsole-export-*"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task AvaloniaExportTreatsANewPickerDestinationAsMissingRollbackContent()
+    {
+        byte[]? original = await AvaloniaStorageExportTransaction.ReadExistingOrMissingAsync(
+            "codeplug.yml",
+            () => Task.FromException<Stream>(new FileNotFoundException(
+                "Could not find file '/Volumes/EXAMPLE/codeplug.yml'.")));
+
+        Assert.Null(original);
+    }
+
+    [Fact]
+    public async Task AvaloniaExportDoesNotHideAnUnreadableExistingDestination()
+    {
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            AvaloniaStorageExportTransaction.ReadExistingOrMissingAsync(
+                "codeplug.yml",
+                () => Task.FromException<Stream>(new UnauthorizedAccessException(
+                    "Destination is not writable."))));
+    }
+
+    [Fact]
+    public async Task DesktopExportTransactionsSerializeConcurrentWriters()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-export-concurrency-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string primaryPath = Path.Combine(directory, "codeplug.yml");
+        File.WriteAllText(primaryPath, "original");
+        try
+        {
+            var destination = new DesktopConfigurationDocumentSet(primaryPath);
+            await using IExportDocumentTransaction first = await destination.BeginTransactionAsync();
+            await using IExportDocumentTransaction second = await destination.BeginTransactionAsync();
+            await WriteAsync(first.Primary, "first");
+            await WriteAsync(second.Primary, "second");
+
+            await Task.WhenAll(first.CommitAsync().AsTask(), second.CommitAsync().AsTask());
+
+            Assert.Contains(File.ReadAllText(primaryPath), new[] { "first", "second" });
+            Assert.Empty(Directory.EnumerateDirectories(directory, ".dvmconsole-export-*"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DesktopExportStagingUsesOwnerOnlyUnixPermissions()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            "dvmconsole-export-permission-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string primaryPath = Path.Combine(directory, "codeplug.yml");
+        try
+        {
+            var destination = new DesktopConfigurationDocumentSet(primaryPath);
+            await using IExportDocumentTransaction transaction = await destination.BeginTransactionAsync();
+            await WriteAsync(transaction.Primary, "secret-primary");
+            IWritableDocument companion = await transaction.CreateCompanionAsync("keys.clear");
+            await WriteAsync(companion, "secret-key");
+            string stagingDirectory = Assert.Single(
+                Directory.EnumerateDirectories(directory, ".dvmconsole-export-*"));
+
+            Assert.Equal(
+                AppDataFileProtection.PrivateDirectoryMode,
+                File.GetUnixFileMode(stagingDirectory));
+            Assert.All(
+                Directory.EnumerateFiles(stagingDirectory),
+                file => Assert.Equal(
+                    AppDataFileProtection.PrivateFileMode,
+                    File.GetUnixFileMode(file)));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static async Task WriteAsync(IWritableDocument document, string value)
+    {
+        await using Stream stream = await document.OpenWriteAsync();
+        await using var writer = new StreamWriter(stream);
+        await writer.WriteAsync(value);
     }
 }

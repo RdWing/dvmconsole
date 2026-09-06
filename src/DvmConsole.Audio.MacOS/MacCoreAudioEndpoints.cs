@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
@@ -5,13 +8,16 @@ using System.Runtime.InteropServices;
 
 namespace DvmConsole.Audio;
 
-internal sealed class MacCoreAudioCapture : IAudioCapture
+internal sealed class MacCoreAudioCapture :
+    IAudioCapture,
+    IBorrowedAudioCapture,
+    IImmediateAudioStop
 {
     private readonly NativeCoreAudioApi api;
     private readonly SafeCoreAudioStreamHandle stream;
     private readonly PcmRateConverter? rateConverter;
-    private CancellationTokenSource? pumpCancellation;
-    private Task? pumpTask;
+    private readonly NativeCapturePump pump;
+    private short[] conversionBuffer = [];
     private bool disposed;
 
     public MacCoreAudioCapture(
@@ -38,6 +44,22 @@ internal sealed class MacCoreAudioCapture : IAudioCapture
                 ? null
                 : new PcmRateConverter(nativeSampleRate, format.SampleRate);
             stream = createdStream;
+            pump = new NativeCapturePump(
+                1600,
+                () =>
+                {
+                    int result = api.WaitForCapture(stream, Timeout.Infinite);
+                    MacCoreAudioBackend.EnsureNonNegative(result, "wait for CoreAudio capture audio");
+                    return result;
+                },
+                buffer =>
+                {
+                    int count = api.ReadStream(stream, buffer, buffer.Length);
+                    MacCoreAudioBackend.EnsureNonNegative(count, "read CoreAudio capture audio");
+                    return count;
+                },
+                () => api.WakeCapture(stream),
+                PublishSamples);
         }
         catch
         {
@@ -47,8 +69,9 @@ internal sealed class MacCoreAudioCapture : IAudioCapture
     }
 
     public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
+    public event BorrowedPcmSamplesHandler? BorrowedSamplesAvailable;
     public PcmAudioFormat Format { get; }
-    public bool IsRunning => pumpCancellation is not null && pumpTask is { IsCompleted: false };
+    public bool IsRunning => pump.IsRunning;
 
     public ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
@@ -58,23 +81,30 @@ internal sealed class MacCoreAudioCapture : IAudioCapture
             return ValueTask.CompletedTask;
 
         MacCoreAudioBackend.EnsureSuccess(api.StartStream(stream), "start CoreAudio capture");
-        pumpCancellation = new CancellationTokenSource();
-        pumpTask = PumpAsync(pumpCancellation.Token);
+        try
+        {
+            pump.Start();
+        }
+        catch
+        {
+            api.StopStream(stream);
+            throw;
+        }
         return ValueTask.CompletedTask;
     }
 
     public async ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
-        CancellationTokenSource? cancellation = pumpCancellation;
-        Task? task = pumpTask;
-        pumpCancellation = null;
-        pumpTask = null;
+        if (!pump.HasStarted)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return;
+        }
+
         Exception? pumpFailure = null;
         try
         {
-            cancellation?.Cancel();
-            if (task is not null)
-                await task.ConfigureAwait(false);
+            await pump.StopAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -82,7 +112,6 @@ internal sealed class MacCoreAudioCapture : IAudioCapture
         }
         finally
         {
-            cancellation?.Dispose();
             int stopResult = api.StopStream(stream);
             if (pumpFailure is null)
                 MacCoreAudioBackend.EnsureSuccess(stopResult, "stop CoreAudio capture");
@@ -121,48 +150,45 @@ internal sealed class MacCoreAudioCapture : IAudioCapture
             ExceptionDispatchInfo.Capture(stopFailure).Throw();
     }
 
-    private async Task PumpAsync(CancellationToken cancellationToken)
+    public void StopImmediately()
     {
-        short[] buffer = new short[1600];
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(10));
-        try
+        if (disposed)
+            return;
+        pump.RequestStop();
+        api.StopStream(stream);
+    }
+
+    private void PublishSamples(short[] buffer, int count)
+    {
+        if (rateConverter is null)
         {
-            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
-            {
-                int count = api.ReadStream(stream, buffer, buffer.Length);
-                if (count <= 0)
-                    continue;
-
-                if (rateConverter is null)
-                {
-                    short[] samples = buffer.AsSpan(0, count).ToArray();
-                    SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(samples));
-                    continue;
-                }
-
-                int maximumOutputSamples = rateConverter.GetMaximumOutputSampleCount(count);
-                if (maximumOutputSamples == 0)
-                {
-                    rateConverter.Convert(buffer.AsSpan(0, count), Span<short>.Empty);
-                    continue;
-                }
-
-                var converted = new short[maximumOutputSamples];
-                int convertedCount = rateConverter.Convert(
-                    buffer.AsSpan(0, count),
-                    converted);
-                if (convertedCount > 0)
-                {
-                    SamplesAvailable?.Invoke(
-                        this,
-                        new PcmSamplesEventArgs(converted.AsMemory(0, convertedCount)));
-                }
-            }
+            PublishBorrowed(buffer.AsSpan(0, count));
+            return;
         }
-        catch (OperationCanceledException)
+
+        int maximumOutputSamples = rateConverter.GetMaximumOutputSampleCount(count);
+        if (maximumOutputSamples == 0)
         {
-            // Expected during shutdown.
+            rateConverter.Convert(buffer.AsSpan(0, count), Span<short>.Empty);
+            return;
         }
+
+        if (conversionBuffer.Length < maximumOutputSamples)
+            conversionBuffer = new short[maximumOutputSamples];
+        Span<short> converted = conversionBuffer.AsSpan(0, maximumOutputSamples);
+        int convertedCount = rateConverter.Convert(buffer.AsSpan(0, count), converted);
+        if (convertedCount > 0)
+        {
+            PublishBorrowed(converted[..convertedCount]);
+        }
+    }
+
+    private void PublishBorrowed(ReadOnlySpan<short> samples)
+    {
+        BorrowedSamplesAvailable?.Invoke(samples);
+        EventHandler<PcmSamplesEventArgs>? owned = SamplesAvailable;
+        if (owned is not null)
+            owned(this, new PcmSamplesEventArgs(samples.ToArray()));
     }
 }
 
@@ -171,7 +197,8 @@ internal sealed class MacCoreAudioPlayback :
     IAudioPlaybackContinuityDiagnostics,
     IAudioPlaybackCallbackDiagnostics,
     IAudioPlaybackPresentationLatencyDiagnostics,
-    IPcmWriteTarget
+    IPcmWriteTarget,
+    IImmediateAudioStop
 {
     private static readonly TimeSpan DefaultWriteNoProgressTimeout = TimeSpan.FromSeconds(2);
     private readonly NativeCoreAudioApi api;
@@ -352,228 +379,10 @@ internal sealed class MacCoreAudioPlayback :
         }
         return ValueTask.CompletedTask;
     }
-}
 
-internal sealed class MacVoiceProcessingCapture : IAudioCapture
-{
-    private readonly VoiceProcessingSession session;
-    private CancellationTokenSource? pumpCancellation;
-    private Task? pumpTask;
-    private bool disposed;
-
-    public MacVoiceProcessingCapture(VoiceProcessingSession session, PcmAudioFormat format)
-    {
-        this.session = session;
-        Format = format;
-    }
-
-    public event EventHandler<PcmSamplesEventArgs>? SamplesAvailable;
-    public PcmAudioFormat Format { get; }
-    public bool IsRunning => pumpCancellation is not null;
-
-    public ValueTask StartAsync(CancellationToken cancellationToken = default)
-    {
-        ObjectDisposedException.ThrowIf(disposed, this);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (IsRunning)
-            return ValueTask.CompletedTask;
-
-        session.StartCapture();
-        pumpCancellation = new CancellationTokenSource();
-        pumpTask = PumpAsync(pumpCancellation.Token);
-        return ValueTask.CompletedTask;
-    }
-
-    public async ValueTask StopAsync(CancellationToken cancellationToken = default)
-    {
-        CancellationTokenSource? cancellation = pumpCancellation;
-        Task? task = pumpTask;
-        if (cancellation is null)
-            return;
-
-        pumpCancellation = null;
-        pumpTask = null;
-        Exception? pumpFailure = null;
-        try
-        {
-            cancellation.Cancel();
-            if (task is not null)
-                await task.ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            pumpFailure = exception;
-        }
-        finally
-        {
-            cancellation.Dispose();
-            session.StopCapture();
-        }
-        cancellationToken.ThrowIfCancellationRequested();
-        if (pumpFailure is not null)
-            ExceptionDispatchInfo.Capture(pumpFailure).Throw();
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (disposed)
-            return;
-        try
-        {
-            await StopAsync().ConfigureAwait(false);
-        }
-        finally
-        {
-            VoiceProcessingSessionRegistry.Release(session, VoiceEndpoint.Capture);
-            disposed = true;
-        }
-    }
-
-    private async Task PumpAsync(CancellationToken cancellationToken)
-    {
-        short[] buffer = new short[Math.Max(1600, Format.SampleRate / 5)];
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(10));
-        try
-        {
-            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
-            {
-                int count = session.Read(buffer);
-                if (count <= 0)
-                    continue;
-                short[] samples = new short[count];
-                Array.Copy(buffer, samples, count);
-                SamplesAvailable?.Invoke(this, new PcmSamplesEventArgs(samples));
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected during shutdown.
-        }
-    }
-}
-
-internal sealed class MacVoiceProcessingPlayback :
-    IAudioPlayback,
-    IAudioPlaybackContinuityDiagnostics,
-    IAudioPlaybackCallbackDiagnostics,
-    IAudioPlaybackPresentationLatencyDiagnostics,
-    IPcmWriteTarget
-{
-    private static readonly TimeSpan DefaultWriteNoProgressTimeout = TimeSpan.FromSeconds(2);
-    private readonly IVoiceProcessingPlaybackSession session;
-    private readonly Action releaseSession;
-    private readonly TimeSpan writeNoProgressTimeout;
-    private bool disposed;
-
-    public MacVoiceProcessingPlayback(VoiceProcessingSession session, PcmAudioFormat format)
-        : this(
-            session,
-            format,
-            () => VoiceProcessingSessionRegistry.Release(session, VoiceEndpoint.Playback),
-            DefaultWriteNoProgressTimeout)
-    {
-    }
-
-    internal MacVoiceProcessingPlayback(
-        IVoiceProcessingPlaybackSession session,
-        PcmAudioFormat format,
-        Action? releaseSession = null,
-        TimeSpan? writeNoProgressTimeout = null)
-    {
-        this.session = session ?? throw new ArgumentNullException(nameof(session));
-        this.releaseSession = releaseSession ?? (() => { });
-        this.writeNoProgressTimeout = writeNoProgressTimeout ?? DefaultWriteNoProgressTimeout;
-        if (this.writeNoProgressTimeout <= TimeSpan.Zero)
-            throw new ArgumentOutOfRangeException(nameof(writeNoProgressTimeout));
-        Format = format;
-        try
-        {
-            session.StartPlayback();
-        }
-        catch
-        {
-            this.releaseSession();
-            throw;
-        }
-    }
-
-    public PcmAudioFormat Format { get; }
-    public int? QueuedSamples => session.QueuedSamples;
-    public TimeSpan StarvedDuration => session.StarvedDuration;
-    public TimeSpan PendingStarvedDuration => session.PendingStarvedDuration;
-    public long OutputCallbackCount => session.OutputCallbackCount;
-    public TimeSpan OutputPresentationLatency => session.OutputPresentationLatency;
-
-    public void EndExpectedPlayback()
-    {
-        ObjectDisposedException.ThrowIf(disposed, this);
-        session.EndExpectedPlayback();
-    }
-
-    public async ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
-    {
-        ObjectDisposedException.ThrowIf(disposed, this);
-        if (samples.Length == 0)
-            return;
-        short[] buffer = ArrayPool<short>.Shared.Rent(samples.Length);
-        try
-        {
-            samples.Span.CopyTo(buffer);
-            await PcmWriteProgressWatchdog.WriteAllAsync(
-                this,
-                buffer,
-                samples.Length,
-                writeNoProgressTimeout,
-                "Apple voice-processing output stopped consuming audio for two seconds.",
-                cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            ArrayPool<short>.Shared.Return(buffer);
-        }
-    }
-
-    int IPcmWriteTarget.Write(short[] samples, int count)
-        => session.Write(samples, count);
-
-    public ValueTask FlushAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
-    }
-
-    public async ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
-    {
-        ObjectDisposedException.ThrowIf(disposed, this);
-        int initialSamples = QueuedSamples ?? 0;
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(5));
-        try
-        {
-            while ((QueuedSamples ?? 0) > 0)
-                await Task.Delay(5, timeout.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new TimeoutException("Apple voice-processing playback did not drain within five seconds.");
-        }
-        return initialSamples - (QueuedSamples ?? 0);
-    }
-
-    public ValueTask DisposeAsync()
+    public void StopImmediately()
     {
         if (!disposed)
-        {
-            try
-            {
-                session.StopPlayback();
-            }
-            finally
-            {
-                releaseSession();
-                disposed = true;
-            }
-        }
-        return ValueTask.CompletedTask;
+            api.StopStream(stream);
     }
 }

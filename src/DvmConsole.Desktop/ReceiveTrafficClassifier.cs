@@ -1,6 +1,8 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.Core.Runtime;
-using DvmConsole.Media;
 
 namespace DvmConsole.Desktop;
 
@@ -21,13 +23,7 @@ internal static class ReceiveTrafficClassifier
         => RadioReceiveTrafficClassifier.CarriesVoicePayload(traffic);
 
     public static bool CarriesEncodedVoicePayload(IRadioMediaFrame traffic)
-    {
-        ArgumentNullException.ThrowIfNull(traffic);
-        if (!CarriesVoicePayload(traffic))
-            return false;
-        return traffic.Protocol != RadioMediaProtocol.Nxdn ||
-               !NxdnVoicePacketCodec.TryExtractCallMetadata(traffic.Payload, out _);
-    }
+        => RadioReceiveTrafficClassifier.CarriesEncodedVoicePayload(traffic);
 
     public static ReceiveJitterPacketKind GetJitterPacketKind(IRadioMediaFrame traffic)
         => RadioReceiveTrafficClassifier.GetJitterPacketKind(traffic);

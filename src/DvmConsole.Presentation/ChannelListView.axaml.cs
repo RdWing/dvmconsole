@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -6,6 +9,7 @@ using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using DvmConsole.Application;
+using System.Diagnostics;
 
 namespace DvmConsole.Presentation;
 
@@ -15,6 +19,9 @@ public sealed partial class ChannelListView : UserControl
     private ChannelListItemViewModel? anchoredItem;
     private ScrollViewer? anchoredScroller;
     private double anchoredItemY;
+    private readonly PttHoldTracker<IPointer> heldPttPointers = new();
+    private ChannelId? keyboardPttChannel;
+    private bool keyboardPttMomentary;
 
     public ChannelListView()
     {
@@ -22,6 +29,10 @@ public sealed partial class ChannelListView : UserControl
         AddHandler(InputElement.PointerPressedEvent, HandlePttPointerPressed, RoutingStrategies.Tunnel, true);
         AddHandler(InputElement.PointerReleasedEvent, HandlePttPointerReleased, RoutingStrategies.Tunnel, true);
         AddHandler(InputElement.PointerCaptureLostEvent, HandlePttPointerCaptureLost, RoutingStrategies.Bubble, true);
+        AddHandler(InputElement.KeyDownEvent, (sender, args) =>
+            HandlePttKeyDown(FindPttButton(args.Source), args), RoutingStrategies.Tunnel);
+        AddHandler(InputElement.KeyUpEvent, (sender, args) =>
+            HandlePttKeyUp(FindPttButton(args.Source), args), RoutingStrategies.Tunnel);
     }
 
     public void Attach(
@@ -42,6 +53,8 @@ public sealed partial class ChannelListView : UserControl
         if (DataContext is not ConsoleListViewModel viewModel)
             return;
         ClearRowAnchor();
+        heldPttPointers.Clear();
+        keyboardPttChannel = null;
         DataContext = null;
         await viewModel.DisposeAsync();
     }
@@ -49,35 +62,35 @@ public sealed partial class ChannelListView : UserControl
     private async void HandleReceiveClick(object? sender, RoutedEventArgs e)
     {
         if (DataContextOf(sender) is { } item)
-            await item.ToggleReceiveAsync();
+            await ObserveEventActionAsync(() => item.ToggleReceiveAsync());
         e.Handled = true;
     }
 
     private async void HandleTransmitSelectionClick(object? sender, RoutedEventArgs e)
     {
         if (DataContextOf(sender) is { } item)
-            await item.ToggleTransmitSelectionAsync();
+            await ObserveEventActionAsync(() => item.ToggleTransmitSelectionAsync());
         e.Handled = true;
     }
 
     private async void HandlePageSelectionClick(object? sender, RoutedEventArgs e)
     {
         if (DataContextOf(sender) is { } item)
-            await item.TogglePageSelectionAsync();
+            await ObserveEventActionAsync(() => item.TogglePageSelectionAsync());
         e.Handled = true;
     }
 
     private async void HandleAlertSelectionClick(object? sender, RoutedEventArgs e)
     {
         if (DataContextOf(sender) is { } item)
-            await item.ToggleAlertSelectionAsync();
+            await ObserveEventActionAsync(() => item.ToggleAlertSelectionAsync());
         e.Handled = true;
     }
 
     private async void HandleEncryptionClick(object? sender, RoutedEventArgs e)
     {
         if (DataContextOf(sender) is { } item)
-            await item.ToggleTransmitEncryptionAsync();
+            await ObserveEventActionAsync(() => item.ToggleTransmitEncryptionAsync());
         e.Handled = true;
     }
 
@@ -88,6 +101,20 @@ public sealed partial class ChannelListView : UserControl
 
         CaptureRowAnchor(row);
         e.Handled = true;
+    }
+
+    private async void HandleDisclosureClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control control || DataContextOf(sender) is not { } item)
+            return;
+        Control? row = control.GetVisualAncestors().OfType<Border>()
+            .FirstOrDefault(border => border.Classes.Contains("channel-list-row"));
+        if (row is not null)
+            CaptureRowAnchor(row);
+        e.Handled = true;
+        item.ToggleExpansion();
+        await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+        RestoreRowAnchor();
     }
 
     private async void HandleRowPointerReleased(object? sender, PointerReleasedEventArgs e)
@@ -109,7 +136,7 @@ public sealed partial class ChannelListView : UserControl
         if (sender is Control { DataContext: ChannelListItemViewModel item } &&
             DataContext is ConsoleListViewModel viewModel)
         {
-            await viewModel.ReleasePttAsync(item.Id);
+            await ObserveEventActionAsync(() => viewModel.ReleasePttAsync(item.Id));
         }
     }
 
@@ -126,37 +153,46 @@ public sealed partial class ChannelListView : UserControl
         if (useTogglePtt())
         {
             if (item.IsTransmitting)
-                await viewModel.UnkeyPttAsync(item.Id);
+                await ObserveEventActionAsync(() => viewModel.UnkeyPttAsync(item.Id));
             else
-                await viewModel.TogglePttAsync(item.Id);
+                await ObserveEventActionAsync(() => viewModel.TogglePttAsync(item.Id));
         }
         else
         {
+            heldPttPointers.Track(e.Pointer, item.Id);
             e.Pointer.Capture(button);
-            await viewModel.PressPttAsync(item.Id);
+            await ObserveEventActionAsync(() => viewModel.PressPttAsync(item.Id));
         }
     }
 
     private async void HandlePttPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
         Button? button = e.Pointer.Captured as Button ?? FindPttButton(e.Source);
-        if (useTogglePtt() || button?.DataContext is not ChannelListItemViewModel item ||
+        ChannelId? heldChannel = heldPttPointers.Take(e.Pointer);
+        ChannelId? channelId = heldChannel ??
+            (button?.DataContext is ChannelListItemViewModel item ? item.Id : null);
+        if ((heldChannel is null && useTogglePtt()) ||
+            channelId is null ||
             DataContext is not ConsoleListViewModel viewModel)
         {
             return;
         }
         e.Handled = true;
         e.Pointer.Capture(null);
-        await viewModel.ReleasePttAsync(item.Id);
+        await ObserveEventActionAsync(() => viewModel.ReleasePttAsync(channelId.Value));
     }
 
     private async void HandlePttPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
     {
+        ChannelId? heldChannel = heldPttPointers.Take(e.Pointer);
         Button? button = FindPttButton(e.Source);
-        if (!useTogglePtt() && button?.DataContext is ChannelListItemViewModel item &&
+        ChannelId? channelId = heldChannel ??
+            (button?.DataContext is ChannelListItemViewModel item ? item.Id : null);
+        if ((heldChannel is not null || !useTogglePtt()) &&
+            channelId is not null &&
             DataContext is ConsoleListViewModel viewModel)
         {
-            await viewModel.ReleasePttAsync(item.Id);
+            await ObserveEventActionAsync(() => viewModel.ReleasePttAsync(channelId.Value));
         }
     }
 
@@ -169,27 +205,38 @@ public sealed partial class ChannelListView : UserControl
             return;
         }
         e.Handled = true;
+        if (keyboardPttChannel is not null)
+            return;
+        keyboardPttChannel = item.Id;
+        keyboardPttMomentary = !useTogglePtt();
         if (useTogglePtt())
         {
             if (item.IsTransmitting)
-                await viewModel.UnkeyPttAsync(item.Id);
+                await ObserveEventActionAsync(() => viewModel.UnkeyPttAsync(item.Id));
             else
-                await viewModel.TogglePttAsync(item.Id);
+                await ObserveEventActionAsync(() => viewModel.TogglePttAsync(item.Id));
         }
         else
-            await viewModel.PressPttAsync(item.Id);
+            await ObserveEventActionAsync(() => viewModel.PressPttAsync(item.Id));
     }
 
     private async void HandlePttKeyUp(object? sender, KeyEventArgs e)
     {
-        if (useTogglePtt() || e.Key != Key.Space ||
-            sender is not Button { DataContext: ChannelListItemViewModel item } ||
-            DataContext is not ConsoleListViewModel viewModel)
-        {
+        if (e.Key != Key.Space || keyboardPttChannel is null)
             return;
-        }
         e.Handled = true;
-        await viewModel.ReleasePttAsync(item.Id);
+        await ReleaseKeyboardPttAsync();
+    }
+
+    private async void HandlePttLostFocus(object? sender, RoutedEventArgs e)
+        => await ReleaseKeyboardPttAsync();
+
+    private async ValueTask ReleaseKeyboardPttAsync()
+    {
+        ChannelId? channel = keyboardPttChannel;
+        keyboardPttChannel = null;
+        if (keyboardPttMomentary && channel is ChannelId id && DataContext is ConsoleListViewModel viewModel)
+            await ObserveEventActionAsync(() => viewModel.ReleasePttAsync(id));
     }
 
     private async void HandleVolumeChanged(object? sender, EventArgs e)
@@ -199,7 +246,26 @@ public sealed partial class ChannelListView : UserControl
         {
             return;
         }
-        await item.SetVolumeSliderValueAsync(slider.Value);
+        await ObserveEventActionAsync(() => item.SetVolumeSliderValueAsync(slider.Value));
+    }
+
+    private static async ValueTask ObserveEventActionAsync(Func<ValueTask> action)
+    {
+        try
+        {
+            await action();
+        }
+        catch (OperationCanceledException)
+        {
+            // A session replacement or shutdown can cancel an in-flight UI action.
+        }
+        catch (Exception exception)
+        {
+            // Event handlers cannot return their failure to Avalonia. The
+            // controller has already retained truthful operator state; keep
+            // the dispatcher alive and make the failure observable to hosts.
+            Trace.TraceError("Channel List action failed: {0}", exception);
+        }
     }
 
     private static ChannelListItemViewModel? DataContextOf(object? sender)

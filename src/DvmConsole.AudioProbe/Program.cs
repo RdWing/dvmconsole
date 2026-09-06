@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Ptt;
 
@@ -7,67 +10,81 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            Console.Error.WriteLine("The CoreAudio probe requires macOS.");
-            return 2;
-        }
-
         try
         {
             if (args.FirstOrDefault() is "--global-ptt")
-                return await RunGlobalPttAsync(args.ElementAtOrDefault(1)).ConfigureAwait(false);
-
-            bool voiceProcessing = args.FirstOrDefault() is "--voice-processing-stream-test";
-            string? requestedInputDeviceId = voiceProcessing ? args.ElementAtOrDefault(2) : null;
-            string? requestedOutputDeviceId = voiceProcessing ? args.ElementAtOrDefault(3) : null;
-            using var backend = new MacCoreAudioBackend(
-                processingMode: voiceProcessing
-                    ? AudioProcessingMode.AppleVoiceProcessing
-                    : AudioProcessingMode.DvmConsole,
-                inputDeviceId: requestedInputDeviceId,
-                outputDeviceId: requestedOutputDeviceId);
-            if (voiceProcessing)
-                return await RunStreamTestAsync(
-                    backend,
+                return await RunGlobalPttAsync(
                     args.ElementAtOrDefault(1),
-                    allowSystemDefaultsWithoutEnumeration: true,
-                    requestedInputDeviceId,
-                    requestedOutputDeviceId).ConfigureAwait(false);
+                    args.ElementAtOrDefault(2)).ConfigureAwait(false);
+
+            if (args.FirstOrDefault() is "--monitor-linux-devices")
+                return await RunLinuxDeviceMonitorAsync(
+                    args.ElementAtOrDefault(1),
+                    args.ElementAtOrDefault(2)).ConfigureAwait(false);
+
+            if (OperatingSystem.IsLinux())
+            {
+                string? libraryPath = args.FirstOrDefault() is "--linux-devices"
+                    ? args.ElementAtOrDefault(1)
+                    : args.FirstOrDefault() is "--linux-stream-test"
+                        ? args.ElementAtOrDefault(2)
+                    : null;
+                using var linuxBackend = new LinuxPipeWireBackend(libraryPath);
+                if (args.FirstOrDefault() is "--linux-stream-test")
+                {
+                    return await RunStreamTestAsync(
+                        linuxBackend,
+                        args.ElementAtOrDefault(1)).ConfigureAwait(false);
+                }
+                PrintDevices(linuxBackend);
+                return 0;
+            }
+            if (!OperatingSystem.IsMacOS())
+            {
+                Console.Error.WriteLine("The audio probe supports macOS and Linux desktop hosts.");
+                return 2;
+            }
+
+            using var backend = new MacCoreAudioBackend();
             if (args.FirstOrDefault() is "--stream-test")
                 return await RunStreamTestAsync(backend, args.ElementAtOrDefault(1)).ConfigureAwait(false);
             if (args.FirstOrDefault() is "--permit-tone")
                 return await RunPermitToneAsync(backend, args.ElementAtOrDefault(1)).ConfigureAwait(false);
 
-            foreach (AudioDirection direction in Enum.GetValues<AudioDirection>())
-            {
-                Console.WriteLine($"{direction} devices:");
-                foreach (AudioDeviceInfo device in backend.EnumerateDevices(direction))
-                {
-                    string transport = device.IsBluetooth switch
-                    {
-                        true => "Bluetooth",
-                        false => "non-Bluetooth",
-                        null => "transport unknown"
-                    };
-                    Console.WriteLine($"  {(device.IsDefault ? "*" : " ")} {device.Id}: {device.Name} [{transport}]");
-                }
-            }
+            PrintDevices(backend);
             return 0;
         }
         catch (Exception exception)
         {
             Console.Error.WriteLine($"Audio probe failed: {exception.Message}");
+            for (Exception? cause = exception.InnerException; cause is not null; cause = cause.InnerException)
+                Console.Error.WriteLine($"Caused by: {cause.GetType().Name}: {cause.Message}");
             return 1;
         }
     }
 
+    private static void PrintDevices(IAudioBackend backend)
+    {
+        foreach (AudioDirection direction in Enum.GetValues<AudioDirection>())
+        {
+            Console.WriteLine($"{direction} devices:");
+            foreach (AudioDeviceInfo device in backend.EnumerateDevices(direction))
+            {
+                string transport = device.IsBluetooth switch
+                {
+                    true => "Bluetooth",
+                    false => "non-Bluetooth",
+                    null => "transport unknown"
+                };
+                Console.WriteLine(
+                    $"  {(device.IsDefault ? "*" : " ")} {device.Id}: {device.Name} [{transport}]");
+            }
+        }
+    }
+
     private static async Task<int> RunStreamTestAsync(
-        MacCoreAudioBackend backend,
-        string? durationArgument,
-        bool allowSystemDefaultsWithoutEnumeration = false,
-        string? requestedInputDeviceId = null,
-        string? requestedOutputDeviceId = null)
+        IAudioBackend backend,
+        string? durationArgument)
     {
         if (!int.TryParse(durationArgument ?? "2", out int seconds) || seconds is < 1 or > 10)
         {
@@ -75,18 +92,12 @@ internal static class Program
             return 2;
         }
 
-        AudioDeviceInfo input = backend.EnumerateDevices(AudioDirection.Input).FirstOrDefault(device =>
-                !string.IsNullOrWhiteSpace(requestedInputDeviceId) && device.Id == requestedInputDeviceId)
-            ?? backend.EnumerateDevices(AudioDirection.Input).FirstOrDefault(device => device.IsDefault)
-            ?? (allowSystemDefaultsWithoutEnumeration
-                ? new AudioDeviceInfo("default", "System default input", AudioDirection.Input, true)
-                : throw new InvalidOperationException("No default input device is available."));
-        AudioDeviceInfo output = backend.EnumerateDevices(AudioDirection.Output).FirstOrDefault(device =>
-                !string.IsNullOrWhiteSpace(requestedOutputDeviceId) && device.Id == requestedOutputDeviceId)
-            ?? backend.EnumerateDevices(AudioDirection.Output).FirstOrDefault(device => device.IsDefault)
-            ?? (allowSystemDefaultsWithoutEnumeration
-                ? new AudioDeviceInfo("default", "System default output", AudioDirection.Output, true)
-                : throw new InvalidOperationException("No default output device is available."));
+        AudioDeviceInfo input = backend.EnumerateDevices(AudioDirection.Input)
+            .FirstOrDefault(device => device.IsDefault)
+            ?? throw new InvalidOperationException("No default input device is available.");
+        AudioDeviceInfo output = backend.EnumerateDevices(AudioDirection.Output)
+            .FirstOrDefault(device => device.IsDefault)
+            ?? throw new InvalidOperationException("No default output device is available.");
         int capturedSamples = 0;
         int peakSample = 0;
 
@@ -127,18 +138,45 @@ internal static class Program
         return 0;
     }
 
-    private static async Task<int> RunGlobalPttAsync(string? keyArgument)
+    private static async Task<int> RunGlobalPttAsync(
+        string? keyArgument,
+        string? durationArgument)
     {
         KeyboardPttKey key = Enum.TryParse(keyArgument, ignoreCase: true, out KeyboardPttKey parsedKey)
             ? parsedKey
             : KeyboardPttKey.Space;
+        if (!int.TryParse(durationArgument ?? "2", out int seconds) || seconds is < 1 or > 120)
+            throw new ArgumentOutOfRangeException(nameof(durationArgument), "Duration must be between 1 and 120 seconds.");
         await using var ptt = new GlobalKeyboardPttSource(key);
         ptt.StateChanged += (_, pressed) => Console.WriteLine($"Global PTT {(pressed ? "pressed" : "released")}.");
         await ptt.StartAsync().ConfigureAwait(false);
         Console.WriteLine($"Global PTT capture started for {key}; press the key or wait for the lifecycle check.");
-        await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+        await Task.Delay(TimeSpan.FromSeconds(seconds)).ConfigureAwait(false);
         await ptt.StopAsync().ConfigureAwait(false);
         Console.WriteLine("Global PTT capture stopped cleanly.");
+        return 0;
+    }
+
+    private static async Task<int> RunLinuxDeviceMonitorAsync(
+        string? libraryPath,
+        string? durationArgument)
+    {
+        if (!OperatingSystem.IsLinux())
+            throw new PlatformNotSupportedException("The PipeWire device monitor requires Linux.");
+        if (!int.TryParse(durationArgument ?? "5", out int seconds) || seconds is < 1 or > 30)
+            throw new ArgumentOutOfRangeException(nameof(durationArgument), "Duration must be between 1 and 30 seconds.");
+
+        int changes = 0;
+        using var source = new LinuxPipeWireDeviceChangeSource(libraryPath);
+        source.Changed += (_, _) =>
+        {
+            changes++;
+            Console.WriteLine($"PipeWire device topology changed ({changes}).");
+        };
+        source.Start();
+        Console.WriteLine("PipeWire device monitor started.");
+        await Task.Delay(TimeSpan.FromSeconds(seconds)).ConfigureAwait(false);
+        Console.WriteLine($"PipeWire device monitor stopped; observed {changes} change notification(s).");
         return 0;
     }
 

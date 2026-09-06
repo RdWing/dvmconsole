@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Security.Cryptography;
 using DvmConsole.Vocoder;
 using fnecore.P25;
@@ -226,7 +229,7 @@ public sealed class P25TxAudioSession : IDisposable
             var metadata = new P25DfsiFrameCodec.P25EncryptionMetadata(
                 encryption.AlgorithmId,
                 encryption.KeyId,
-                messageIndicator.ToArray());
+                messageIndicator);
             payload = sendLdu1
                 ? P25DfsiFrameCodec.CreateEncryptedLdu1Payload(
                     sourceId,
@@ -258,4 +261,4 @@ public sealed class P25TxAudioSession : IDisposable
     }
 }
 
-internal readonly record struct P25OutboundPacket(byte[] Payload, ushort Sequence, uint StreamId);
+internal readonly record struct P25OutboundPacket(ReadOnlyMemory<byte> Payload, ushort Sequence, uint StreamId);

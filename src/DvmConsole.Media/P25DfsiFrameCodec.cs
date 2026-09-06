@@ -1,5 +1,9 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Runtime;
 using fnecore.P25;
+using System.Runtime.CompilerServices;
 
 namespace DvmConsole.Media;
 
@@ -34,13 +38,21 @@ public static class P25DfsiFrameCodec
     public readonly record struct P25EncryptionMetadata(
         byte AlgorithmId,
         ushort KeyId,
-        byte[] MessageIndicator);
+        ReadOnlyMemory<byte> MessageIndicator);
+
+    public readonly record struct P25ParsedLdu(
+        bool IsLdu1,
+        bool HasEncryptionMetadata,
+        byte AlgorithmId,
+        ushort KeyId);
 
     private static readonly byte[] Ldu1RecordTypes = [0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A];
     private static readonly byte[] Ldu2RecordTypes = [0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72, 0x73];
     private static readonly int[] RecordLengths = [22, 14, 17, 17, 17, 17, 17, 17, 16];
     private static readonly int[] RecordOffsets = [0, 22, 36, 53, 70, 87, 104, 121, 138];
     private static readonly int[] CodewordOffsets = [10, 1, 5, 5, 5, 5, 5, 5, 4];
+    private static readonly ConditionalWeakTable<IRadioMediaFrame, Lazy<ParsedVoiceLduCache>>
+        ParsedVoiceLdus = new();
 
     public static bool TryExtractImbe(IRadioMediaFrame traffic, Span<byte> imbe)
     {
@@ -66,8 +78,39 @@ public static class P25DfsiFrameCodec
             return false;
         }
 
-        bool ldu1 = string.Equals(traffic.Subtype, "LDU1", StringComparison.OrdinalIgnoreCase);
-        return TryExtractImbeFrames(traffic.Payload, ldu1, imbe, available);
+        ParsedVoiceLduCache cached = GetParsedVoiceLdu(traffic);
+        if (!cached.IsValid)
+            return false;
+        cached.CopyImbeTo(imbe, available);
+        return true;
+    }
+
+    // Parses the record layout once and writes every receive artifact into
+    // caller-owned buffers. The public compatibility helpers below delegate
+    // to the same core and allocate only when their owned result requires it.
+    public static bool TryParseVoiceLdu(
+        IRadioMediaFrame traffic,
+        Span<byte> imbe,
+        Span<bool> available,
+        Span<byte> messageIndicator,
+        out P25ParsedLdu parsed)
+    {
+        ArgumentNullException.ThrowIfNull(traffic);
+        parsed = default;
+        if (traffic.Protocol != RadioMediaProtocol.P25 ||
+            !IsVoiceLdu(traffic) ||
+            imbe.Length < ImbeBytes ||
+            available.Length < CodewordsPerLdu ||
+            messageIndicator.Length < P25Defines.P25_MI_LENGTH)
+        {
+            return false;
+        }
+
+        ParsedVoiceLduCache cached = GetParsedVoiceLdu(traffic);
+        if (!cached.IsValid)
+            return false;
+        cached.CopyTo(imbe, available, messageIndicator, out parsed);
+        return true;
     }
 
     public static byte[] ExtractImbe(IRadioMediaFrame traffic)
@@ -106,11 +149,10 @@ public static class P25DfsiFrameCodec
         bool ldu1 = traffic.Subtype.Equals("LDU1", StringComparison.OrdinalIgnoreCase);
         if (ldu1)
         {
-            Span<byte> imbe = stackalloc byte[ImbeBytes];
-            Span<bool> available = stackalloc bool[CodewordsPerLdu];
-            if (!TryExtractImbeFrames(payload, ldu1: true, imbe, available) ||
-                !available[3] ||
-                !available[4])
+            ParsedVoiceLduCache cached = GetParsedVoiceLdu(traffic);
+            if (!cached.IsValid ||
+                !cached.IsCodewordAvailable(3) ||
+                !cached.IsCodewordAvailable(4))
             {
                 return false;
             }
@@ -139,29 +181,97 @@ public static class P25DfsiFrameCodec
         if (traffic.Protocol != RadioMediaProtocol.P25 || !IsVoiceLdu(traffic))
             return false;
 
-        bool ldu1 = string.Equals(traffic.Subtype, "LDU1", StringComparison.OrdinalIgnoreCase);
-        Span<byte> imbe = stackalloc byte[ImbeBytes];
-        Span<bool> available = stackalloc bool[CodewordsPerLdu];
-        if (!TryExtractImbeFrames(traffic.Payload, ldu1, imbe, available))
+        ParsedVoiceLduCache cached = GetParsedVoiceLdu(traffic);
+        if (!cached.IsValid || !cached.Parsed.HasEncryptionMetadata)
+        {
+            return false;
+        }
+
+        metadata = new P25EncryptionMetadata(
+            cached.Parsed.AlgorithmId,
+            cached.Parsed.KeyId,
+            cached.CopyMessageIndicator());
+        return true;
+    }
+
+    public static bool TryExtractEncryptionIdentity(
+        IRadioMediaFrame traffic,
+        out byte algorithmId,
+        out ushort keyId)
+    {
+        ArgumentNullException.ThrowIfNull(traffic);
+        algorithmId = 0;
+        keyId = 0;
+        if (traffic.Protocol != RadioMediaProtocol.P25 || !IsVoiceLdu(traffic))
             return false;
 
-        ReadOnlySpan<byte> payload = traffic.Payload;
+        ParsedVoiceLduCache cached = GetParsedVoiceLdu(traffic);
+        if (!cached.IsValid || !cached.Parsed.HasEncryptionMetadata)
+            return false;
+        algorithmId = cached.Parsed.AlgorithmId;
+        keyId = cached.Parsed.KeyId;
+        return true;
+    }
+
+    private static ParsedVoiceLduCache GetParsedVoiceLdu(IRadioMediaFrame traffic)
+        => ParsedVoiceLdus.GetValue(
+            traffic,
+            static frame => new Lazy<ParsedVoiceLduCache>(
+                () => new ParsedVoiceLduCache(frame),
+                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+
+    // An ingress adapter may replace only the outer call identity after LDU1
+    // link control resolves placeholder IDs. Associate that immutable
+    // projection with the already-computed analysis so downstream encryption,
+    // recording, and decoder consumers do not parse the same LDU again.
+    public static void ShareParsedVoiceLdu(
+        IRadioMediaFrame source,
+        IRadioMediaFrame projection)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(projection);
+        if (ReferenceEquals(source, projection) ||
+            source.Protocol != RadioMediaProtocol.P25 ||
+            projection.Protocol != RadioMediaProtocol.P25 ||
+            !IsVoiceLdu(source) ||
+            !IsVoiceLdu(projection))
+        {
+            return;
+        }
+
+        Lazy<ParsedVoiceLduCache> analysis = ParsedVoiceLdus.GetValue(
+            source,
+            static frame => new Lazy<ParsedVoiceLduCache>(
+                () => new ParsedVoiceLduCache(frame),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+        _ = ParsedVoiceLdus.GetValue(projection, _ => analysis);
+    }
+
+    private static bool TryExtractEncryptionMetadataCore(
+        ReadOnlySpan<byte> payload,
+        bool ldu1,
+        ReadOnlySpan<bool> available,
+        Span<byte> messageIndicator,
+        out byte algorithmId,
+        out ushort keyId)
+    {
+        messageIndicator[..P25Defines.P25_MI_LENGTH].Clear();
+        algorithmId = 0;
+        keyId = 0;
+
         if (ldu1)
         {
             if (payload.Length < 193 || payload[180] != 0x01)
                 return false;
 
-            byte algorithmId = payload[181];
-            ushort keyId = (ushort)((payload[182] << 8) | payload[183]);
+            algorithmId = payload[181];
+            keyId = (ushort)((payload[182] << 8) | payload[183]);
             // Older and third-party FNE peers sometimes emit an HDU-valid
             // clear header with zeroed crypto fields. The legacy console
             // normalizes algorithm 0/key 0 to the P25 UNENCRYPT value.
             if (algorithmId == 0 && keyId == 0)
                 algorithmId = P25Defines.P25_ALGO_UNENCRYPT;
-            metadata = new P25EncryptionMetadata(
-                algorithmId,
-                keyId,
-                payload.Slice(184, 9).ToArray());
+            payload.Slice(184, P25Defines.P25_MI_LENGTH).CopyTo(messageIndicator);
             return true;
         }
 
@@ -171,18 +281,13 @@ public static class P25DfsiFrameCodec
             payload.Length <= 114 || payload[112] == 0)
             return false;
 
-        byte[] messageIndicator = new byte[9];
-        payload.Slice(61, 3).CopyTo(messageIndicator.AsSpan(0, 3));
-        payload.Slice(78, 3).CopyTo(messageIndicator.AsSpan(3, 3));
-        payload.Slice(95, 3).CopyTo(messageIndicator.AsSpan(6, 3));
-        byte ldu2AlgorithmId = payload[112];
-        ushort ldu2KeyId = (ushort)((payload[113] << 8) | payload[114]);
-        if (ldu2AlgorithmId == 0 && ldu2KeyId == 0)
-            ldu2AlgorithmId = P25Defines.P25_ALGO_UNENCRYPT;
-        metadata = new P25EncryptionMetadata(
-            ldu2AlgorithmId,
-            ldu2KeyId,
-            messageIndicator);
+        payload.Slice(61, 3).CopyTo(messageIndicator[..3]);
+        payload.Slice(78, 3).CopyTo(messageIndicator.Slice(3, 3));
+        payload.Slice(95, 3).CopyTo(messageIndicator.Slice(6, 3));
+        algorithmId = payload[112];
+        keyId = (ushort)((payload[113] << 8) | payload[114]);
+        if (algorithmId == 0 && keyId == 0)
+            algorithmId = P25Defines.P25_ALGO_UNENCRYPT;
         return true;
     }
 
@@ -200,20 +305,21 @@ public static class P25DfsiFrameCodec
         ValidateImbe(imbe);
         byte[] payload = CreateHeader(Ldu1Duid, sourceId, destinationId);
 
-        WriteRecord(payload, 24, 22, 0x62, imbe[0..11], 10, static record => record[6] = 0);
-        WriteRecord(payload, 46, 14, 0x63, imbe[11..22], 1, null);
-        WriteRecord(payload, 60, 17, 0x64, imbe[22..33], 5, record =>
-        {
-            record[1] = 0;
-            record[2] = 0;
-            record[3] = BuildVoiceServiceOptions(encrypted);
-        });
-        WriteRecord(payload, 77, 17, 0x65, imbe[33..44], 5, record => WriteThreeBytes(record, 1, destinationId));
-        WriteRecord(payload, 94, 17, 0x66, imbe[44..55], 5, record => WriteThreeBytes(record, 1, sourceId));
-        WriteRecord(payload, 111, 17, 0x67, imbe[55..66], 5, null);
-        WriteRecord(payload, 128, 17, 0x68, imbe[66..77], 5, null);
-        WriteRecord(payload, 145, 17, 0x69, imbe[77..88], 5, null);
-        WriteRecord(payload, 162, 16, 0x6A, imbe[88..99], 4, null);
+        Span<byte> record = WriteRecord(payload, 24, 22, 0x62, imbe[0..11], 10);
+        record[6] = 0;
+        WriteRecord(payload, 46, 14, 0x63, imbe[11..22], 1);
+        record = WriteRecord(payload, 60, 17, 0x64, imbe[22..33], 5);
+        record[1] = 0;
+        record[2] = 0;
+        record[3] = BuildVoiceServiceOptions(encrypted);
+        record = WriteRecord(payload, 77, 17, 0x65, imbe[33..44], 5);
+        WriteThreeBytes(record, 1, destinationId);
+        record = WriteRecord(payload, 94, 17, 0x66, imbe[44..55], 5);
+        WriteThreeBytes(record, 1, sourceId);
+        WriteRecord(payload, 111, 17, 0x67, imbe[55..66], 5);
+        WriteRecord(payload, 128, 17, 0x68, imbe[66..77], 5);
+        WriteRecord(payload, 145, 17, 0x69, imbe[77..88], 5);
+        WriteRecord(payload, 162, 16, 0x6A, imbe[88..99], 4);
         WriteClearEncryptionHeader(payload);
         return payload;
     }
@@ -248,15 +354,16 @@ public static class P25DfsiFrameCodec
         ValidateImbe(imbe);
         byte[] payload = CreateHeader(Ldu2Duid, sourceId, destinationId);
 
-        WriteRecord(payload, 24, 22, 0x6B, imbe[0..11], 10, static record => record[6] = 0);
-        WriteRecord(payload, 46, 14, 0x6C, imbe[11..22], 1, null);
-        WriteRecord(payload, 60, 17, 0x6D, imbe[22..33], 5, null);
-        WriteRecord(payload, 77, 17, 0x6E, imbe[33..44], 5, null);
-        WriteRecord(payload, 94, 17, 0x6F, imbe[44..55], 5, null);
-        WriteRecord(payload, 111, 17, 0x70, imbe[55..66], 5, null);
-        WriteRecord(payload, 128, 17, 0x71, imbe[66..77], 5, null);
-        WriteRecord(payload, 145, 17, 0x72, imbe[77..88], 5, null);
-        WriteRecord(payload, 162, 16, 0x73, imbe[88..99], 4, null);
+        Span<byte> record = WriteRecord(payload, 24, 22, 0x6B, imbe[0..11], 10);
+        record[6] = 0;
+        WriteRecord(payload, 46, 14, 0x6C, imbe[11..22], 1);
+        WriteRecord(payload, 60, 17, 0x6D, imbe[22..33], 5);
+        WriteRecord(payload, 77, 17, 0x6E, imbe[33..44], 5);
+        WriteRecord(payload, 94, 17, 0x6F, imbe[44..55], 5);
+        WriteRecord(payload, 111, 17, 0x70, imbe[55..66], 5);
+        WriteRecord(payload, 128, 17, 0x71, imbe[66..77], 5);
+        WriteRecord(payload, 145, 17, 0x72, imbe[77..88], 5);
+        WriteRecord(payload, 162, 16, 0x73, imbe[88..99], 4);
         // Clear P25 still carries an explicit UNENCRYPT algorithm in the
         // encryption-sync fields. Zero is not a valid clear algorithm ID.
         payload[112] = P25Defines.P25_ALGO_UNENCRYPT;
@@ -277,9 +384,9 @@ public static class P25DfsiFrameCodec
         byte[] payload = CreateLdu2Payload(sourceId, destinationId, encryptedImbe);
 
         // The LDU2 encryption-sync records carry the next MI and key identity.
-        metadata.MessageIndicator.AsSpan(0, 3).CopyTo(payload.AsSpan(61, 3));
-        metadata.MessageIndicator.AsSpan(3, 3).CopyTo(payload.AsSpan(78, 3));
-        metadata.MessageIndicator.AsSpan(6, 3).CopyTo(payload.AsSpan(95, 3));
+        metadata.MessageIndicator.Span[..3].CopyTo(payload.AsSpan(61, 3));
+        metadata.MessageIndicator.Span.Slice(3, 3).CopyTo(payload.AsSpan(78, 3));
+        metadata.MessageIndicator.Span.Slice(6, 3).CopyTo(payload.AsSpan(95, 3));
         payload[112] = metadata.AlgorithmId;
         payload[113] = (byte)(metadata.KeyId >> 8);
         payload[114] = (byte)metadata.KeyId;
@@ -344,6 +451,93 @@ public static class P25DfsiFrameCodec
         return true;
     }
 
+    [InlineArray(ImbeBytes)]
+    private struct ImbeBuffer
+    {
+        private byte element0;
+    }
+
+    [InlineArray(CodewordsPerLdu)]
+    private struct AvailabilityBuffer
+    {
+        private bool element0;
+    }
+
+    [InlineArray(P25Defines.P25_MI_LENGTH)]
+    private struct MessageIndicatorBuffer
+    {
+        private byte element0;
+    }
+
+    private sealed class ParsedVoiceLduCache
+    {
+        private ImbeBuffer imbe;
+        private AvailabilityBuffer available;
+        private MessageIndicatorBuffer messageIndicator;
+
+        public ParsedVoiceLduCache(IRadioMediaFrame traffic)
+        {
+            bool ldu1 = string.Equals(
+                traffic.Subtype,
+                "LDU1",
+                StringComparison.OrdinalIgnoreCase);
+            Span<byte> imbeSpan = imbe;
+            Span<bool> availableSpan = available;
+            IsValid = TryExtractImbeFrames(
+                traffic.Payload,
+                ldu1,
+                imbeSpan,
+                availableSpan);
+            if (!IsValid)
+                return;
+
+            Span<byte> messageIndicatorSpan = messageIndicator;
+            bool hasEncryptionMetadata = TryExtractEncryptionMetadataCore(
+                traffic.Payload,
+                ldu1,
+                availableSpan,
+                messageIndicatorSpan,
+                out byte algorithmId,
+                out ushort keyId);
+            Parsed = new P25ParsedLdu(
+                ldu1,
+                hasEncryptionMetadata,
+                algorithmId,
+                keyId);
+        }
+
+        public bool IsValid { get; }
+        public P25ParsedLdu Parsed { get; }
+
+        public bool IsCodewordAvailable(int index) => available[index];
+
+        public void CopyImbeTo(Span<byte> destination, Span<bool> availability)
+        {
+            ReadOnlySpan<byte> sourceImbe = imbe;
+            ReadOnlySpan<bool> sourceAvailability = available;
+            sourceImbe.CopyTo(destination);
+            sourceAvailability.CopyTo(availability);
+        }
+
+        public void CopyTo(
+            Span<byte> destination,
+            Span<bool> availability,
+            Span<byte> destinationMessageIndicator,
+            out P25ParsedLdu parsed)
+        {
+            CopyImbeTo(destination, availability);
+            ReadOnlySpan<byte> sourceMessageIndicator = messageIndicator;
+            sourceMessageIndicator.CopyTo(destinationMessageIndicator);
+            parsed = Parsed;
+        }
+
+        public byte[] CopyMessageIndicator()
+        {
+            ReadOnlySpan<byte> source = messageIndicator;
+            return source.ToArray();
+        }
+    }
+
     private static bool IsVoiceLdu(IRadioMediaFrame traffic)
     {
         return string.Equals(traffic.FrameType, "VOICE", StringComparison.OrdinalIgnoreCase) &&
@@ -366,20 +560,19 @@ public static class P25DfsiFrameCodec
         return payload;
     }
 
-    private static void WriteRecord(
+    private static Span<byte> WriteRecord(
         byte[] payload,
         int offset,
         int length,
         byte frameType,
         ReadOnlySpan<byte> imbe,
-        int imbeOffset,
-        Action<byte[]>? initialize)
+        int imbeOffset)
     {
-        byte[] record = new byte[length];
+        Span<byte> record = payload.AsSpan(offset, length);
+        record.Clear();
         record[0] = frameType;
-        initialize?.Invoke(record);
-        imbe.CopyTo(record.AsSpan(imbeOffset, CodewordBytes));
-        record.CopyTo(payload, offset);
+        imbe.CopyTo(record.Slice(imbeOffset, CodewordBytes));
+        return record;
     }
 
     private static void ValidateImbe(ReadOnlySpan<byte> imbe)
@@ -394,7 +587,7 @@ public static class P25DfsiFrameCodec
             throw new ArgumentException($"Unsupported P25 encryption algorithm 0x{metadata.AlgorithmId:X2}.", nameof(metadata));
         if (metadata.KeyId == 0)
             throw new ArgumentOutOfRangeException(nameof(metadata), "P25 encryption key ID must be non-zero.");
-        if (metadata.MessageIndicator is null || metadata.MessageIndicator.Length < P25Defines.P25_MI_LENGTH)
+        if (metadata.MessageIndicator.Length < P25Defines.P25_MI_LENGTH)
             throw new ArgumentException("P25 encryption metadata requires a 9-byte message indicator.", nameof(metadata));
     }
 
@@ -405,7 +598,8 @@ public static class P25DfsiFrameCodec
         payload[181] = metadata.AlgorithmId;
         payload[182] = (byte)(metadata.KeyId >> 8);
         payload[183] = (byte)metadata.KeyId;
-        metadata.MessageIndicator.AsSpan(0, P25Defines.P25_MI_LENGTH).CopyTo(payload.AsSpan(184, P25Defines.P25_MI_LENGTH));
+        metadata.MessageIndicator.Span[..P25Defines.P25_MI_LENGTH]
+            .CopyTo(payload.AsSpan(184, P25Defines.P25_MI_LENGTH));
     }
 
     private static void WriteClearEncryptionHeader(byte[] payload)
@@ -425,7 +619,7 @@ public static class P25DfsiFrameCodec
             throw new ArgumentOutOfRangeException(nameof(destinationId));
     }
 
-    private static void WriteThreeBytes(byte[] target, int offset, uint value)
+    private static void WriteThreeBytes(Span<byte> target, int offset, uint value)
     {
         target[offset] = (byte)(value >> 16);
         target[offset + 1] = (byte)(value >> 8);

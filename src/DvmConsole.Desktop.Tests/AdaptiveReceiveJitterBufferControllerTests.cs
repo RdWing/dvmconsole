@@ -1,5 +1,9 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Diagnostics;
 using DvmConsole.Application;
+using DvmConsole.Core.Runtime;
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using Xunit;
@@ -48,7 +52,7 @@ public sealed class AdaptiveReceiveJitterBufferControllerTests
 
         ReceiveJitterBufferProfile profile = controller.GetProfile(
             "Alpha",
-            FneTrafficProtocol.P25,
+            RadioMediaProtocol.P25,
             configuration);
 
         Assert.Equal(TimeSpan.FromMilliseconds(720), profile.TargetDelay);
@@ -62,13 +66,13 @@ public sealed class AdaptiveReceiveJitterBufferControllerTests
         ReceiveJitterBufferConfiguration configuration = CreateDmrConfiguration();
         long start = Stopwatch.GetTimestamp();
 
-        controller.Observe("Alpha", CreateDmrTraffic(10, 10, start), configuration);
-        controller.Observe("Alpha", CreateDmrTraffic(10, 11, Add(start, 60)), configuration);
-        controller.Observe("Alpha", CreateDmrTraffic(10, 12, Add(start, 620)), configuration);
+        Observe(controller, configuration, CreateDmrTraffic(10, 10, start));
+        Observe(controller, configuration, CreateDmrTraffic(10, 11, Add(start, 60)));
+        Observe(controller, configuration, CreateDmrTraffic(10, 12, Add(start, 620)));
 
         ReceiveJitterBufferProfile profile = controller.GetProfile(
             "Alpha",
-            FneTrafficProtocol.Dmr,
+            RadioMediaProtocol.Dmr,
             configuration);
         Assert.Equal(TimeSpan.FromMilliseconds(540), profile.TargetDelay);
         Assert.True(profile.IsAdaptive);
@@ -81,12 +85,12 @@ public sealed class AdaptiveReceiveJitterBufferControllerTests
         ReceiveJitterBufferConfiguration configuration = CreateDmrConfiguration();
         long start = Stopwatch.GetTimestamp();
 
-        controller.Observe("Alpha", CreateDmrTraffic(10, 10, start), configuration);
-        controller.Observe("Alpha", CreateDmrTraffic(10, 12, Add(start, 120)), configuration);
+        Observe(controller, configuration, CreateDmrTraffic(10, 10, start));
+        Observe(controller, configuration, CreateDmrTraffic(10, 12, Add(start, 120)));
 
         ReceiveJitterBufferProfile profile = controller.GetProfile(
             "Alpha",
-            FneTrafficProtocol.Dmr,
+            RadioMediaProtocol.Dmr,
             configuration);
         Assert.Equal(TimeSpan.Zero, profile.TargetDelay);
     }
@@ -98,13 +102,13 @@ public sealed class AdaptiveReceiveJitterBufferControllerTests
         ReceiveJitterBufferConfiguration configuration = CreateDmrConfiguration();
         long start = Stopwatch.GetTimestamp();
 
-        controller.Observe("Alpha", CreateDmrTraffic(10, 10, start), configuration);
-        controller.Observe("Alpha", CreateDmrTraffic(10, 12, Add(start, 120)), configuration);
-        controller.Observe("Alpha", CreateDmrTraffic(10, 11, Add(start, 250)), configuration);
+        Observe(controller, configuration, CreateDmrTraffic(10, 10, start));
+        Observe(controller, configuration, CreateDmrTraffic(10, 12, Add(start, 120)));
+        Observe(controller, configuration, CreateDmrTraffic(10, 11, Add(start, 250)));
 
         Assert.Equal(
             TimeSpan.FromMilliseconds(240),
-            controller.GetProfile("Alpha", FneTrafficProtocol.Dmr, configuration).TargetDelay);
+            controller.GetProfile("Alpha", RadioMediaProtocol.Dmr, configuration).TargetDelay);
     }
 
     [Fact]
@@ -114,13 +118,13 @@ public sealed class AdaptiveReceiveJitterBufferControllerTests
         ReceiveJitterBufferConfiguration configuration = CreateDmrConfiguration();
         long start = Stopwatch.GetTimestamp();
 
-        controller.Observe("Alpha", CreateDmrTraffic(10, ushort.MaxValue - 1, start), configuration);
-        controller.Observe("Alpha", CreateDmrTraffic(10, 0, Add(start, 60)), configuration);
-        controller.Observe("Alpha", CreateDmrTraffic(10, 1, Add(start, 120)), configuration);
+        Observe(controller, configuration, CreateDmrTraffic(10, ushort.MaxValue - 1, start));
+        Observe(controller, configuration, CreateDmrTraffic(10, 0, Add(start, 60)));
+        Observe(controller, configuration, CreateDmrTraffic(10, 1, Add(start, 120)));
 
         Assert.Equal(
             TimeSpan.Zero,
-            controller.GetProfile("Alpha", FneTrafficProtocol.Dmr, configuration).TargetDelay);
+            controller.GetProfile("Alpha", RadioMediaProtocol.Dmr, configuration).TargetDelay);
     }
 
     [Fact]
@@ -133,18 +137,18 @@ public sealed class AdaptiveReceiveJitterBufferControllerTests
             ReceiveJitterBufferPolicy.GetConfiguration(FneTrafficProtocol.P25, p25Settings);
         long start = Stopwatch.GetTimestamp();
 
-        controller.Observe("Alpha", CreateDmrTraffic(10, 10, start), dmr);
-        controller.Observe("Alpha", CreateDmrTraffic(10, 11, Add(start, 190)), dmr);
+        Observe(controller, dmr, CreateDmrTraffic(10, 10, start));
+        Observe(controller, dmr, CreateDmrTraffic(10, 11, Add(start, 190)));
 
         Assert.Equal(
             TimeSpan.FromMilliseconds(180),
-            controller.GetProfile("Alpha", FneTrafficProtocol.Dmr, dmr).TargetDelay);
+            controller.GetProfile("Alpha", RadioMediaProtocol.Dmr, dmr).TargetDelay);
         Assert.Equal(
             TimeSpan.Zero,
-            controller.GetProfile("Beta", FneTrafficProtocol.Dmr, dmr).TargetDelay);
+            controller.GetProfile("Beta", RadioMediaProtocol.Dmr, dmr).TargetDelay);
         Assert.Equal(
             TimeSpan.Zero,
-            controller.GetProfile("Alpha", FneTrafficProtocol.P25, p25).TargetDelay);
+            controller.GetProfile("Alpha", RadioMediaProtocol.P25, p25).TargetDelay);
     }
 
     [Fact]
@@ -157,7 +161,7 @@ public sealed class AdaptiveReceiveJitterBufferControllerTests
         ObserveCall(controller, configuration, streamId: 1, start, secondPacketDelayMilliseconds: 190);
         Assert.Equal(
             TimeSpan.FromMilliseconds(180),
-            controller.GetProfile("Alpha", FneTrafficProtocol.Dmr, configuration).TargetDelay);
+            controller.GetProfile("Alpha", RadioMediaProtocol.Dmr, configuration).TargetDelay);
 
         for (uint streamId = 2; streamId <= 3; streamId++)
         {
@@ -166,13 +170,13 @@ public sealed class AdaptiveReceiveJitterBufferControllerTests
         }
         Assert.Equal(
             TimeSpan.FromMilliseconds(180),
-            controller.GetProfile("Alpha", FneTrafficProtocol.Dmr, configuration).TargetDelay);
+            controller.GetProfile("Alpha", RadioMediaProtocol.Dmr, configuration).TargetDelay);
 
         start = Add(start, 1_000);
         ObserveCall(controller, configuration, streamId: 4, start, secondPacketDelayMilliseconds: 60);
         Assert.Equal(
             TimeSpan.FromMilliseconds(120),
-            controller.GetProfile("Alpha", FneTrafficProtocol.Dmr, configuration).TargetDelay);
+            controller.GetProfile("Alpha", RadioMediaProtocol.Dmr, configuration).TargetDelay);
 
         for (uint streamId = 5; streamId <= 7; streamId++)
         {
@@ -181,7 +185,7 @@ public sealed class AdaptiveReceiveJitterBufferControllerTests
         }
         Assert.Equal(
             TimeSpan.FromMilliseconds(60),
-            controller.GetProfile("Alpha", FneTrafficProtocol.Dmr, configuration).TargetDelay);
+            controller.GetProfile("Alpha", RadioMediaProtocol.Dmr, configuration).TargetDelay);
 
         for (uint streamId = 8; streamId <= 10; streamId++)
         {
@@ -190,7 +194,7 @@ public sealed class AdaptiveReceiveJitterBufferControllerTests
         }
         Assert.Equal(
             TimeSpan.Zero,
-            controller.GetProfile("Alpha", FneTrafficProtocol.Dmr, configuration).TargetDelay);
+            controller.GetProfile("Alpha", RadioMediaProtocol.Dmr, configuration).TargetDelay);
     }
 
     private static void ObserveCall(
@@ -200,15 +204,19 @@ public sealed class AdaptiveReceiveJitterBufferControllerTests
         long start,
         int secondPacketDelayMilliseconds)
     {
-        controller.Observe("Alpha", CreateDmrTraffic(streamId, 10, start), configuration);
-        controller.Observe(
-            "Alpha",
-            CreateDmrTraffic(streamId, 11, Add(start, secondPacketDelayMilliseconds)),
-            configuration);
-        controller.Observe(
-            "Alpha",
-            CreateDmrTraffic(streamId, ushort.MaxValue, Add(start, secondPacketDelayMilliseconds + 1), terminator: true),
-            configuration);
+        Observe(controller, configuration, CreateDmrTraffic(streamId, 10, start));
+        Observe(
+            controller,
+            configuration,
+            CreateDmrTraffic(streamId, 11, Add(start, secondPacketDelayMilliseconds)));
+        Observe(
+            controller,
+            configuration,
+            CreateDmrTraffic(
+                streamId,
+                ushort.MaxValue,
+                Add(start, secondPacketDelayMilliseconds + 1),
+                terminator: true));
     }
 
     private static ReceiveJitterBufferConfiguration CreateDmrConfiguration()
@@ -235,6 +243,16 @@ public sealed class AdaptiveReceiveJitterBufferControllerTests
             payload: [],
             fneBoundaryTimestamp: transportTimestamp + 1,
             transportIngressTimestamp: transportTimestamp);
+
+    private static void Observe(
+        AdaptiveReceiveJitterBufferController controller,
+        ReceiveJitterBufferConfiguration configuration,
+        FneTrafficFrame traffic)
+        => controller.Observe(
+            "Alpha",
+            traffic,
+            traffic.TransportIngressTimestamp,
+            configuration);
 
     private static long Add(long timestamp, int milliseconds)
         => timestamp + (long)Math.Round(

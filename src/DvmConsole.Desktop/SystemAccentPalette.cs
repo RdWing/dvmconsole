@@ -1,19 +1,22 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Media;
 
 namespace DvmConsole.Desktop;
 
 internal static class SystemAccentPalette
 {
-    private static readonly Color[] Colors =
+    private static readonly string[] Colors =
     [
-        Color.Parse("#38BDF8"),
-        Color.Parse("#F97316"),
-        Color.Parse("#A78BFA"),
-        Color.Parse("#22C55E"),
-        Color.Parse("#F43F5E"),
-        Color.Parse("#EAB308"),
-        Color.Parse("#14B8A6"),
-        Color.Parse("#EC4899")
+        "#38BDF8",
+        "#F97316",
+        "#A78BFA",
+        "#22C55E",
+        "#F43F5E",
+        "#EAB308",
+        "#14B8A6",
+        "#EC4899"
     ];
 
     public static IBrush GetBrush(int systemIndex)
@@ -21,6 +24,6 @@ internal static class SystemAccentPalette
         if (systemIndex < 0)
             throw new ArgumentOutOfRangeException(nameof(systemIndex));
 
-        return new SolidColorBrush(Colors[systemIndex % Colors.Length]);
+        return SolidBrushCache.Get(Colors[systemIndex % Colors.Length]);
     }
 }

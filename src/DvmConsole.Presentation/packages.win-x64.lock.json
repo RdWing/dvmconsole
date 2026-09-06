@@ -1,0 +1,134 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Avalonia": {
+        "type": "Direct",
+        "requested": "[11.3.18, )",
+        "resolved": "11.3.18",
+        "contentHash": "2C4UxhWUObWGgYKWic1x5BMMWGJP6SElb91WeOxs+X/iR26rtkqpxFFwwo50FXS9AyYnHfk8QKXDEfe7oT/kZA==",
+        "dependencies": {
+          "Avalonia.BuildServices": "11.3.2",
+          "Avalonia.Remote.Protocol": "11.3.18",
+          "MicroCom.Runtime": "0.11.0"
+        }
+      },
+      "Avalonia.Themes.Fluent": {
+        "type": "Direct",
+        "requested": "[11.3.18, )",
+        "resolved": "11.3.18",
+        "contentHash": "+Q/TJoynD0zNuu5w2gD+xcTl7GNKJFxlPYAndRLs/mTDrNbbsvv/271WyIysbMPsXSjCyBDp7RCZzQkpD6x5Bg==",
+        "dependencies": {
+          "Avalonia": "11.3.18"
+        }
+      },
+      "Microsoft.NET.ILLink.Tasks": {
+        "type": "Direct",
+        "requested": "[10.0.11, )",
+        "resolved": "10.0.11",
+        "contentHash": "IBf7lbovvjGWVWXZX5cJ/cO0WXbId0Zq4BuSeT94mGZuOAP66oMeH9PTBZ9Jpp3Jb6jtK0qm/NyUbPRo1gC/wQ=="
+      },
+      "Avalonia.BuildServices": {
+        "type": "Transitive",
+        "resolved": "11.3.2",
+        "contentHash": "qHDToxto1e3hci5YqbG9n0Ty8mlp3zBUN5wT66wKqaDVzXyQ0do3EnRILd4Ke9jpvsktaPpgE0YjEk7hornryQ=="
+      },
+      "Avalonia.Remote.Protocol": {
+        "type": "Transitive",
+        "resolved": "11.3.18",
+        "contentHash": "vw+6ZfgTuu72dA9aVWn6u56t2nrBd5MoMU0wo/qI9XJAl/c0oYYphIvwLvJP1JorubQY4UE3d0ac8ULBhrGBiA=="
+      },
+      "Concentus": {
+        "type": "Transitive",
+        "resolved": "2.2.2",
+        "contentHash": "2B9YmHPKO+k7YpAAnqmiXwiMJnfjfj1C868RszOll2iZWLnGTAiC1q21L/d7CvTan7T+hyqU8dR0Dcy3cpjVfQ=="
+      },
+      "Concentus.Oggfile": {
+        "type": "Transitive",
+        "resolved": "1.0.7",
+        "contentHash": "rKWtI5oiTWqK2ol1aWvIT1BRTPi07Uo1hAet0ysQoZQqFo/mxBRwr+ERw89fIdkL3tbMf3ncoW7b3HDGx8Sk4g==",
+        "dependencies": {
+          "Concentus": "2.2.2"
+        }
+      },
+      "MicroCom.Runtime": {
+        "type": "Transitive",
+        "resolved": "0.11.0",
+        "contentHash": "MEnrZ3UIiH40hjzMDsxrTyi8dtqB5ziv3iBeeU4bXsL/7NLSal9F1lZKpK+tfBRnUoDSdtcW3KufE4yhATOMCA=="
+      },
+      "NLayer": {
+        "type": "Transitive",
+        "resolved": "3.0.0",
+        "contentHash": "aQrCT93NjIrJNXA7wiTSHMp9OUhGNb8YTJAwnsx2FtaNdAe74vwfguFExf6QFNU72XhNPb/bLAcdMbxvaNZgWg=="
+      },
+      "SharpZipLib": {
+        "type": "Transitive",
+        "resolved": "1.4.2",
+        "contentHash": "yjj+3zgz8zgXpiiC3ZdF/iyTBbz2fFvMxZFEBPUcwZjIvXOf37Ylm+K58hqMfIBt5JgU/Z2uoUS67JmTLe973A=="
+      },
+      "YamlDotNet": {
+        "type": "Transitive",
+        "resolved": "16.2.0",
+        "contentHash": "iKVYog7JNiFOTr4gMHSjCqrGFD2NyABUHgSkRq9XR8A2+fsWepSWTpjHAOnKo1LVAHjy33o6I0u6lo5Ng0NtAw=="
+      },
+      "dvmconsole.application": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Core": "[0.7.0, )",
+          "DvmConsole.Core": "[0.7.0, )",
+          "DvmConsole.Media": "[0.7.0, )",
+          "DvmConsole.Operations": "[0.7.0, )",
+          "DvmConsole.Ptt.Abstractions": "[0.7.0, )",
+          "DvmConsole.Vocoder.Abstractions": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.audio.abstractions": {
+        "type": "Project"
+      },
+      "dvmconsole.audio.core": {
+        "type": "Project",
+        "dependencies": {
+          "Concentus.Oggfile": "[1.0.7, )",
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "NLayer": "[3.0.0, )"
+        }
+      },
+      "dvmconsole.core": {
+        "type": "Project",
+        "dependencies": {
+          "YamlDotNet": "[16.2.0, )"
+        }
+      },
+      "dvmconsole.fne": {
+        "type": "Project",
+        "dependencies": {
+          "SharpZipLib": "[1.4.2, )"
+        }
+      },
+      "dvmconsole.media": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Core": "[0.7.0, )",
+          "DvmConsole.Core": "[0.7.0, )",
+          "DvmConsole.Fne": "[0.7.0, )",
+          "DvmConsole.Vocoder.Abstractions": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.operations": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Core": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.ptt.abstractions": {
+        "type": "Project"
+      },
+      "dvmconsole.vocoder.abstractions": {
+        "type": "Project"
+      }
+    },
+    "net10.0/win-x64": {}
+  }
+}

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Runtime;
 using DvmConsole.Vocoder;
 
@@ -25,7 +28,57 @@ public sealed class PatchTransmitSession : IDisposable
         Action<ReadOnlyMemory<byte>, ushort, uint> send,
         P25TxEncryptionOptions? p25Encryption = null,
         DmrPrivacyOptions? dmrPrivacy = null,
+        NxdnPrivacyOptions? nxdnPrivacy = null,
+        TimeProvider? timeProvider = null)
+        : this(
+            target,
+            sourceId,
+            streamId,
+            vocoder,
+            send,
+            p25Encryption,
+            dmrPrivacy,
+            nxdnPrivacy,
+            waitForNextPacket: null,
+            timeProvider)
+    {
+    }
+
+    internal PatchTransmitSession(
+        ChannelRuntimeDefinition target,
+        uint sourceId,
+        uint streamId,
+        IVocoderSession? vocoder,
+        Action<ReadOnlyMemory<byte>, ushort, uint> send,
+        Func<CancellationToken, ValueTask> waitForNextPacket,
+        P25TxEncryptionOptions? p25Encryption = null,
+        DmrPrivacyOptions? dmrPrivacy = null,
         NxdnPrivacyOptions? nxdnPrivacy = null)
+        : this(
+            target,
+            sourceId,
+            streamId,
+            vocoder,
+            send,
+            p25Encryption,
+            dmrPrivacy,
+            nxdnPrivacy,
+            waitForNextPacket ?? throw new ArgumentNullException(nameof(waitForNextPacket)),
+            timeProvider: null)
+    {
+    }
+
+    private PatchTransmitSession(
+        ChannelRuntimeDefinition target,
+        uint sourceId,
+        uint streamId,
+        IVocoderSession? vocoder,
+        Action<ReadOnlyMemory<byte>, ushort, uint> send,
+        P25TxEncryptionOptions? p25Encryption,
+        DmrPrivacyOptions? dmrPrivacy,
+        NxdnPrivacyOptions? nxdnPrivacy,
+        Func<CancellationToken, ValueTask>? waitForNextPacket,
+        TimeProvider? timeProvider)
     {
         this.target = target ?? throw new ArgumentNullException(nameof(target));
         ArgumentNullException.ThrowIfNull(send);
@@ -48,20 +101,79 @@ public sealed class PatchTransmitSession : IDisposable
         {
             case "dmr":
                 ArgumentNullException.ThrowIfNull(vocoder);
-                dmr = new DmrTxCallSession(
-                    sourceId, target.DestinationId, target.Slot, streamId, vocoder, send, privacy: dmrPrivacy);
+                dmr = waitForNextPacket is not null
+                    ? new DmrTxCallSession(
+                        sourceId,
+                        target.DestinationId,
+                        target.Slot,
+                        streamId,
+                        vocoder,
+                        send,
+                        waitForNextPacket,
+                        privacy: dmrPrivacy)
+                    : timeProvider is not null
+                        ? new DmrTxCallSession(
+                            sourceId,
+                            target.DestinationId,
+                            target.Slot,
+                            streamId,
+                            vocoder,
+                            send,
+                            timeProvider,
+                            privacy: dmrPrivacy)
+                        : new DmrTxCallSession(
+                            sourceId, target.DestinationId, target.Slot, streamId, vocoder, send, privacy: dmrPrivacy);
                 break;
             case "p25":
                 ArgumentNullException.ThrowIfNull(vocoder);
-                p25 = new P25TxCallSession(sourceId, target.DestinationId, streamId, vocoder, send, p25Encryption);
+                p25 = waitForNextPacket is not null
+                    ? new P25TxCallSession(
+                        sourceId,
+                        target.DestinationId,
+                        streamId,
+                        vocoder,
+                        send,
+                        waitForNextPacket,
+                        p25Encryption)
+                    : timeProvider is not null
+                        ? new P25TxCallSession(
+                            sourceId,
+                            target.DestinationId,
+                            streamId,
+                            vocoder,
+                            send,
+                            timeProvider,
+                            p25Encryption)
+                        : new P25TxCallSession(
+                            sourceId, target.DestinationId, streamId, vocoder, send, p25Encryption);
                 break;
             case "analog":
                 analog = new AnalogTxAudioSession(sourceId, target.DestinationId, streamId, send);
                 break;
             case "nxdn":
                 ArgumentNullException.ThrowIfNull(vocoder);
-                nxdn = new NxdnTxCallSession(
-                    sourceId, target.DestinationId, true, streamId, vocoder, send, nxdnPrivacy);
+                nxdn = waitForNextPacket is not null
+                    ? new NxdnTxCallSession(
+                        sourceId,
+                        target.DestinationId,
+                        true,
+                        streamId,
+                        vocoder,
+                        send,
+                        waitForNextPacket,
+                        nxdnPrivacy)
+                    : timeProvider is not null
+                        ? new NxdnTxCallSession(
+                            sourceId,
+                            target.DestinationId,
+                            true,
+                            streamId,
+                            vocoder,
+                            send,
+                            timeProvider,
+                            nxdnPrivacy)
+                        : new NxdnTxCallSession(
+                            sourceId, target.DestinationId, true, streamId, vocoder, send, nxdnPrivacy);
                 break;
             default:
                 throw new ArgumentException($"Unsupported patch target mode '{target.Mode}'.", nameof(target));

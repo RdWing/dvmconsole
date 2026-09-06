@@ -1,5 +1,9 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.FneClient;
 using fnecore;
+using System.Diagnostics;
 using System.Net;
 using Xunit;
 
@@ -29,6 +33,34 @@ public sealed class FnePeerSessionFactoryTests
         session.Stop();
         session.Stop();
 
+        Assert.True(lifetime.IsStopped);
+        Assert.False(peer.IsStarted);
+    }
+
+    [Fact]
+    public void StartedPeerSessionStopsPromptlyWithoutCancellingUpstreamAsyncVoidListeners()
+    {
+        var lifetime = new FneTransportLifetime();
+        FnePeer peer;
+        using (FneTransportSessionContext.Use(
+                   FneTransportEncryptionMode.Auto,
+                   new FneTransportObservers(null, null, null),
+                   lifetime))
+        {
+            peer = new FnePeer(
+                "TEST",
+                1,
+                new IPEndPoint(IPAddress.Loopback, 62032));
+        }
+
+        peer.Logger = (_, _) => { };
+        var session = new FnePeerSession(peer, lifetime);
+        session.Start();
+        var stopwatch = Stopwatch.StartNew();
+
+        session.Stop();
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), stopwatch.Elapsed.ToString());
         Assert.True(lifetime.IsStopped);
         Assert.False(peer.IsStarted);
     }

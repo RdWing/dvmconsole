@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections.Concurrent;
 using DvmConsole.Audio;
 using DvmConsole.Core.Runtime;
@@ -18,6 +21,94 @@ internal readonly record struct ReceiveStreamProcessResult(
     int FramesDecoded,
     bool? Encrypted);
 
+internal readonly record struct ReceiveAudioHotPathDiagnostics(
+    long LinkedCancellationSourceCreations,
+    long CompletedStreamExpiryScans);
+
+internal interface IReceiveAudioBackendPort
+{
+    IAudioBackend CreateAudioBackend();
+    IVocoderBackend CreateVocoderBackend();
+}
+
+internal interface IReceiveAudioRoutePolicy
+{
+    double GetGain(ChannelId channelId);
+    double GetBalance(ChannelId channelId);
+    string? GetOutputDeviceId(ChannelId channelId);
+}
+
+internal interface IReceiveAudioKeyPort
+{
+    IP25KeyResolver? P25 { get; }
+    IDmrKeyResolver? Dmr { get; }
+    INxdnKeyResolver? Nxdn { get; }
+    DmrReceiveKeyPolicy GetDmrReceiveKeyPolicy();
+}
+
+internal interface IReceiveAudioPresentationPort
+{
+    void ObserveDecoded(
+        ChannelId channelId,
+        uint streamId,
+        uint sourceId,
+        ReadOnlyMemory<short> samples);
+
+    void ObservePresented(
+        ChannelId channelId,
+        uint streamId,
+        ReadOnlyMemory<short> samples,
+        TimeSpan duration);
+}
+
+internal sealed class ReceiveAudioBackendPort(
+    Func<IAudioBackend> createAudioBackend,
+    Func<IVocoderBackend> createVocoderBackend) : IReceiveAudioBackendPort
+{
+    public IAudioBackend CreateAudioBackend() => createAudioBackend();
+    public IVocoderBackend CreateVocoderBackend() => createVocoderBackend();
+}
+
+internal sealed class ReceiveAudioRoutePolicy(
+    Func<ChannelId, double>? getGain = null,
+    Func<ChannelId, double>? getBalance = null,
+    Func<ChannelId, string?>? getOutputDeviceId = null) : IReceiveAudioRoutePolicy
+{
+    public double GetGain(ChannelId channelId) => getGain?.Invoke(channelId) ?? 1.0;
+    public double GetBalance(ChannelId channelId) => getBalance?.Invoke(channelId) ?? 0.0;
+    public string? GetOutputDeviceId(ChannelId channelId) => getOutputDeviceId?.Invoke(channelId);
+}
+
+internal sealed record ReceiveAudioKeyPort(
+    IP25KeyResolver? P25,
+    IDmrKeyResolver? Dmr,
+    INxdnKeyResolver? Nxdn,
+    Func<DmrReceiveKeyPolicy>? Policy = null) : IReceiveAudioKeyPort
+{
+    public DmrReceiveKeyPolicy GetDmrReceiveKeyPolicy()
+        => Policy?.Invoke() ?? DmrReceiveKeyPolicy.OnAirMetadata;
+}
+
+internal sealed class ReceiveAudioPresentationPort(
+    Action<ChannelId, uint, uint, ReadOnlyMemory<short>>? decoded = null,
+    Action<ChannelId, uint, ReadOnlyMemory<short>, TimeSpan>? presented = null)
+    : IReceiveAudioPresentationPort
+{
+    public void ObserveDecoded(
+        ChannelId channelId,
+        uint streamId,
+        uint sourceId,
+        ReadOnlyMemory<short> samples)
+        => decoded?.Invoke(channelId, streamId, sourceId, samples);
+
+    public void ObservePresented(
+        ChannelId channelId,
+        uint streamId,
+        ReadOnlyMemory<short> samples,
+        TimeSpan duration)
+        => presented?.Invoke(channelId, streamId, samples, duration);
+}
+
 // Owns explicitly selected receive-audio channels. DMR/P25/NXDN/analog sessions
 // share one output stream through a fixed-rate PCM mixer, and the coordinator
 // serializes traffic processing within each channel while allowing different
@@ -25,21 +116,18 @@ internal readonly record struct ReceiveStreamProcessResult(
 // Audio devices and the vocoder are created only when Listen is used.
 public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 {
+    private static readonly TimeSpan RetirementGracePeriod = TimeSpan.FromMilliseconds(250);
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly SemaphoreSlim recoveryGate = new(1, 1);
     private readonly object playbackPolicySync = new();
     private readonly ConcurrentDictionary<ChannelId, ReceiveStreamSessionRegistry> sessions = [];
     private readonly ReceiveAudioRouteRegistry routeRegistry = new();
-    private readonly Func<IAudioBackend> createAudioBackend;
-    private readonly Func<IVocoderBackend> createVocoderBackend;
-    private readonly Func<ChannelId, double>? getChannelGain;
-    private readonly Func<ChannelId, double>? getChannelBalance;
-    private readonly Func<ChannelId, string?>? getOutputDeviceId;
+    private readonly IReceiveAudioBackendPort backendPort;
+    private readonly IReceiveAudioRoutePolicy routePolicy;
     private readonly ReceiveSessionFactory receiveSessionFactory;
     private readonly IClock clock;
     private readonly TimeProvider timeProvider;
-    private readonly Action<ChannelId, uint, ReadOnlyMemory<short>, TimeSpan>?
-        presentationSamplesObserver;
+    private readonly IReceiveAudioPresentationPort presentationPort;
     private Func<ChannelId, IRadioMediaFrame, ReceivePlaybackEpisode> playbackEpisodeResolver =
         static (_, traffic) => new ReceivePlaybackEpisode(
             traffic.StreamId,
@@ -52,6 +140,8 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     private bool operatorOutputMuted;
     private bool disposed;
     private TaskCompletionSource? disposeCompletion;
+    private readonly object retirementSync = new();
+    private readonly HashSet<Task> retiredSessionDisposals = [];
 
     public ChannelReceiveAudioCoordinator(
         Func<IAudioBackend> createAudioBackend,
@@ -66,21 +156,44 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         Action<ChannelId, uint, ReadOnlyMemory<short>, TimeSpan>?
             presentationSamplesObserver = null,
         IClock? clock = null,
+        TimeProvider? timeProvider = null,
+        Func<DmrReceiveKeyPolicy>? getDmrReceiveKeyPolicy = null)
+        : this(
+            new ReceiveAudioBackendPort(
+                createAudioBackend ?? throw new ArgumentNullException(nameof(createAudioBackend)),
+                createVocoderBackend ?? throw new ArgumentNullException(nameof(createVocoderBackend))),
+            new ReceiveAudioRoutePolicy(getChannelGain, getChannelBalance, getOutputDeviceId),
+            new ReceiveAudioKeyPort(
+                p25KeyResolver,
+                dmrKeyResolver,
+                nxdnKeyResolver,
+                getDmrReceiveKeyPolicy),
+            new ReceiveAudioPresentationPort(samplesObserver, presentationSamplesObserver),
+            clock,
+            timeProvider)
+    {
+    }
+
+    internal ChannelReceiveAudioCoordinator(
+        IReceiveAudioBackendPort backendPort,
+        IReceiveAudioRoutePolicy routePolicy,
+        IReceiveAudioKeyPort keyPort,
+        IReceiveAudioPresentationPort presentationPort,
+        IClock? clock = null,
         TimeProvider? timeProvider = null)
     {
-        this.createAudioBackend = createAudioBackend ?? throw new ArgumentNullException(nameof(createAudioBackend));
-        this.createVocoderBackend = createVocoderBackend ?? throw new ArgumentNullException(nameof(createVocoderBackend));
-        this.getChannelGain = getChannelGain;
-        this.getChannelBalance = getChannelBalance;
-        this.getOutputDeviceId = getOutputDeviceId;
-        this.presentationSamplesObserver = presentationSamplesObserver;
+        this.backendPort = backendPort ?? throw new ArgumentNullException(nameof(backendPort));
+        this.routePolicy = routePolicy ?? throw new ArgumentNullException(nameof(routePolicy));
+        ArgumentNullException.ThrowIfNull(keyPort);
+        this.presentationPort = presentationPort ?? throw new ArgumentNullException(nameof(presentationPort));
         this.clock = clock ?? SystemClock.Instance;
         this.timeProvider = timeProvider ?? TimeProvider.System;
         receiveSessionFactory = new ReceiveSessionFactory(
-            p25KeyResolver,
-            dmrKeyResolver,
-            nxdnKeyResolver,
-            samplesObserver);
+            keyPort.P25,
+            keyPort.Dmr,
+            keyPort.Nxdn,
+            presentationPort.ObserveDecoded,
+            keyPort.GetDmrReceiveKeyPolicy);
     }
 
     internal void SetReceivePlaybackEpisodeResolver(
@@ -93,6 +206,10 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
     public IReadOnlyList<ChannelId> LivePlaybackChannels => activeChannels
         .Where(IsLivePlaybackEnabled)
         .ToArray();
+
+    // An opaque identity lets deferred recovery reject work for a replaced session.
+    internal object? GetSessionIdentity(ChannelId channelId)
+        => sessions.TryGetValue(channelId, out var session) ? session : null;
 
     public bool IsActive(ChannelId channelId)
     {
@@ -133,6 +250,11 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             ? state.GetPlaybackArbitrationDiagnostics()
             : default;
     }
+
+    internal ReceiveAudioHotPathDiagnostics GetHotPathDiagnostics(ChannelId channelId)
+        => sessions.TryGetValue(channelId, out ReceiveStreamSessionRegistry? state)
+            ? state.GetHotPathDiagnostics()
+            : default;
 
     public long SetLivePlaybackDiscarded(bool discarded)
     {
@@ -377,9 +499,9 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             {
                 IVocoderBackend? activeVocoder = ChannelVocoderPolicy.RequiresVocoder(
                     channel.Definition.Protocol)
-                    ? vocoderBackend ??= createdVocoder = createVocoderBackend()
+                    ? vocoderBackend ??= createdVocoder = backendPort.CreateVocoderBackend()
                     : null;
-                string? requestedDeviceId = getOutputDeviceId?.Invoke(channel.Id);
+                string? requestedDeviceId = routePolicy.GetOutputDeviceId(channel.Id);
                 bool followsSystemDefault = false;
                 ReceiveAudioRoute? activeRoute = requestedDeviceId is not null &&
                     AudioDeviceSelector.HasSpecificRequest(requestedDeviceId) &&
@@ -388,7 +510,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                     : null;
                 if (activeRoute is null)
                 {
-                    createdAudio = createAudioBackend();
+                    createdAudio = backendPort.CreateAudioBackend();
                     activeRoute = GetOrCreateRoute(
                         createdAudio,
                         requestedDeviceId,
@@ -400,12 +522,12 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                         createdAudio = null;
                     }
                 }
-                double gain = getChannelGain?.Invoke(channel.Id) ?? 1.0;
-                double balance = getChannelBalance?.Invoke(channel.Id) ?? 0.0;
+                double gain = routePolicy.GetGain(channel.Id);
+                double balance = routePolicy.GetBalance(channel.Id);
                 createdPlaybackPool = new ReceiveEpisodePlaybackPool(
                     channel,
                     activeRoute,
-                    presentationSamplesObserver);
+                    presentationPort.ObservePresented);
                 ReceiveEpisodePlaybackPool playbackPool = createdPlaybackPool;
                 createdStreamSession = await CreateStreamSessionAsync(
                     channel,
@@ -504,6 +626,18 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         ChannelId channelId,
         IRadioMediaFrame traffic,
         CancellationToken cancellationToken = default)
+        => await ProcessWithTimingAsync(
+                channelId,
+                traffic,
+                RadioFrameEncryptionResolver.TryResolve(traffic),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+    internal async Task<ReceiveAudioProcessTiming> ProcessWithTimingAsync(
+        ChannelId channelId,
+        IRadioMediaFrame traffic,
+        RadioFrameEncryption? encryption,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(traffic);
         ObjectDisposedException.ThrowIf(disposed, this);
@@ -525,7 +659,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             entered = true;
             long processingStarted = timeProvider.GetTimestamp();
             ReceiveStreamProcessResult result = await state
-                .ProcessAsync(traffic, cancellationToken)
+                .ProcessAsync(traffic, encryption, cancellationToken)
                 .ConfigureAwait(false);
             return new ReceiveAudioProcessTiming(
                 result.FramesDecoded,
@@ -587,7 +721,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             await state.ProcessGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                await state.CompleteEpisodeAsync(episodeId).ConfigureAwait(false);
+                await state.CompleteEpisodeAsync(episodeId, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -616,8 +750,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                 activeChannels = sessions.Keys.ToArray();
                 try
                 {
-                    await state.WaitForIdleAsync().ConfigureAwait(false);
-                    await state.DisposeAsync().ConfigureAwait(false);
+                    await RetireOrDisposeAsync(state, cancellationToken).ConfigureAwait(false);
                 }
                 catch (Exception exception)
                 {
@@ -781,8 +914,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         {
             try
             {
-                await state.WaitForIdleAsync().ConfigureAwait(false);
-                await state.DisposeAsync().ConfigureAwait(false);
+                await RetireOrDisposeAsync(state, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
@@ -826,6 +958,47 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 
         if (failure is not null)
             throw failure;
+    }
+
+    private async Task RetireOrDisposeAsync(
+        ReceiveStreamSessionRegistry state,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await state.WaitForIdleAsync()
+                .WaitAsync(RetirementGracePeriod, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is TimeoutException or OperationCanceledException)
+        {
+            TrackRetiredSession(DisposeWhenIdleAsync(state));
+            return;
+        }
+        await state.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private void TrackRetiredSession(Task disposal)
+    {
+        lock (retirementSync)
+            retiredSessionDisposals.Add(disposal);
+        _ = disposal.ContinueWith(
+            completed =>
+            {
+                lock (retirementSync)
+                    retiredSessionDisposals.Remove(completed);
+                _ = completed.Exception;
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private static async Task DisposeWhenIdleAsync(ReceiveStreamSessionRegistry state)
+    {
+        await state.WaitForIdleAsync().ConfigureAwait(false);
+        await state.DisposeAsync().ConfigureAwait(false);
     }
 
     private async Task DisposeRouteAsync(ReceiveAudioRoute route)
@@ -914,6 +1087,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         private static readonly TimeSpan CompletedStreamRetention = TimeSpan.FromSeconds(1);
         private readonly AsyncOperationLifetime operationLifetime = new();
         private readonly object streamSync = new();
+        private readonly CancellationTokenSource stopCancellation = new();
         private readonly Dictionary<uint, StreamSessionState> streams = [];
         private readonly ReceiveStreamLifecycle receiveLifecycle =
             ReceiveStreamLifecycle.CreateDefault();
@@ -928,6 +1102,11 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         private double gain;
         private double balance;
         private bool livePlaybackEnabled;
+        private CancellationToken processingLifetimeToken;
+        private CancellationTokenSource? processingCancellation;
+        private DateTimeOffset? nextCompletedStreamExpiry;
+        private long linkedCancellationSourceCreations;
+        private long completedStreamExpiryScans;
 
         public ReceiveStreamSessionRegistry(
             StreamSessionState initialStream,
@@ -968,8 +1147,11 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 
         public async ValueTask<ReceiveStreamProcessResult> ProcessAsync(
             IRadioMediaFrame traffic,
+            RadioFrameEncryption? encryption,
             CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            cancellationToken = GetProcessingCancellationToken(cancellationToken);
             DateTimeOffset now = clock.UtcNow;
             await RemoveExpiredCompletedStreamsAsync(now).ConfigureAwait(false);
             await CompleteExpiredStreamsAsync(now, cancellationToken).ConfigureAwait(false);
@@ -1000,9 +1182,8 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             StreamSessionState stream = await GetOrCreateStreamAsync(traffic.StreamId, now)
                 .ConfigureAwait(false);
 
-            if (RadioFrameEncryptionResolver.TryResolve(traffic) is
-                RadioFrameEncryption encryption)
-                stream.Encrypted = encryption.IsSecure;
+            if (encryption is RadioFrameEncryption resolvedEncryption)
+                stream.Encrypted = resolvedEncryption.IsSecure;
 
             stream.SampleContext.Set(traffic.StreamId, traffic.SourceId);
             stream.EpisodePlayback.Bind(playbackEpisodeResolver(channel.Id, traffic));
@@ -1034,38 +1215,42 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             }
         }
 
-        public ValueTask CompleteEpisodeAsync(long episodeId)
-            => playbackPool.CompleteEpisodeAsync(episodeId);
+        public ValueTask CompleteEpisodeAsync(
+            long episodeId,
+            CancellationToken cancellationToken)
+            => playbackPool.CompleteEpisodeAsync(episodeId, cancellationToken);
 
         public EpisodeLivePlayoutDiagnostics GetPlaybackArbitrationDiagnostics()
             => playbackPool.GetDiagnostics();
 
         public ReceiveAudioDiagnostics GetDiagnostics()
         {
-            StreamSessionState[] snapshot;
-            ReceiveAudioDiagnostics completed;
             lock (streamSync)
             {
-                snapshot = streams.Values
-                    .Concat(unboundStream is null ? [] : [unboundStream])
-                    .ToArray();
-                completed = completedDiagnostics;
-            }
+                int decoded = completedDiagnostics.FramesDecoded;
+                long lost = completedDiagnostics.LostPackets;
+                long late = completedDiagnostics.DuplicateOrLatePackets;
+                long malformed = completedDiagnostics.MalformedPackets;
+                foreach (StreamSessionState stream in streams.Values)
+                    Add(stream.Session.GetDiagnostics());
+                if (unboundStream is not null)
+                    Add(unboundStream.Session.GetDiagnostics());
+                return new ReceiveAudioDiagnostics(decoded, lost, late, malformed);
 
-            int decoded = completed.FramesDecoded;
-            long lost = completed.LostPackets;
-            long late = completed.DuplicateOrLatePackets;
-            long malformed = completed.MalformedPackets;
-            foreach (StreamSessionState stream in snapshot)
-            {
-                ReceiveAudioDiagnostics current = stream.Session.GetDiagnostics();
-                decoded = checked(decoded + current.FramesDecoded);
-                lost = checked(lost + current.LostPackets);
-                late = checked(late + current.DuplicateOrLatePackets);
-                malformed = checked(malformed + current.MalformedPackets);
+                void Add(ReceiveAudioDiagnostics current)
+                {
+                    decoded = checked(decoded + current.FramesDecoded);
+                    lost = checked(lost + current.LostPackets);
+                    late = checked(late + current.DuplicateOrLatePackets);
+                    malformed = checked(malformed + current.MalformedPackets);
+                }
             }
-            return new ReceiveAudioDiagnostics(decoded, lost, late, malformed);
         }
+
+        public ReceiveAudioHotPathDiagnostics GetHotPathDiagnostics()
+            => new(
+                Volatile.Read(ref linkedCancellationSourceCreations),
+                Volatile.Read(ref completedStreamExpiryScans));
 
         public bool IsTrackingStream(uint streamId)
         {
@@ -1155,7 +1340,11 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             => operationLifetime.Release();
 
         public void BeginStop()
-            => operationLifetime.BeginStop();
+        {
+            operationLifetime.BeginStop();
+            stopCancellation.Cancel();
+            playbackPool.SuppressOutput();
+        }
 
         public Task WaitForIdleAsync() => operationLifetime.WaitForIdleAsync();
 
@@ -1200,6 +1389,8 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                 failure ??= exception;
             }
             ProcessGate.Dispose();
+            processingCancellation?.Dispose();
+            stopCancellation.Dispose();
             if (failure is not null)
                 throw failure;
         }
@@ -1227,6 +1418,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                 {
                     streams.Remove(streamId);
                     AccumulateDiagnostics(existing);
+                    RecalculateNextCompletedStreamExpiryLocked();
                     evicted = existing;
                 }
                 else if (unboundStream is not null)
@@ -1346,26 +1538,83 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
 
             await stream.Session.CompletePlaybackAsync(cancellationToken).ConfigureAwait(false);
             lock (streamSync)
+            {
                 stream.CompletedAt = completedAt;
+                DateTimeOffset expiresAt = completedAt + CompletedStreamRetention;
+                if (nextCompletedStreamExpiry is null || expiresAt < nextCompletedStreamExpiry)
+                    nextCompletedStreamExpiry = expiresAt;
+            }
         }
 
         private async ValueTask RemoveExpiredCompletedStreamsAsync(DateTimeOffset now)
         {
-            StreamSessionState[] expired;
+            List<StreamSessionState>? expired = null;
             lock (streamSync)
             {
-                expired = streams.Values
-                    .Where(stream => stream.CompletedAt is DateTimeOffset completedAt &&
-                        now - completedAt >= CompletedStreamRetention)
-                    .ToArray();
-                foreach (StreamSessionState stream in expired)
+                if (nextCompletedStreamExpiry is null || now < nextCompletedStreamExpiry)
+                    return;
+
+                completedStreamExpiryScans++;
+
+                foreach (StreamSessionState stream in streams.Values)
                 {
-                    streams.Remove(stream.StreamId);
-                    AccumulateDiagnostics(stream);
+                    if (stream.CompletedAt is not DateTimeOffset completedAt ||
+                        now - completedAt < CompletedStreamRetention)
+                    {
+                        continue;
+                    }
+
+                    (expired ??= []).Add(stream);
                 }
+                if (expired is not null)
+                {
+                    foreach (StreamSessionState stream in expired)
+                    {
+                        streams.Remove(stream.StreamId);
+                        AccumulateDiagnostics(stream);
+                    }
+                }
+                RecalculateNextCompletedStreamExpiryLocked();
             }
+            if (expired is null)
+                return;
             foreach (StreamSessionState stream in expired)
                 await stream.DisposeAsync().ConfigureAwait(false);
+        }
+
+        // ProcessGate serializes calls, so a channel worker's lifetime token can
+        // be linked to the session stop token once and reused for every frame.
+        // A replacement worker gets a new token after the retired one cancels.
+        private CancellationToken GetProcessingCancellationToken(CancellationToken workerToken)
+        {
+            if (!workerToken.CanBeCanceled)
+                return stopCancellation.Token;
+            if (processingCancellation is not null && processingLifetimeToken == workerToken)
+                return processingCancellation.Token;
+
+            processingCancellation?.Dispose();
+            processingLifetimeToken = workerToken;
+            processingCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                workerToken,
+                stopCancellation.Token);
+            linkedCancellationSourceCreations++;
+            return processingCancellation.Token;
+        }
+
+        // Called only while streamSync is held. This scan happens only after a
+        // tombstone is created, removed, or reaches its deadline—not per frame.
+        private void RecalculateNextCompletedStreamExpiryLocked()
+        {
+            DateTimeOffset? next = null;
+            foreach (StreamSessionState stream in streams.Values)
+            {
+                if (stream.CompletedAt is not DateTimeOffset completedAt)
+                    continue;
+                DateTimeOffset expiresAt = completedAt + CompletedStreamRetention;
+                if (next is null || expiresAt < next)
+                    next = expiresAt;
+            }
+            nextCompletedStreamExpiry = next;
         }
 
         // Called only while streamSync is held.

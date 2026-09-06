@@ -1,6 +1,9 @@
 root = true
 
 [*.cs]
+file_header_template = SPDX-FileCopyrightText: 2025-2026 RdWing\nSPDX-License-Identifier: AGPL-3.0-only
+dotnet_diagnostic.IDE0073.severity = warning
+
 # ValueTask instances may be backed by pooled sources and must be consumed.
 dotnet_diagnostic.CA2012.severity = warning
 

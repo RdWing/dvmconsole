@@ -1,6 +1,13 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Audio;
 
-public sealed class DesktopAudioBackendFactory(string? macLibraryPath = null) : IAudioBackendFactory
+public sealed class DesktopAudioBackendFactory(
+    string? macLibraryPath = null,
+    string? linuxLibraryPath = null) :
+    IAudioBackendFactory,
+    IAudioDeviceChangeSourceFactory
 {
     public IAudioBackend Create(AudioBackendConfiguration configuration)
     {
@@ -9,7 +16,17 @@ public sealed class DesktopAudioBackendFactory(string? macLibraryPath = null) : 
             macLibraryPath,
             configuration.ProcessingMode,
             configuration.InputDeviceId,
-            configuration.OutputDeviceId);
+            configuration.OutputDeviceId,
+            linuxLibraryPath);
+    }
+
+    public IAudioDeviceChangeSource? CreateDeviceChangeSource()
+    {
+#if !DVMCONSOLE_MACOS && !DVMCONSOLE_WINDOWS
+        if (OperatingSystem.IsLinux())
+            return new LinuxPipeWireDeviceChangeSource(linuxLibraryPath);
+#endif
+        return null;
     }
 }
 
@@ -21,9 +38,10 @@ public static class AudioBackendFactory
         string? macLibraryPath = null,
         AudioProcessingMode processingMode = AudioProcessingMode.DvmConsole,
         string? inputDeviceId = null,
-        string? outputDeviceId = null)
+        string? outputDeviceId = null,
+        string? linuxLibraryPath = null)
     {
-#if !DVMCONSOLE_WINDOWS
+#if !DVMCONSOLE_WINDOWS && !DVMCONSOLE_LINUX
         if (OperatingSystem.IsMacOS())
         {
             if (processingMode == AudioProcessingMode.WindowsCommunications)
@@ -35,14 +53,17 @@ public static class AudioBackendFactory
                 outputDeviceId);
         }
 #endif
-        if (processingMode == AudioProcessingMode.AppleVoiceProcessing)
-            throw new PlatformNotSupportedException("Apple voice processing requires an Apple audio backend.");
-#if !DVMCONSOLE_MACOS
+#if !DVMCONSOLE_MACOS && !DVMCONSOLE_LINUX
         if (OperatingSystem.IsWindows())
             return new WindowsAudioBackend(processingMode);
 #endif
         if (processingMode == AudioProcessingMode.WindowsCommunications)
             throw new PlatformNotSupportedException("Windows communications processing requires a Windows audio backend.");
+
+#if !DVMCONSOLE_MACOS && !DVMCONSOLE_WINDOWS
+        if (OperatingSystem.IsLinux())
+            return new LinuxPipeWireBackend(linuxLibraryPath);
+#endif
 
         throw new PlatformNotSupportedException("No audio backend is available for this operating system.");
     }

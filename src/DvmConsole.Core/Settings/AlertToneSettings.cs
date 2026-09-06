@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Core.Settings;
 
 // A user-profile alert asset. New imports use app-owned asset IDs. FilePath is

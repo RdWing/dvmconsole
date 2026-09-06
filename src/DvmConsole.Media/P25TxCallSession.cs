@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Vocoder;
 
 namespace DvmConsole.Media;
@@ -13,9 +16,11 @@ public sealed class P25TxCallSession : IDisposable
     private readonly uint destinationId;
     private readonly uint streamId;
     private readonly Action<ReadOnlyMemory<byte>, ushort, uint> send;
+    private readonly ProtocolPacketPacer<P25OutboundPacket> packetPacer;
     private readonly P25TxAudioSession audio;
     private bool started;
     private bool ended;
+    private P25OutboundPacket? retryTerminator;
     private bool disposed;
 
     public P25TxCallSession(
@@ -25,6 +30,67 @@ public sealed class P25TxCallSession : IDisposable
         IVocoderSession vocoder,
         Action<ReadOnlyMemory<byte>, ushort, uint> send,
         P25TxEncryptionOptions? encryption = null)
+        : this(
+            sourceId,
+            destinationId,
+            streamId,
+            vocoder,
+            send,
+            encryption,
+            waitForNextPacket: null,
+            timeProvider: null)
+    {
+    }
+
+    internal P25TxCallSession(
+        uint sourceId,
+        uint destinationId,
+        uint streamId,
+        IVocoderSession vocoder,
+        Action<ReadOnlyMemory<byte>, ushort, uint> send,
+        Func<CancellationToken, ValueTask> waitForNextPacket,
+        P25TxEncryptionOptions? encryption = null)
+        : this(
+            sourceId,
+            destinationId,
+            streamId,
+            vocoder,
+            send,
+            encryption,
+            waitForNextPacket ?? throw new ArgumentNullException(nameof(waitForNextPacket)),
+            timeProvider: null)
+    {
+    }
+
+    internal P25TxCallSession(
+        uint sourceId,
+        uint destinationId,
+        uint streamId,
+        IVocoderSession vocoder,
+        Action<ReadOnlyMemory<byte>, ushort, uint> send,
+        TimeProvider timeProvider,
+        P25TxEncryptionOptions? encryption = null)
+        : this(
+            sourceId,
+            destinationId,
+            streamId,
+            vocoder,
+            send,
+            encryption,
+            waitForNextPacket: null,
+            timeProvider ?? throw new ArgumentNullException(nameof(timeProvider)))
+    {
+    }
+
+    private P25TxCallSession(
+        uint sourceId,
+        uint destinationId,
+        uint streamId,
+        IVocoderSession vocoder,
+        Action<ReadOnlyMemory<byte>, ushort, uint> send,
+        P25TxEncryptionOptions? encryption,
+        Func<CancellationToken, ValueTask>? waitForNextPacket,
+        TimeProvider? timeProvider)
     {
         if (sourceId == 0 || sourceId > 0xFFFFFF)
             throw new ArgumentOutOfRangeException(nameof(sourceId));
@@ -37,12 +103,15 @@ public sealed class P25TxCallSession : IDisposable
         this.destinationId = destinationId;
         this.streamId = streamId;
         this.send = send ?? throw new ArgumentNullException(nameof(send));
+        packetPacer = waitForNextPacket is null
+            ? new ProtocolPacketPacer<P25OutboundPacket>(LduInterval, SendPacket, timeProvider)
+            : new ProtocolPacketPacer<P25OutboundPacket>(waitForNextPacket, SendPacket);
         audio = new P25TxAudioSession(
             sourceId,
             destinationId,
             streamId,
             vocoder ?? throw new ArgumentNullException(nameof(vocoder)),
-            send,
+            QueuePacket,
             encryption: encryption);
     }
 
@@ -59,7 +128,7 @@ public sealed class P25TxCallSession : IDisposable
         if (ended)
             throw new InvalidOperationException("The P25 call has already ended.");
 
-        send(
+        QueuePacket(
             P25DfsiFrameCodec.CreateTduPayload(sourceId, destinationId, grantDemand: true),
             P25DfsiFrameCodec.RtpCallEndSequence,
             streamId);
@@ -82,41 +151,48 @@ public sealed class P25TxCallSession : IDisposable
         return audio.ProcessSingleTone(frequencyHz);
     }
 
-    public ValueTask EndAsync(CancellationToken cancellationToken = default)
-        => EndAsync(WaitForNextLduAsync, cancellationToken);
-
-    internal async ValueTask EndAsync(
-        Func<CancellationToken, ValueTask> waitForNextLdu,
-        CancellationToken cancellationToken)
+    public async ValueTask EndAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        ArgumentNullException.ThrowIfNull(waitForNextLdu);
         if (!started)
             throw new InvalidOperationException("The P25 call has not started.");
         if (ended)
             return;
 
-        IReadOnlyList<P25OutboundPacket> completion = audio.PrepareLduCompletion();
-        foreach (P25OutboundPacket packet in completion)
+        if (retryTerminator is { } pendingTerminator)
         {
-            await waitForNextLdu(cancellationToken).ConfigureAwait(false);
-            send(packet.Payload, packet.Sequence, packet.StreamId);
+            SendPacket(pendingTerminator);
+            ended = true;
+            return;
         }
-        await waitForNextLdu(cancellationToken).ConfigureAwait(false);
+
+        IReadOnlyList<P25OutboundPacket> completion = audio.PrepareLduCompletion();
         byte[] terminator = P25DfsiFrameCodec.CreateTduPayload(sourceId, destinationId, grantDemand: false);
-        send(terminator, P25DfsiFrameCodec.RtpCallEndSequence, streamId);
+        var finalPacket = new P25OutboundPacket(
+            terminator,
+            P25DfsiFrameCodec.RtpCallEndSequence,
+            streamId);
+        retryTerminator = finalPacket;
+        foreach (P25OutboundPacket packet in completion)
+            packetPacer.Enqueue(packet);
+        packetPacer.Enqueue(finalPacket);
+        await packetPacer.CompleteAsync(cancellationToken).ConfigureAwait(false);
 
         ended = true;
     }
-
-    private static async ValueTask WaitForNextLduAsync(CancellationToken cancellationToken)
-        => await Task.Delay(LduInterval, cancellationToken).ConfigureAwait(false);
 
     public void Dispose()
     {
         if (disposed)
             return;
+        packetPacer.Dispose();
         audio.Dispose();
         disposed = true;
     }
+
+    private void QueuePacket(ReadOnlyMemory<byte> payload, ushort packetSequence, uint packetStreamId)
+        => packetPacer.Enqueue(new P25OutboundPacket(payload, packetSequence, packetStreamId));
+
+    private void SendPacket(P25OutboundPacket packet)
+        => send(packet.Payload, packet.Sequence, packet.StreamId);
 }

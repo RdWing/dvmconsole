@@ -14,7 +14,31 @@ permissions:
   contents: read
 
 jobs:
+  source-validation:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source and fnecore
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: recursive
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Verify first-party source headers
+        shell: bash
+        run: scripts/verify-source-headers.sh
+
+      - name: Verify tracked public privacy surfaces
+        shell: bash
+        run: scripts/verify-public-privacy.sh
+
+      - name: Verify packaged documentation manifest
+        shell: bash
+        run: python scripts/verify-documentation.py --root docs/user-guide
+
   test-and-publish:
+    needs: source-validation
     name: ${{ matrix.os }} / ${{ matrix.rid }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -30,6 +54,15 @@ jobs:
           - os: windows-latest
             rid: win-x64
             rust_target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            rid: win-arm64
+            rust_target: aarch64-pc-windows-msvc
+          - os: ubuntu-24.04
+            rid: linux-x64
+            rust_target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            rid: linux-arm64
+            rust_target: aarch64-unknown-linux-gnu
 
     steps:
       - name: Check out source and fnecore
@@ -37,10 +70,27 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Verify pinned fnecore revision
+        shell: bash
+        run: |
+          expected_fnecore=2d36ab4bf2eeef170978c2777c468db2ca4121ef
+          actual_fnecore="$(git -C fnecore rev-parse HEAD)"
+          if [[ "$actual_fnecore" != "$expected_fnecore" ]]; then
+            printf 'fnecore is %s; expected %s.\n' "$actual_fnecore" "$expected_fnecore" >&2
+            exit 1
+          fi
+
       - name: Set up .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.400
+
+      - name: Install Linux desktop build and smoke dependencies
+        if: startsWith(matrix.rid, 'linux-')
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libpipewire-0.3-dev pipewire libxtst6 xvfb xauth
 
       - name: Set up Python 3
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -68,9 +118,16 @@ jobs:
           fi
           plist_short_version="$(sed -n '/<key>CFBundleShortVersionString<\/key>/{n;s:.*<string>\(.*\)</string>.*:\1:p;q;}' packaging/macos/Info.plist)"
           plist_bundle_version="$(sed -n '/<key>CFBundleVersion<\/key>/{n;s:.*<string>\(.*\)</string>.*:\1:p;q;}' packaging/macos/Info.plist)"
+          macos_deployment_target="$(tr -d '[:space:]' < packaging/macos/deployment-target.txt)"
+          plist_minimum_system="$(sed -n '/<key>LSMinimumSystemVersion<\/key>/{n;s:.*<string>\(.*\)</string>.*:\1:p;q;}' packaging/macos/Info.plist)"
           if [[ "$plist_short_version" != "$source_version" || "$plist_bundle_version" != "$source_version" ]]; then
             printf 'Info.plist versions (%s, %s) do not match source version %s.\n' \
               "$plist_short_version" "$plist_bundle_version" "$source_version" >&2
+            exit 1
+          fi
+          if [[ "$macos_deployment_target" != "12.0" || "$plist_minimum_system" != "$macos_deployment_target" ]]; then
+            printf 'macOS deployment target (%s) and bundle minimum (%s) must both be 12.0.\n' \
+              "$macos_deployment_target" "$plist_minimum_system" >&2
             exit 1
           fi
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
@@ -84,15 +141,24 @@ jobs:
           else
             package_version="${source_version}-${GITHUB_SHA::7}"
           fi
+          source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
           printf 'DVM_PACKAGE_VERSION=%s\n' "$package_version" >> "$GITHUB_ENV"
+          printf 'SOURCE_DATE_EPOCH=%s\n' "$source_date_epoch" >> "$GITHUB_ENV"
+          package_name="$(python scripts/release_metadata.py package-name \
+            --version "$package_version" \
+            --target "${{ matrix.rid }}")"
+          printf 'DVM_PACKAGE_NAME=%s\n' "$package_name" >> "$GITHUB_ENV"
 
-      - name: Run release metadata tests
+      - name: Run all release helper tests
         shell: bash
-        run: python -m unittest discover -s scripts/tests -p 'test_release_metadata.py'
+        run: python -m unittest discover -s scripts/tests -p 'test_*.py'
 
       - name: Verify native digital voice
         shell: bash
         run: |
+          if [[ "${{ matrix.rid }}" == osx-* ]]; then
+            export MACOSX_DEPLOYMENT_TARGET="$(tr -d '[:space:]' < packaging/macos/deployment-target.txt)"
+          fi
           cargo fmt --manifest-path native/vocoder/Cargo.toml -- --check
           cargo clippy --manifest-path native/vocoder/Cargo.toml --locked --all-targets --target "${{ matrix.rust_target }}" -- -D warnings
           cargo test --manifest-path native/vocoder/Cargo.toml --locked --target "${{ matrix.rust_target }}"
@@ -101,15 +167,96 @@ jobs:
         if: startsWith(matrix.rid, 'osx-')
         shell: bash
         run: |
-          cmake -S native/dvmaudio -B "$RUNNER_TEMP/dvmaudio-build" -DBUILD_TESTING=ON
+          macos_deployment_target="$(tr -d '[:space:]' < packaging/macos/deployment-target.txt)"
+          cmake -S native/dvmaudio -B "$RUNNER_TEMP/dvmaudio-build" \
+            -DBUILD_TESTING=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$macos_deployment_target"
           cmake --build "$RUNNER_TEMP/dvmaudio-build" --parallel
           ctest --test-dir "$RUNNER_TEMP/dvmaudio-build" --output-on-failure
+          nm -gU "$RUNNER_TEMP/dvmaudio-build/libdvmaudio.dylib" \
+            | awk '{ print $NF }' \
+            | sed 's/^_//' \
+            | grep '^dvm_audio_' \
+            | sort -u > "$RUNNER_TEMP/dvmaudio-exports.txt"
+          diff -u \
+            native/dvmaudio/managed-exports.txt \
+            "$RUNNER_TEMP/dvmaudio-exports.txt"
+          cargo build \
+            --manifest-path native/vocoder/Cargo.toml \
+            --locked \
+            --release \
+            --target "${{ matrix.rust_target }}"
+          nm -gU \
+            "native/vocoder/target/${{ matrix.rust_target }}/release/libdvmconsole_vocoder.dylib" \
+            | awk '{ print $NF }' \
+            | sed 's/^_//' \
+            | grep '^dvmconsole_vocoder_' \
+            | sort -u > "$RUNNER_TEMP/dvmconsole-vocoder-exports.txt"
+          diff -u \
+            native/vocoder/managed-exports.txt \
+            "$RUNNER_TEMP/dvmconsole-vocoder-exports.txt"
+
+      - name: Verify native Linux PipeWire audio shim
+        if: startsWith(matrix.rid, 'linux-')
+        shell: bash
+        run: |
+          cmake -S native/dvmaudio-pipewire -B "$RUNNER_TEMP/dvmaudio-pipewire-build" -DBUILD_TESTING=ON
+          cmake --build "$RUNNER_TEMP/dvmaudio-pipewire-build" --parallel
+          ctest --test-dir "$RUNNER_TEMP/dvmaudio-pipewire-build" --output-on-failure
+          while IFS= read -r symbol; do
+            [[ -n "$symbol" ]] || continue
+            nm -D --defined-only "$RUNNER_TEMP/dvmaudio-pipewire-build/libdvmaudio-pipewire.so" | grep -q " $symbol$"
+          done < native/dvmaudio-pipewire/managed-exports.txt
+          cargo build \
+            --manifest-path native/vocoder/Cargo.toml \
+            --locked \
+            --release \
+            --target "${{ matrix.rust_target }}"
+          nm -D --defined-only \
+            "native/vocoder/target/${{ matrix.rust_target }}/release/libdvmconsole_vocoder.so" \
+            | awk '{ print $NF }' \
+            | grep '^dvmconsole_vocoder_' \
+            | sort -u > "$RUNNER_TEMP/dvmconsole-vocoder-exports.txt"
+          diff -u \
+            native/vocoder/managed-exports.txt \
+            "$RUNNER_TEMP/dvmconsole-vocoder-exports.txt"
+
+      - name: Verify native Windows vocoder exports
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        run: |
+          cargo build `
+            --manifest-path native/vocoder/Cargo.toml `
+            --locked `
+            --release `
+            --target "${{ matrix.rust_target }}"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $installation = & $vswhere -latest -products * -property installationPath
+          $llvmReadObj = Join-Path $installation "VC\Tools\Llvm\x64\bin\llvm-readobj.exe"
+          if (-not (Test-Path -LiteralPath $llvmReadObj -PathType Leaf)) {
+            throw "llvm-readobj.exe is required to verify Windows vocoder exports."
+          }
+          $library = "native/vocoder/target/${{ matrix.rust_target }}/release/dvmconsole_vocoder.dll"
+          $actual = @(
+            & $llvmReadObj --coff-exports $library |
+              ForEach-Object {
+                if ($_ -match '^\s*Name:\s+(dvmconsole_vocoder_[A-Za-z0-9_]+)\s*$') { $Matches[1] }
+              } |
+              Sort-Object -Unique
+          )
+          $expected = @(Get-Content -LiteralPath native/vocoder/managed-exports.txt | Where-Object { $_ })
+          $difference = Compare-Object -ReferenceObject $expected -DifferenceObject $actual
+          if ($difference) {
+            $difference | Format-Table | Out-String | Write-Error
+            throw "Windows vocoder exports do not match native/vocoder/managed-exports.txt."
+          }
 
       - name: Restore solution
         shell: bash
-        run: dotnet restore dvmconsole.sln --force-evaluate --ignore-failed-sources -p:Configuration=Release -p:NuGetAudit=false --verbosity minimal
+        run: dotnet restore dvmconsole.sln --locked-mode --ignore-failed-sources -p:Configuration=Release -p:NuGetAudit=false --verbosity minimal
 
       - name: Verify application-owned formatting
+        if: matrix.rid == 'osx-arm64'
         shell: bash
         run: scripts/verify-format.sh
 
@@ -117,20 +264,29 @@ jobs:
         shell: bash
         run: dotnet test dvmconsole.sln --no-restore --configuration Release -p:UseSharedCompilation=false --logger "trx;LogFileName=${{ matrix.rid }}.trx"
 
+      - name: Probe live PipeWire ABI and device enumeration
+        if: startsWith(matrix.rid, 'linux-')
+        shell: bash
+        run: scripts/probe-linux-pipewire.sh "$RUNNER_TEMP/dvmaudio-pipewire-build/libdvmaudio-pipewire.so"
+
       # The Windows hosted runner has an interactive desktop session, which is
       # required to exercise Avalonia window creation (rather than only loading
       # the view models on a headless runner). The app exits 0/10 itself; teeing
       # the transcript preserves Avalonia diagnostics on either outcome.
       - name: Smoke Avalonia windows
-        if: matrix.rid == 'win-x64'
+        if: startsWith(matrix.rid, 'win-')
         shell: pwsh
         run: |
           $log = Join-Path $env:RUNNER_TEMP "avalonia-window-smoke.log"
-          & dotnet run --project src/DvmConsole.Desktop/DvmConsole.Desktop.csproj --no-restore --configuration Release -- --smoke-windows configs/codeplug.example.yml *>&1 | Tee-Object -FilePath $log
-          if ($LASTEXITCODE -ne 0) { throw "Avalonia window smoke failed with exit code $LASTEXITCODE." }
+          $result = Join-Path $env:RUNNER_TEMP "avalonia-window-smoke.result"
+          .\scripts\invoke-smoke-with-timeout.ps1 `
+            -FilePath dotnet `
+            -ArgumentList @("run", "--project", "src/DvmConsole.Desktop/DvmConsole.Desktop.csproj", "--no-restore", "--configuration", "Release", "--", "--smoke-windows", "--smoke-result=$result", "configs/codeplug.example.yml") `
+            -ResultPath $result `
+            -LogPath $log
 
       - name: Upload Avalonia smoke diagnostics
-        if: always() && matrix.rid == 'win-x64'
+        if: always() && startsWith(matrix.rid, 'win-')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: avalonia-window-smoke-${{ matrix.rid }}
@@ -138,40 +294,54 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Publish unsigned desktop output
+      - name: Publish unsigned macOS desktop output
+        if: startsWith(matrix.rid, 'osx-')
         shell: bash
         env:
           CONFIGURATION: Release
-          DVM_WINDOWS_VOCODER_TARGET: ${{ matrix.rust_target }}
         run: scripts/publish-desktop.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}"
+
+      - name: Publish unsigned Windows desktop output
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP "dvmconsole-publish/${{ matrix.rid }}"
+          .\scripts\publish-desktop.ps1 `
+            -Runtime "${{ matrix.rid }}" `
+            -OutputDirectory $publish `
+            -Configuration Release
+
+      - name: Publish and package portable Linux release
+        if: startsWith(matrix.rid, 'linux-')
+        shell: bash
+        env:
+          CONFIGURATION: Release
+        run: |
+          scripts/build-linux-portable.sh \
+            "${{ matrix.rid }}" \
+            "$RUNNER_TEMP/dvmconsole-publish" \
+            "$DVM_PACKAGE_NAME"
 
       - name: Verify published output
         shell: bash
         run: scripts/verify-publish.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}"
 
       - name: Smoke published Windows payload
-        if: matrix.rid == 'win-x64'
+        if: startsWith(matrix.rid, 'win-')
         shell: pwsh
         run: |
           $publishDirectory = Join-Path $env:RUNNER_TEMP "dvmconsole-publish\${{ matrix.rid }}"
           $executable = Join-Path $publishDirectory "DvmConsole.exe"
           $result = Join-Path $env:RUNNER_TEMP "published-window-smoke.result"
           $log = Join-Path $env:RUNNER_TEMP "published-window-smoke.log"
-          & $executable --demo --smoke-windows "--smoke-result=$result" *>&1 | Tee-Object -FilePath $log
-          $exitCode = $LASTEXITCODE
-          if ($exitCode -ne 0) {
-            throw "Published Windows payload smoke failed with exit code $exitCode."
-          }
-          if (-not (Test-Path -LiteralPath $result -PathType Leaf)) {
-            throw "Published Windows payload smoke did not write a result."
-          }
-          $status = Get-Content -LiteralPath $result -TotalCount 1
-          if ($status -ne "PASS") {
-            throw "Published Windows payload smoke did not report PASS."
-          }
+          .\scripts\invoke-smoke-with-timeout.ps1 `
+            -FilePath $executable `
+            -ArgumentList @("--demo", "--smoke-windows", "--smoke-result=$result") `
+            -ResultPath $result `
+            -LogPath $log
 
       - name: Upload published Windows smoke diagnostics
-        if: always() && matrix.rid == 'win-x64'
+        if: always() && startsWith(matrix.rid, 'win-')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: published-window-smoke-${{ matrix.rid }}
@@ -181,25 +351,177 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Package unsigned macOS handoff
+      - name: Package unsigned macOS release
         if: startsWith(matrix.rid, 'osx-')
         shell: bash
-        run: scripts/package-desktop.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/dvmconsole-${DVM_PACKAGE_VERSION}-${{ matrix.rid }}.zip"
+        run: scripts/package-desktop.sh "${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/${{ matrix.rid }}" "$RUNNER_TEMP/dvmconsole-publish/$DVM_PACKAGE_NAME"
 
-      - name: Smoke packaged macOS app
+      - name: Verify and smoke extracted macOS package
         if: startsWith(matrix.rid, 'osx-')
         shell: bash
-        run: scripts/smoke-desktop-macos.sh "$RUNNER_TEMP/dvmconsole-publish/DVMConsole.app" configs/codeplug.example.yml
+        run: |
+          archive="$RUNNER_TEMP/dvmconsole-publish/$DVM_PACKAGE_NAME"
+          extracted="$RUNNER_TEMP/dvmconsole-package-extracted/${{ matrix.rid }}"
+          mkdir -p "$extracted"
+          ditto -x -k "$archive" "$extracted"
+          app="$extracted/DVMConsole.app"
+          apphost="$app/Contents/MacOS/DVM Console"
+          [[ -x "$apphost" ]] || {
+            printf 'Extracted macOS apphost is not executable: %s\n' "$apphost" >&2
+            exit 1
+          }
+          scripts/smoke-desktop-macos.sh "$app" configs/codeplug.example.yml "$RUNNER_TEMP/packaged-macos-smoke.log"
 
-      - name: Package unsigned Windows handoff
-        if: matrix.rid == 'win-x64'
+      - name: Upload packaged macOS smoke diagnostics
+        if: always() && startsWith(matrix.rid, 'osx-')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: packaged-macos-smoke-${{ matrix.rid }}
+          path: ${{ runner.temp }}/packaged-macos-smoke.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Package unsigned Windows release
+        if: startsWith(matrix.rid, 'win-')
         shell: pwsh
-        run: .\scripts\package-desktop.ps1 -PublishDirectory "$env:RUNNER_TEMP\dvmconsole-publish\${{ matrix.rid }}" -OutputArchive "$env:RUNNER_TEMP\dvmconsole-publish\dvmconsole-$($env:DVM_PACKAGE_VERSION)-${{ matrix.rid }}.zip"
+        run: .\scripts\package-desktop.ps1 -Runtime "${{ matrix.rid }}" -PublishDirectory "$env:RUNNER_TEMP\dvmconsole-publish\${{ matrix.rid }}" -OutputArchive "$env:RUNNER_TEMP\dvmconsole-publish\$env:DVM_PACKAGE_NAME"
+
+      - name: Verify and smoke extracted Windows package
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "dvmconsole-publish\$env:DVM_PACKAGE_NAME"
+          $extracted = Join-Path $env:RUNNER_TEMP "dvmconsole-package-extracted\${{ matrix.rid }}"
+          Expand-Archive -LiteralPath $archive -DestinationPath $extracted -Force
+          $payload = Get-ChildItem -LiteralPath $extracted -Directory | Select-Object -First 1
+          if ($null -eq $payload) { throw "Windows package has no payload directory." }
+          .\scripts\verify-publish.ps1 -Runtime "${{ matrix.rid }}" -PublishDirectory $payload.FullName
+          $result = Join-Path $env:RUNNER_TEMP "packaged-window-smoke.result"
+          $log = Join-Path $env:RUNNER_TEMP "packaged-window-smoke.log"
+          .\scripts\invoke-smoke-with-timeout.ps1 `
+            -FilePath (Join-Path $payload.FullName "DvmConsole.exe") `
+            -ArgumentList @("--demo", "--smoke-windows", "--smoke-result=$result") `
+            -ResultPath $result `
+            -LogPath $log
+
+      - name: Upload extracted Windows smoke diagnostics
+        if: always() && startsWith(matrix.rid, 'win-')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: packaged-window-smoke-${{ matrix.rid }}
+          path: |
+            ${{ runner.temp }}/packaged-window-smoke.log
+            ${{ runner.temp }}/packaged-window-smoke.result
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Smoke packaged Linux payload
+        if: startsWith(matrix.rid, 'linux-')
+        shell: bash
+        run: scripts/smoke-desktop-linux-appimage.sh "$RUNNER_TEMP/dvmconsole-publish/$DVM_PACKAGE_NAME" "${{ matrix.rid }}"
+
+      - name: Enforce compressed package size budget
+        shell: bash
+        run: python scripts/verify-package-size.py --rid "${{ matrix.rid }}" --package "$RUNNER_TEMP/dvmconsole-publish/$DVM_PACKAGE_NAME"
+
+      - name: Smoke the same Linux package across distro baselines
+        if: startsWith(matrix.rid, 'linux-')
+        shell: bash
+        run: |
+          package="$RUNNER_TEMP/dvmconsole-publish/$DVM_PACKAGE_NAME"
+          scripts/smoke-desktop-linux-container.sh "$package" "${{ matrix.rid }}" \
+            "debian:12-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171" apt
+          scripts/smoke-desktop-linux-container.sh "$package" "${{ matrix.rid }}" \
+            "debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132" apt
+          scripts/smoke-desktop-linux-container.sh "$package" "${{ matrix.rid }}" \
+            "ubuntu:22.04@sha256:2edbbc5dc405e9612ba3584ce95480277e3eb374407b5505fe26f17df77c7dbc" apt
+          scripts/smoke-desktop-linux-container.sh "$package" "${{ matrix.rid }}" \
+            "ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517" apt
+          scripts/smoke-desktop-linux-container.sh "$package" "${{ matrix.rid }}" \
+            "ubuntu:26.04@sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b" apt
+          scripts/smoke-desktop-linux-container.sh "$package" "${{ matrix.rid }}" \
+            "fedora:43@sha256:a651ddf48ea28a06ed4e1e6519f51c9f47e7a5a138722ade87369b8fbb7e5b42" dnf
+
+      - name: Rebuild reproducibility candidate on macOS
+        if: startsWith(matrix.rid, 'osx-')
+        shell: bash
+        env:
+          CONFIGURATION: Release
+        run: |
+          candidate="$RUNNER_TEMP/dvmconsole-reproducible"
+          scripts/publish-desktop.sh "${{ matrix.rid }}" "$candidate/${{ matrix.rid }}"
+          scripts/package-desktop.sh \
+            "${{ matrix.rid }}" \
+            "$candidate/${{ matrix.rid }}" \
+            "$candidate/$DVM_PACKAGE_NAME" \
+            "$candidate/DVMConsole.app"
+
+      - name: Compare independently built package on macOS
+        if: startsWith(matrix.rid, 'osx-')
+        shell: bash
+        run: |
+          primary="$RUNNER_TEMP/dvmconsole-publish/$DVM_PACKAGE_NAME"
+          candidate="$RUNNER_TEMP/dvmconsole-reproducible/$DVM_PACKAGE_NAME"
+          cmp "$primary" "$candidate" || {
+            shasum -a 256 "$primary" "$candidate"
+            exit 1
+          }
+
+      - name: Rebuild reproducibility candidate on Windows
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        run: |
+          $candidate = Join-Path $env:RUNNER_TEMP "dvmconsole-reproducible"
+          $publish = Join-Path $candidate "${{ matrix.rid }}"
+          $package = Join-Path $candidate $env:DVM_PACKAGE_NAME
+          .\scripts\publish-desktop.ps1 `
+            -Runtime "${{ matrix.rid }}" `
+            -OutputDirectory $publish `
+            -Configuration Release
+          .\scripts\package-desktop.ps1 `
+            -Runtime "${{ matrix.rid }}" `
+            -PublishDirectory $publish `
+            -OutputArchive $package
+
+      - name: Compare independently built package on Windows
+        if: startsWith(matrix.rid, 'win-')
+        shell: pwsh
+        run: |
+          $primary = Join-Path $env:RUNNER_TEMP "dvmconsole-publish\$env:DVM_PACKAGE_NAME"
+          $candidate = Join-Path $env:RUNNER_TEMP "dvmconsole-reproducible\$env:DVM_PACKAGE_NAME"
+          $primaryHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $primary).Hash
+          $candidateHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $candidate).Hash
+          if ($primaryHash -ne $candidateHash) {
+            throw "Independent package digests differ: $primaryHash != $candidateHash"
+          }
+
+      - name: Rebuild reproducibility candidate on Linux
+        if: startsWith(matrix.rid, 'linux-')
+        shell: bash
+        env:
+          CONFIGURATION: Release
+          DVM_LINUX_REUSE_BUILDER: "1"
+        run: |
+          scripts/build-linux-portable.sh \
+            "${{ matrix.rid }}" \
+            "$RUNNER_TEMP/dvmconsole-reproducible" \
+            "$DVM_PACKAGE_NAME"
+
+      - name: Compare independently built package on Linux
+        if: startsWith(matrix.rid, 'linux-')
+        shell: bash
+        run: |
+          primary="$RUNNER_TEMP/dvmconsole-publish/$DVM_PACKAGE_NAME"
+          candidate="$RUNNER_TEMP/dvmconsole-reproducible/$DVM_PACKAGE_NAME"
+          cmp "$primary" "$candidate" || {
+            sha256sum "$primary" "$candidate"
+            exit 1
+          }
 
       - name: Generate per-package SPDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          file: ${{ runner.temp }}/dvmconsole-publish/dvmconsole-${{ env.DVM_PACKAGE_VERSION }}-${{ matrix.rid }}.zip
+          file: ${{ runner.temp }}/dvmconsole-publish/${{ env.DVM_PACKAGE_NAME }}
           format: spdx-json
           output-file: ${{ runner.temp }}/dvmconsole-publish/dvmconsole-${{ env.DVM_PACKAGE_VERSION }}-${{ matrix.rid }}.spdx.json
           syft-version: v1.51.0
@@ -208,7 +530,17 @@ jobs:
 
       - name: Validate per-package SPDX SBOM
         shell: bash
-        run: python scripts/release_metadata.py validate-sbom --sbom "$RUNNER_TEMP/dvmconsole-publish/dvmconsole-${DVM_PACKAGE_VERSION}-${{ matrix.rid }}.spdx.json"
+        run: |
+          sbom="$RUNNER_TEMP/dvmconsole-publish/dvmconsole-${DVM_PACKAGE_VERSION}-${{ matrix.rid }}.spdx.json"
+          python scripts/release_metadata.py ensure-first-party-sbom \
+            --sbom "$sbom" \
+            --version "$DVM_PACKAGE_VERSION" \
+            --target "${{ matrix.rid }}"
+          python scripts/release_metadata.py validate-sbom \
+            --sbom "$sbom" \
+            --required-package-license DvmConsole=AGPL-3.0-only \
+            --required-package-license DvmConsole.PlatformAudio=AGPL-3.0-only \
+            --required-package-license dvmconsole-vocoder-native=AGPL-3.0-only
 
       - name: Upload unsigned publish artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -222,7 +554,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dvmconsole-package-${{ matrix.rid }}
-          path: ${{ runner.temp }}/dvmconsole-publish/dvmconsole-${{ env.DVM_PACKAGE_VERSION }}-${{ matrix.rid }}.zip
+          path: ${{ runner.temp }}/dvmconsole-publish/${{ env.DVM_PACKAGE_NAME }}
           if-no-files-found: error
           retention-days: 7
 
@@ -243,10 +575,59 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  dependency-advisories:
+    name: Dependency advisories
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source and fnecore
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: recursive
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: 10.0.400
+
+      - name: Audit locked NuGet graph
+        run: dotnet restore dvmconsole.sln --locked-mode -p:Configuration=Release -p:NuGetAudit=true -p:NuGetAuditMode=all -p:NuGetAuditLevel=low --verbosity minimal
+
+      - name: Audit every locked public RID graph
+        shell: bash
+        run: |
+          while read -r rid platform; do
+            dotnet restore src/DvmConsole.Desktop/DvmConsole.Desktop.csproj \
+              --runtime "$rid" \
+              --locked-mode \
+              -p:Configuration=Release \
+              -p:DvmConsoleTargetPlatform="$platform" \
+              -p:DvmConsolePackageRuntime="$rid" \
+              -p:PublishTrimmed=true \
+              -p:TrimMode=partial \
+              -p:NuGetAudit=true \
+              -p:NuGetAuditMode=all \
+              -p:NuGetAuditLevel=low \
+              --verbosity minimal
+          done <<'RID_GRAPHS'
+          osx-arm64 macos
+          osx-x64 macos
+          win-x64 windows
+          win-arm64 windows
+          linux-x64 linux
+          linux-arm64 linux
+          RID_GRAPHS
+          git diff --exit-code -- 'src/**/packages*.lock.json'
+
+      - name: Audit locked Rust graph
+        shell: bash
+        run: |
+          cargo install cargo-audit --version 0.22.0 --locked
+          cargo audit --file native/vocoder/Cargo.lock
+
   publish-release:
     name: Publish tagged release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: test-and-publish
+    needs: [test-and-publish, dependency-advisories]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -304,22 +685,16 @@ jobs:
             --notes "$notes_file" \
             --version "$release_version")"
 
-          release_assets=(
-            "release-artifacts/dvmconsole-${release_version}-osx-arm64.zip"
-            "release-artifacts/dvmconsole-${release_version}-osx-x64.zip"
-            "release-artifacts/dvmconsole-${release_version}-win-x64.zip"
-            "release-artifacts/dvmconsole-${release_version}-osx-arm64.spdx.json"
-            "release-artifacts/dvmconsole-${release_version}-osx-x64.spdx.json"
-            "release-artifacts/dvmconsole-${release_version}-win-x64.spdx.json"
-          )
-          checksum_subjects=(
-            "dvmconsole-${release_version}-osx-arm64.zip"
-            "dvmconsole-${release_version}-osx-x64.zip"
-            "dvmconsole-${release_version}-win-x64.zip"
-            "dvmconsole-${release_version}-osx-arm64.spdx.json"
-            "dvmconsole-${release_version}-osx-x64.spdx.json"
-            "dvmconsole-${release_version}-win-x64.spdx.json"
-          )
+          release_targets=(osx-arm64 osx-x64 win-x64 win-arm64 linux-x64 linux-arm64)
+          release_assets=()
+          checksum_subjects=()
+          for target in "${release_targets[@]}"; do
+            package_name="$(python scripts/release_metadata.py package-name \
+              --version "$release_version" --target "$target")"
+            sbom_name="dvmconsole-${release_version}-${target}.spdx.json"
+            release_assets+=("release-artifacts/$package_name" "release-artifacts/$sbom_name")
+            checksum_subjects+=("$package_name" "$sbom_name")
+          done
           checksum_subject_args=()
           for subject in "${checksum_subjects[@]}"; do
             checksum_subject_args+=(--expected-subject "$subject")
@@ -340,6 +715,11 @@ jobs:
         with:
           subject-path: release-artifacts/*.zip
 
+      - name: Attest Linux package build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release-artifacts/*.AppImage
+
       - name: Attest Apple Silicon package SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
@@ -352,11 +732,29 @@ jobs:
           subject-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-osx-x64.zip
           sbom-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-osx-x64.spdx.json
 
-      - name: Attest Windows package SBOM
+      - name: Attest Windows x64 package SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-win-x64.zip
           sbom-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-win-x64.spdx.json
+
+      - name: Attest Windows ARM64 package SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-win-arm64.zip
+          sbom-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-win-arm64.spdx.json
+
+      - name: Attest Linux x64 package SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release-artifacts/DVMConsole-${{ steps.metadata.outputs.version }}-x86_64.AppImage
+          sbom-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-linux-x64.spdx.json
+
+      - name: Attest Linux ARM64 package SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release-artifacts/DVMConsole-${{ steps.metadata.outputs.version }}-aarch64.AppImage
+          sbom-path: release-artifacts/dvmconsole-${{ steps.metadata.outputs.version }}-linux-arm64.spdx.json
 
       - name: Attest release checksums
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
@@ -369,6 +767,7 @@ jobs:
           name: dvmconsole-release-suite-${{ steps.metadata.outputs.version }}
           path: |
             release-artifacts/*.zip
+            release-artifacts/*.AppImage
             release-artifacts/*.spdx.json
             release-artifacts/SHA256SUMS
           if-no-files-found: error
@@ -383,15 +782,17 @@ jobs:
         run: |
           release_version="$DVM_RELEASE_VERSION"
           notes_file="docs/releases/${GITHUB_REF_NAME}.md"
-          release_assets=(
-            "release-artifacts/dvmconsole-${release_version}-osx-arm64.zip"
-            "release-artifacts/dvmconsole-${release_version}-osx-x64.zip"
-            "release-artifacts/dvmconsole-${release_version}-win-x64.zip"
-            "release-artifacts/dvmconsole-${release_version}-osx-arm64.spdx.json"
-            "release-artifacts/dvmconsole-${release_version}-osx-x64.spdx.json"
-            "release-artifacts/dvmconsole-${release_version}-win-x64.spdx.json"
-            "release-artifacts/SHA256SUMS"
-          )
+          release_targets=(osx-arm64 osx-x64 win-x64 win-arm64 linux-x64 linux-arm64)
+          release_assets=()
+          for target in "${release_targets[@]}"; do
+            package_name="$(python scripts/release_metadata.py package-name \
+              --version "$release_version" --target "$target")"
+            release_assets+=(
+              "release-artifacts/$package_name"
+              "release-artifacts/dvmconsole-${release_version}-${target}.spdx.json"
+            )
+          done
+          release_assets+=("release-artifacts/SHA256SUMS")
           release_kind_flags=()
           if [[ "$release_version" == *-* ]]; then
             release_kind_flags+=(--prerelease)
@@ -425,15 +826,17 @@ jobs:
           DVM_RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
         run: |
           release_version="$DVM_RELEASE_VERSION"
-          expected_assets=(
-            "dvmconsole-${release_version}-osx-arm64.zip"
-            "dvmconsole-${release_version}-osx-x64.zip"
-            "dvmconsole-${release_version}-win-x64.zip"
-            "dvmconsole-${release_version}-osx-arm64.spdx.json"
-            "dvmconsole-${release_version}-osx-x64.spdx.json"
-            "dvmconsole-${release_version}-win-x64.spdx.json"
-            "SHA256SUMS"
-          )
+          release_targets=(osx-arm64 osx-x64 win-x64 win-arm64 linux-x64 linux-arm64)
+          expected_assets=()
+          checksum_subjects=()
+          for target in "${release_targets[@]}"; do
+            package_name="$(python scripts/release_metadata.py package-name \
+              --version "$release_version" --target "$target")"
+            sbom_name="dvmconsole-${release_version}-${target}.spdx.json"
+            expected_assets+=("$package_name" "$sbom_name")
+            checksum_subjects+=("$package_name" "$sbom_name")
+          done
+          expected_assets+=("SHA256SUMS")
           mapfile -t actual_assets < <(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | sort)
           mapfile -t sorted_expected < <(printf '%s\n' "${expected_assets[@]}" | sort)
           if [[ "${actual_assets[*]}" != "${sorted_expected[*]}" ]]; then
@@ -448,14 +851,6 @@ jobs:
           for asset in "${expected_assets[@]}"; do
             gh release download "$GITHUB_REF_NAME" --dir "$readback" --pattern "$asset"
           done
-          checksum_subjects=(
-            "dvmconsole-${release_version}-osx-arm64.zip"
-            "dvmconsole-${release_version}-osx-x64.zip"
-            "dvmconsole-${release_version}-win-x64.zip"
-            "dvmconsole-${release_version}-osx-arm64.spdx.json"
-            "dvmconsole-${release_version}-osx-x64.spdx.json"
-            "dvmconsole-${release_version}-win-x64.spdx.json"
-          )
           checksum_subject_args=()
           for subject in "${checksum_subjects[@]}"; do
             checksum_subject_args+=(--expected-subject "$subject")
@@ -475,8 +870,10 @@ jobs:
             "$DVM_RELEASE_TITLE" \
             "$expected_prerelease"
 
-          for target in osx-arm64 osx-x64 win-x64; do
-            package="$readback/dvmconsole-${release_version}-${target}.zip"
+          for target in "${release_targets[@]}"; do
+            package_name="$(python scripts/release_metadata.py package-name \
+              --version "$release_version" --target "$target")"
+            package="$readback/$package_name"
             sbom="$readback/dvmconsole-${release_version}-${target}.spdx.json"
             gh attestation verify "$package" --repo "$GITHUB_REPOSITORY"
             spdx_version="$(python -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["spdxVersion"].removeprefix("SPDX-"))' "$sbom")"

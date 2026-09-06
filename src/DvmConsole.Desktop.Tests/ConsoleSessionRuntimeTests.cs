@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Desktop;
 using DvmConsole.Application;
 using DvmConsole.Core.Settings;
@@ -26,6 +29,24 @@ public sealed class ConsoleSessionRuntimeTests
         await services.DisposeAsync();
 
         Assert.Equal(["second", "first"], order);
+    }
+
+    [Fact]
+    public async Task ServicesReportNamedDisposalDurationsWithoutChangingOrder()
+    {
+        var observed = new List<ConsoleSessionServiceDisposalTiming>();
+        var services = new ConsoleSessionServices(observed.Add);
+        services.Presentation.Register("first", NoOp);
+        services.Receive.Register("second", async () =>
+        {
+            await Task.Delay(10);
+        });
+
+        await services.DisposeAsync();
+
+        Assert.Equal(["second", "first"], observed.Select(item => item.Name));
+        Assert.Equal(["receive", "presentation"], observed.Select(item => item.Scope));
+        Assert.All(observed, item => Assert.True(item.Duration >= TimeSpan.Zero));
     }
 
     [Fact]
@@ -85,6 +106,80 @@ public sealed class ConsoleSessionRuntimeTests
             cleanupStarted.SetResult();
             await allowCleanup.Task;
         }
+    }
+
+    [Fact]
+    public async Task StalledServiceDoesNotPreventLaterCleanupOwners()
+    {
+        var stalled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var laterCleanupRan = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var services = new ConsoleSessionServices(
+            disposalStepTimeout: TimeSpan.FromMilliseconds(25),
+            overallDisposalTimeout: TimeSpan.FromMilliseconds(250));
+        services.Presentation.Register("later", () =>
+        {
+            laterCleanupRan.TrySetResult();
+            return ValueTask.CompletedTask;
+        });
+        services.Audio.Register("stalled", () => new ValueTask(stalled.Task));
+
+        try
+        {
+            Exception? failure = await Record.ExceptionAsync(() =>
+                services.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.NotNull(failure);
+            IReadOnlyList<Exception> failures = failure is AggregateException aggregate
+                ? aggregate.Flatten().InnerExceptions
+                : [failure];
+            Assert.All(failures, item => Assert.IsType<TimeoutException>(item));
+            Assert.Contains(failures, item => item.Message.Contains("audio/stalled", StringComparison.Ordinal));
+
+            // Later cleanup may also exceed its short budget on a busy runner.
+            // It must still run while the first owner remains blocked.
+            await laterCleanupRan.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(stalled.Task.IsCompleted);
+            await WaitForAsync(() => services.AbandonedOperationCount == 1);
+        }
+        finally
+        {
+            stalled.TrySetResult();
+            await WaitForAsync(() => services.AbandonedOperationCount == 0);
+        }
+    }
+
+    [Fact]
+    public async Task FaultedAbandonedServiceIsContainedAndReleasedFromOwnership()
+    {
+        var stalled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var services = new ConsoleSessionServices(
+            disposalStepTimeout: TimeSpan.FromMilliseconds(25),
+            overallDisposalTimeout: TimeSpan.FromMilliseconds(250));
+        services.Audio.Register("stalled", () => new ValueTask(stalled.Task));
+
+        await Assert.ThrowsAsync<TimeoutException>(() => services.DisposeAsync().AsTask());
+        Assert.Equal(1, services.AbandonedOperationCount);
+
+        stalled.TrySetException(new InvalidOperationException("eventual cleanup failure"));
+        await WaitForAsync(() => services.AbandonedOperationCount == 0);
+    }
+
+    [Fact]
+    public async Task FaultedServiceIdentifiesItsOwnershipScopeAndName()
+    {
+        var services = new ConsoleSessionServices();
+        var expected = new IOException("test cleanup failure");
+        services.Audio.Register(
+            "output-route",
+            () => ValueTask.FromException(expected));
+
+        InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => services.DisposeAsync().AsTask());
+
+        Assert.Contains("audio/output-route", failure.Message, StringComparison.Ordinal);
+        Assert.Same(expected, failure.InnerException);
     }
 
     [Fact]
@@ -166,6 +261,26 @@ public sealed class ConsoleSessionRuntimeTests
     }
 
     [Fact]
+    public async Task RuntimeReportsTimerFaultsWithoutEscapingTheSchedulerCallback()
+    {
+        var services = new ConsoleSessionServices();
+        var scheduler = new FakeApplicationScheduler();
+        var failures = new List<Exception>();
+        var runtime = new ConsoleSessionRuntime(services, scheduler, failures.Add);
+        InvalidOperationException expected = new("timer failed");
+
+        _ = runtime.CreateTimer(
+            TimeSpan.FromSeconds(1),
+            (_, _) => throw expected,
+            startImmediately: true);
+
+        await Assert.Single(scheduler.Works).FireAsync();
+
+        Assert.Same(expected, Assert.Single(failures));
+        await runtime.DisposeAsync();
+    }
+
+    [Fact]
     public async Task MainWindowFacadeRegistersNamedScopesWithoutMonolithicCleanup()
     {
         string root = Path.Combine(
@@ -182,10 +297,9 @@ public sealed class ConsoleSessionRuntimeTests
                 [],
                 [],
                 new MainWindowViewModelOptions(
-                    UserSettingsStore: new UserSettingsStore(Path.Combine(root, "UserSettings.json")),
-                    SerialPortProvider: () => [],
-                    SessionServices: services,
-                    NetworkDisabledDemo: true));
+                    Document: new(new UserSettingsStore(Path.Combine(root, "UserSettings.json"))),
+                    Host: new(SerialPortProvider: () => [], SessionServices: services),
+                    Features: new(NetworkDisabledDemo: true)));
 
             ConsoleSessionServiceOwnership[] ownership = services
                 .SnapshotOwnership()
@@ -214,7 +328,7 @@ public sealed class ConsoleSessionRuntimeTests
                 "source-receive-work",
                 "call-recording-manager",
                 "debug-log-workspace",
-                "user-settings-persistence"
+                "shell-settings"
             ];
             Assert.All(requiredOwnership, name => Assert.Contains(name, cleanupOrder));
             Assert.Equal("dispatcher-timers", cleanupOrder[0]);
@@ -222,7 +336,7 @@ public sealed class ConsoleSessionRuntimeTests
             AssertBefore(cleanupOrder, "ptt-session", "coordinators-under-ptt-gate");
             AssertBefore(cleanupOrder, "radio-session-ingress", "systems");
             AssertBefore(cleanupOrder, "audio-work", "source-receive-work");
-            AssertBefore(cleanupOrder, "user-settings-persistence", "systems");
+            AssertBefore(cleanupOrder, "shell-settings", "systems");
         }
         finally
         {
@@ -291,11 +405,12 @@ public sealed class ConsoleSessionRuntimeTests
                         [],
                         [],
                         new MainWindowViewModelOptions(
-                            UserSettingsStore: new UserSettingsStore(
-                                Path.Combine(root, "UserSettings.json")),
-                            SerialPortProvider: () => throw new FormatException("serial discovery failed"),
-                            SessionServices: services,
-                            NetworkDisabledDemo: true))));
+                            Document: new(new UserSettingsStore(
+                                Path.Combine(root, "UserSettings.json"))),
+                            Host: new(
+                                SerialPortProvider: () => throw new FormatException("serial discovery failed"),
+                                SessionServices: services),
+                            Features: new(NetworkDisabledDemo: true)))));
 
             Assert.Equal("serial discovery failed", failure.Message);
             Assert.Equal(0, services.Count);
@@ -311,6 +426,13 @@ public sealed class ConsoleSessionRuntimeTests
 
     private static ValueTask NoOp()
         => ValueTask.CompletedTask;
+
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        while (!condition())
+            await Task.Delay(10, timeout.Token);
+    }
 
     private sealed class FakeApplicationScheduler : IApplicationScheduler
     {

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
@@ -32,6 +35,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged, DvmConsole.Presen
     private readonly string eventTgidText;
     private CallRecordingMetadata? recording;
     private bool isRecordingPlaying;
+    private bool startsActivityDay;
 
     public CallHistoryEntry(
         DateTimeOffset timestamp,
@@ -109,6 +113,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged, DvmConsole.Presen
     public bool EncryptionKnown => !IsEvent && encryption.IsKnown;
     public string TimestampText => Timestamp.ToLocalTime().ToString("HH:mm:ss");
     public string DateText => Timestamp.ToLocalTime().ToString("yyyy-MM-dd");
+    public bool StartsActivityDay => startsActivityDay;
     public string ProtocolText => IsEvent ? "EVENT" : Protocol.ToString().ToUpperInvariant();
     public string DisplayChannelText => IsEvent ? EventSource : ChannelName;
     public string DisplaySourceText => IsEvent ? EventRidText : SourceId.ToString();
@@ -141,6 +146,14 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged, DvmConsole.Presen
     public bool HasRecording => recording is not null;
     public bool HasPlayableRecording => recording?.IsPlayable == true;
     public bool IsRecordingPlaying => isRecordingPlaying;
+    public string RecordingPlaybackActionText => IsRecordingPlaying
+        ? "Stop"
+        : "Play";
+    public string RecordingPlaybackHelpText => IsRecordingPlaying
+        ? "Stop playback of this TAR recording"
+        : HasPlayableRecording
+            ? "Play this validated TAR recording"
+            : "Playback is unavailable because the TAR recording is missing or invalid";
     public string RecordingPlaybackToolTip => IsRecordingPlaying
         ? "Stop TAR recording playback"
         : "Play validated TAR recording";
@@ -157,6 +170,7 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged, DvmConsole.Presen
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Recording)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasRecording)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasPlayableRecording)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingPlaybackHelpText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingFileName)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingDetailsText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingPath)));
@@ -171,7 +185,17 @@ public sealed class CallHistoryEntry : INotifyPropertyChanged, DvmConsole.Presen
 
         isRecordingPlaying = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRecordingPlaying)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingPlaybackActionText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingPlaybackHelpText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingPlaybackToolTip)));
+    }
+
+    internal void SetStartsActivityDay(bool value)
+    {
+        if (startsActivityDay == value)
+            return;
+        startsActivityDay = value;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StartsActivityDay)));
     }
 
     public bool ObserveStream(uint streamId)
@@ -678,15 +702,7 @@ public sealed class CallHistoryStore
     }
 
     private static bool RecordingEquals(CallRecordingMetadata? left, CallRecordingMetadata right)
-    {
-        if (left is null)
-            return false;
-        if (!string.IsNullOrWhiteSpace(left.RecordingId) && !string.IsNullOrWhiteSpace(right.RecordingId))
-            return left.RecordingId.Equals(right.RecordingId, StringComparison.OrdinalIgnoreCase);
-        return !string.IsNullOrWhiteSpace(left.FilePath) &&
-            !string.IsNullOrWhiteSpace(right.FilePath) &&
-            FileSystemPathIdentity.AreEquivalent(left.FilePath, right.FilePath);
-    }
+        => RecordingDisplayIdentity.Matches(left, right);
 
     private static string RecordingKey(CallRecordingMetadata recording)
         => !string.IsNullOrWhiteSpace(recording.RecordingId)

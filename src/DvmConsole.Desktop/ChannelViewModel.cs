@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Media;
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
@@ -9,9 +12,20 @@ using DvmConsole.Presentation;
 using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Windows.Input;
 
 namespace DvmConsole.Desktop;
+
+public sealed class WidgetPositionChangedEventArgs(
+    double x,
+    double y,
+    bool isFinal) : EventArgs
+{
+    public double X { get; } = x;
+    public double Y { get; } = y;
+    public bool IsFinal { get; } = isFinal;
+}
 
 public sealed class ChannelViewModel :
     IChannelCardViewModel,
@@ -20,6 +34,7 @@ public sealed class ChannelViewModel :
     IPatchMemberChannelViewModel,
     INotifyPropertyChanged
 {
+    public event EventHandler<WidgetPositionChangedEventArgs>? WidgetPositionChanged;
     public static implicit operator DvmConsole.Application.ChannelId(ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
@@ -48,13 +63,6 @@ public sealed class ChannelViewModel :
             channel.Definition);
     }
 
-    private static readonly IBrush NormalPeakMarkerBrush =
-        new SolidColorBrush(Color.Parse("#F5F7FA"));
-    private static readonly IBrush YellowPeakMarkerBrush =
-        new SolidColorBrush(Color.Parse("#F2B134"));
-    private static readonly IBrush RedPeakMarkerBrush =
-        new SolidColorBrush(Color.Parse("#E5484D"));
-
     private readonly ChannelConfiguration configuration;
     private readonly ChannelRuntime runtime;
     private readonly ChannelDefinition sessionDefinition;
@@ -72,6 +80,8 @@ public sealed class ChannelViewModel :
     private bool audioSuspended;
     private bool audioBusy;
     private bool transmitEnabled;
+    private bool transmitStarting;
+    private bool transmitStopping;
     private bool transmitSelected;
     private bool pageSelected;
     private bool alertSelected;
@@ -127,6 +137,7 @@ public sealed class ChannelViewModel :
     public event PropertyChangedEventHandler? PropertyChanged;
     public event EventHandler<bool>? TransmitEncryptionChanged;
     public event EventHandler<bool>? RecordingStateChanged;
+    internal event Action<ChannelViewModel, ChannelSelectionChange>? SelectionChanged;
     public event EventHandler<double>? VolumeChanged;
     public event EventHandler<double>? StereoBalanceChanged;
 
@@ -142,18 +153,8 @@ public sealed class ChannelViewModel :
     public string LastCallerText => lastCallerText;
     public string LastCallerDisplayText => $"Last: {lastCallerText}";
     public double AudioLevel => audioLevel;
-    public double AudioFillWidth => AudioMeterWidth * audioLevel / 100;
+    public AudioMeterState AudioMeter => new(audioLevel, audioPeakLevel);
     public double AudioPeakLevel => audioPeakLevel;
-    public double AudioPeakMarkerX => Math.Clamp(
-        (AudioMeterWidth * audioPeakLevel / 100) - 1,
-        0,
-        AudioMeterWidth - 2);
-    public IBrush AudioPeakMarkerBrush => audioPeakLevel >= ChannelAudioMeter.RedThresholdDisplayLevel
-        ? RedPeakMarkerBrush
-        : audioPeakLevel >= ChannelAudioMeter.YellowThresholdDisplayLevel
-            ? YellowPeakMarkerBrush
-            : NormalPeakMarkerBrush;
-    public bool IsAudioPeakVisible => audioPeakLevel > 0;
     public double CardWidth => ResolveCardWidth(configuration.CardSize);
     internal static double ResolveCardWidth(string? cardSize)
         => (cardSize ?? "normal").Trim().ToLowerInvariant() switch
@@ -166,28 +167,34 @@ public sealed class ChannelViewModel :
     public double AudioMeterWidth => CardWidth - (CardWidth == 180 ? 20 : 12);
     public double WidgetX => widgetX;
     public double WidgetY => widgetY;
-    public IBrush CardBackgroundBrush => runtime.State == ChannelRuntimeState.Transmitting
-        ? new SolidColorBrush(Color.Parse("#0B6B9C"))
+    public IBrush CardBackgroundBrush => transmitStarting || runtime.State == ChannelRuntimeState.Transmitting
+        ? SolidBrushCache.Get("#0B6B9C")
         : IsReceivePresentationActive
-            ? new SolidColorBrush(Color.Parse("#008A3A"))
+            ? SolidBrushCache.Get("#008A3A")
             : audioEnabled
-                ? new SolidColorBrush(Color.Parse(darkMode ? "#1B2B22" : "#E2F3E8"))
-                : new SolidColorBrush(Color.Parse(darkMode ? "#151D26" : "#FFFFFF"));
-    public IBrush CardBorderBrush => runtime.State == ChannelRuntimeState.Transmitting
-        ? new SolidColorBrush(Color.Parse("#2497D3"))
+                ? SolidBrushCache.Get(darkMode ? "#1B2B22" : "#E2F3E8")
+                : SolidBrushCache.Get(darkMode ? "#151D26" : "#FFFFFF");
+    public IBrush CardBorderBrush => transmitStarting
+        ? SolidBrushCache.Get("#D99920")
+        : runtime.State == ChannelRuntimeState.Transmitting
+        ? SolidBrushCache.Get("#2497D3")
         : IsReceivePresentationActive
-            ? new SolidColorBrush(Color.Parse("#00C86A"))
+            ? SolidBrushCache.Get("#00C86A")
             : audioEnabled
-                ? new SolidColorBrush(Color.Parse("#4E8060"))
+                ? SolidBrushCache.Get("#4E8060")
                 : CreateBrush(configuration.ResourceColor, darkMode ? "#2A3A4B" : "#9BA8B5");
-    public IBrush CardTextBrush => new SolidColorBrush(Color.Parse(
-        IsReceivePresentationActive || runtime.State == ChannelRuntimeState.Transmitting
+    public IBrush CardTextBrush => SolidBrushCache.Get(
+        IsReceivePresentationActive || transmitStarting || runtime.State == ChannelRuntimeState.Transmitting
             ? "#FFFFFF"
-            : darkMode ? "#DCE3EB" : "#18212B"));
+            : darkMode ? "#DCE3EB" : "#18212B");
     public string StateText
     {
         get
         {
+            if (transmitStarting)
+                return "Starting PTT…";
+            if (transmitStopping)
+                return "Releasing PTT…";
             if (runtime.State == ChannelRuntimeState.Transmitting)
                 return runtime.StateText;
 
@@ -216,10 +223,13 @@ public sealed class ChannelViewModel :
     public ChannelSessionId SessionId => sessionDefinition.SessionId;
     public ChannelDefinition SessionDefinition => sessionDefinition;
     public bool IsAudioEnabled => audioEnabled;
+    public string ReceiveAutomationName => $"{Name}; receive {(audioEnabled ? "enabled" : "disabled")}";
     public bool IsAudioSuspended => audioSuspended;
     public bool IsReceivePresentationActive => ReceivePresentationOwner is not null;
     public string AudioButtonText => audioSuspended ? "RX muted" : audioEnabled ? "Stop audio" : "Listen";
     public bool IsTransmitting => transmitEnabled;
+    public bool IsTransmitStarting => transmitStarting;
+    public bool IsTransmitStopping => transmitStopping;
     public bool IsTransmitSelected => transmitSelected;
     public bool IsPageSelected => pageSelected;
     public bool IsAlertSelected => alertSelected;
@@ -239,6 +249,7 @@ public sealed class ChannelViewModel :
         get => NeutralSliderMath.VolumeGainToPosition(volume);
         set => SetVolume(NeutralSliderMath.VolumePositionToGain(value), raiseChanged: true);
     }
+    public string VolumeAutomationName => $"Volume for {Name}";
     public double StereoBalance
     {
         get => stereoBalance;
@@ -337,6 +348,12 @@ public sealed class ChannelViewModel :
             ? "Key available"
             : "Key unavailable";
     public string EncryptionButtonText => transmitEncrypted ? "SECURE" : "CLEAR";
+    public string EncryptionAutomationName => transmitEncrypted
+        ? $"Use clear transmit on {Name}"
+        : $"Use secure transmit on {Name}";
+    public string EncryptionAutomationHelpText => CanToggleEncryption
+        ? $"Current transmit mode is {EncryptionButtonText.ToLowerInvariant()}."
+        : $"Encryption selection is unavailable. {EncryptionStatusText}.";
     public bool CanListen => runtime.Definition.Protocol switch
     {
         ChannelProtocol.Dmr or ChannelProtocol.P25 or ChannelProtocol.Nxdn => true,
@@ -373,6 +390,12 @@ public sealed class ChannelViewModel :
         ? TalkgroupUnavailableReason
         : ConfigurationTransmitUnavailableReason;
     public string PttButtonText => transmitEnabled ? "Release" : "PTT";
+    public string PttAutomationName => transmitEnabled
+        ? $"Release push to talk on {Name}"
+        : $"Push to talk on {Name}";
+    public string PttAutomationHelpText => IsPttControlEnabled
+        ? transmitEnabled ? "Stop the active transmission." : "Start transmitting on this channel."
+        : $"Push to talk is unavailable because {TransmitUnavailableReason}.";
 
     private bool CanResolveConfiguredKey()
     {
@@ -395,52 +418,67 @@ public sealed class ChannelViewModel :
     }
 
     public string TransmitSelectionText => "TX";
+    public string TransmitSelectionAutomationName => IsTransmitSelected
+        ? $"Remove {Name} from multi-select transmit"
+        : $"Include {Name} in multi-select transmit";
     public string PageSelectionText => "PAGE";
+    public string PageSelectionAutomationName => IsPageSelected
+        ? $"Remove {Name} from paging targets"
+        : $"Include {Name} in paging targets";
     public string AlertSelectionText => "ALERT";
-    public IBrush TransmitSelectionBrush => new SolidColorBrush(Color.Parse(
+    public string AlertSelectionAutomationName => IsAlertSelected
+        ? $"Remove {Name} from alert targets"
+        : $"Include {Name} in alert targets";
+    public string RecordingAutomationName => recordingEnabled
+        ? $"Disable Talkgroup Audio Recording for {Name}"
+        : $"Enable Talkgroup Audio Recording for {Name}";
+    public string RecordingAutomationHelpText => CanRecord
+        ? "Toggle recording for this channel."
+        : "Recording is unavailable for this channel.";
+    public IBrush TransmitSelectionBrush => SolidBrushCache.Get(
         transmitSelected
             ? darkMode ? "#694BB0" : "#D7C9F2"
-            : darkMode ? "#242938" : "#E8EDF3"));
-    public IBrush TransmitSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+            : darkMode ? "#242938" : "#E8EDF3");
+    public IBrush TransmitSelectionBorderBrush => SolidBrushCache.Get(
         transmitSelected
             ? darkMode ? "#B69AF4" : "#7655B8"
-            : darkMode ? "#3A4555" : "#8996A3"));
-    public IBrush PageSelectionBrush => new SolidColorBrush(Color.Parse(
+            : darkMode ? "#3A4555" : "#8996A3");
+    public IBrush PageSelectionBrush => SolidBrushCache.Get(
         pageSelected
             ? darkMode ? "#A15B2A" : "#F2D1B8"
-            : darkMode ? "#242938" : "#E8EDF3"));
-    public IBrush PageSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+            : darkMode ? "#242938" : "#E8EDF3");
+    public IBrush PageSelectionBorderBrush => SolidBrushCache.Get(
         pageSelected
             ? darkMode ? "#F0A15C" : "#A95C26"
-            : darkMode ? "#3A4555" : "#8996A3"));
-    public IBrush AlertSelectionBrush => new SolidColorBrush(Color.Parse(
+            : darkMode ? "#3A4555" : "#8996A3");
+    public IBrush AlertSelectionBrush => SolidBrushCache.Get(
         alertSelected
             ? darkMode ? "#8A3D68" : "#F0C7DE"
-            : darkMode ? "#242938" : "#E8EDF3"));
-    public IBrush AlertSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+            : darkMode ? "#242938" : "#E8EDF3");
+    public IBrush AlertSelectionBorderBrush => SolidBrushCache.Get(
         alertSelected
             ? darkMode ? "#E58BBC" : "#A84479"
-            : darkMode ? "#3A4555" : "#8996A3"));
-    public IBrush RecordingSelectionBrush => new SolidColorBrush(Color.Parse(
+            : darkMode ? "#3A4555" : "#8996A3");
+    public IBrush RecordingSelectionBrush => SolidBrushCache.Get(
         recordingEnabled
             ? darkMode ? "#8A3A3A" : "#F2CCCC"
-            : darkMode ? "#242938" : "#E8EDF3"));
-    public IBrush RecordingSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+            : darkMode ? "#242938" : "#E8EDF3");
+    public IBrush RecordingSelectionBorderBrush => SolidBrushCache.Get(
         recordingEnabled
             ? darkMode ? "#E58A8A" : "#A84343"
-            : darkMode ? "#3A4555" : "#8996A3"));
-    public IBrush EncryptionSelectionBrush => new SolidColorBrush(Color.Parse(
+            : darkMode ? "#3A4555" : "#8996A3");
+    public IBrush EncryptionSelectionBrush => SolidBrushCache.Get(
         transmitEncrypted
             ? "#B45309"
-            : darkMode ? "#242938" : "#E8EDF3"));
-    public IBrush EncryptionSelectionBorderBrush => new SolidColorBrush(Color.Parse(
+            : darkMode ? "#242938" : "#E8EDF3");
+    public IBrush EncryptionSelectionBorderBrush => SolidBrushCache.Get(
         transmitEncrypted
             ? "#F59E0B"
-            : darkMode ? "#3A4555" : "#8996A3"));
-    public IBrush EncryptionSelectionTextBrush => new SolidColorBrush(Color.Parse(
+            : darkMode ? "#3A4555" : "#8996A3");
+    public IBrush EncryptionSelectionTextBrush => SolidBrushCache.Get(
         transmitEncrypted
             ? "#FFFFFF"
-            : darkMode ? "#DCE3EB" : "#18212B"));
+            : darkMode ? "#DCE3EB" : "#18212B");
     public ICommand AudioCommand { get; private set; }
     public ICommand PttCommand { get; private set; }
     public ICommand EncryptionCommand { get; }
@@ -475,6 +513,9 @@ public sealed class ChannelViewModel :
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanToggleEncryption)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionStatusText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionAutomationName)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionAutomationHelpText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttAutomationHelpText)));
         NotifyEncryptionAppearanceChanged();
         (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
@@ -491,6 +532,7 @@ public sealed class ChannelViewModel :
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitUnavailableReason)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanTransmit)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttAutomationHelpText)));
         (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
@@ -503,20 +545,24 @@ public sealed class ChannelViewModel :
         NotifySelectableEncryptionStateChanged();
     }
 
-    public void SetRecordingEnabled(bool enabled)
-        => SetRecordingEnabledCore(enabled, raiseStateChanged: true);
+    public void SetRecordingEnabled(bool enabled, [CallerMemberName] string origin = "")
+        => SetRecordingEnabledCore(enabled, raiseStateChanged: true, origin);
 
-    public void RestoreRecordingEnabled(bool enabled)
-        => SetRecordingEnabledCore(enabled, raiseStateChanged: false);
+    public void RestoreRecordingEnabled(bool enabled, [CallerMemberName] string origin = "")
+        => SetRecordingEnabledCore(enabled, raiseStateChanged: false, $"settings restore: {origin}");
 
-    private void SetRecordingEnabledCore(bool enabled, bool raiseStateChanged)
+    private void SetRecordingEnabledCore(bool enabled, bool raiseStateChanged, string origin)
     {
         if (recordingEnabled == enabled)
             return;
 
+        bool previous = recordingEnabled;
         recordingEnabled = enabled;
+        ObserveSelectionChange(ChannelSelectionKind.Recording, previous, enabled, origin);
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRecordingEnabled)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingAutomationName)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingAutomationHelpText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingConfigurationButtonText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBorderBrush)));
@@ -662,21 +708,37 @@ public sealed class ChannelViewModel :
         receivePlaybackStreamId = null;
     }
 
-    public void SetAudioEnabled(bool enabled)
+    public void SetAudioEnabled(bool enabled, [CallerMemberName] string origin = "")
     {
         bool suspensionChanged = audioSuspended;
         audioSuspended = false;
         if (audioEnabled == enabled && !suspensionChanged)
             return;
+        bool previous = audioEnabled;
         audioEnabled = enabled;
+        if (previous != enabled)
+            ObserveSelectionChange(ChannelSelectionKind.Receive, previous, enabled, origin);
         if (!enabled)
             ClearReceivePlayback();
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioEnabled)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ReceiveAutomationName)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioSuspended)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioButtonText)));
         NotifyReceivePresentationChanged();
         if (!enabled)
             SetAudioLevel(0);
+    }
+
+    private void ObserveSelectionChange(ChannelSelectionKind kind, bool previous, bool current, string origin)
+    {
+        try
+        {
+            SelectionChanged?.Invoke(this, new(kind, previous, current, origin));
+        }
+        catch
+        {
+            // Diagnostic observers cannot prevent a selection or its UI updates.
+        }
     }
 
     public void SetAudioSuspended(bool suspended)
@@ -759,24 +821,16 @@ public sealed class ChannelViewModel :
             return;
 
         if (levelChanged)
-        {
             audioLevel = normalized;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioLevel)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioFillWidth)));
-        }
 
         if (peakChanged)
-        {
             audioPeakLevel = normalizedPeak;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioPeakLevel)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioPeakMarkerX)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioPeakMarkerBrush)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioPeakVisible)));
-        }
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioMeter)));
     }
 
     public void SetTransmitEnabled(bool enabled, uint streamId = 0)
     {
+        SetTransmitTransition(starting: false, stopping: false);
         if (enabled)
         {
             if (streamId == 0)
@@ -797,8 +851,37 @@ public sealed class ChannelViewModel :
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitting)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttAutomationName)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttAutomationHelpText)));
         (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+    }
+
+    internal void SetTransmitStarting(bool starting)
+        => SetTransmitTransition(starting, stopping: false);
+
+    internal void SetTransmitStopping(bool stopping)
+        => SetTransmitTransition(starting: false, stopping);
+
+    private void SetTransmitTransition(bool starting, bool stopping)
+    {
+        bool startingChanged = transmitStarting != starting;
+        bool stoppingChanged = transmitStopping != stopping;
+        if (!startingChanged && !stoppingChanged)
+            return;
+
+        transmitStarting = starting;
+        transmitStopping = stopping;
+        if (startingChanged)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitStarting)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardTextBrush)));
+        }
+        if (stoppingChanged)
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitStopping)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StateText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
     }
 
     public void SetTransmitSelected(bool selected)
@@ -807,6 +890,7 @@ public sealed class ChannelViewModel :
             return;
         transmitSelected = selected;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitSelected)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionAutomationName)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBorderBrush)));
@@ -818,6 +902,7 @@ public sealed class ChannelViewModel :
             return;
         pageSelected = selected;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPageSelected)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionAutomationName)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBorderBrush)));
@@ -829,6 +914,7 @@ public sealed class ChannelViewModel :
             return;
         alertSelected = selected;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAlertSelected)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionAutomationName)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBrush)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBorderBrush)));
@@ -836,19 +922,28 @@ public sealed class ChannelViewModel :
 
     public void RestoreTransmitSelection(bool selected) => SetTransmitSelected(selected);
 
-    public void SetWidgetPosition(double x, double y)
+    public void SetWidgetPosition(double x, double y, bool isFinal = false)
     {
         double nextX = double.IsFinite(x) ? Math.Clamp(x, 0, 10_000) : 0;
         double nextY = double.IsFinite(y) ? Math.Clamp(y, 0, 10_000) : 0;
+        bool changed = false;
         if (Math.Abs(widgetX - nextX) >= 0.01)
         {
             widgetX = nextX;
+            changed = true;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetX)));
         }
         if (Math.Abs(widgetY - nextY) >= 0.01)
         {
             widgetY = nextY;
+            changed = true;
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(WidgetY)));
+        }
+        if (changed || isFinal)
+        {
+            WidgetPositionChanged?.Invoke(
+                this,
+                new WidgetPositionChangedEventArgs(widgetX, widgetY, isFinal));
         }
     }
 
@@ -1059,6 +1154,7 @@ public sealed class ChannelViewModel :
 
         audioBusy = true;
         (AudioCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         try
         {
             if (audioEnabled)
@@ -1070,6 +1166,7 @@ public sealed class ChannelViewModel :
         {
             audioBusy = false;
             (AudioCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+            (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         }
     }
 
@@ -1080,6 +1177,7 @@ public sealed class ChannelViewModel :
 
         transmitBusy = true;
         (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         try
         {
             if (transmitEnabled)
@@ -1091,6 +1189,7 @@ public sealed class ChannelViewModel :
         {
             transmitBusy = false;
             (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+            (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         }
     }
 
@@ -1128,6 +1227,9 @@ public sealed class ChannelViewModel :
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanToggleEncryption)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionButtonText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionAutomationName)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionAutomationHelpText)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttAutomationHelpText)));
         NotifyEncryptionAppearanceChanged();
         (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
@@ -1178,15 +1280,5 @@ public sealed class ChannelViewModel :
     }
 
     private static IBrush CreateBrush(string? color, string fallback)
-    {
-        try
-        {
-            return new SolidColorBrush(Color.Parse(
-                string.IsNullOrWhiteSpace(color) ? fallback : color.Trim()));
-        }
-        catch (FormatException)
-        {
-            return new SolidColorBrush(Color.Parse(fallback));
-        }
-    }
+        => SolidBrushCache.Get(color ?? string.Empty, fallback);
 }

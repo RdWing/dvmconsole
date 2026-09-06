@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
@@ -36,6 +39,16 @@ public sealed partial class ConfigurationStudioKeysView : UserControl
             return;
         }
         QueueCommit(() => ViewModel?.CommitKeyProtocolEdit());
+    }
+
+    private void HandleKeySystemChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded || handlingSelectionChange ||
+            sender is not ComboBox { SelectedItem: SystemConfiguration })
+        {
+            return;
+        }
+        QueueCommit(() => ViewModel?.CommitKeyEdit());
     }
 
     private void HandleKeyAlgorithmChanged(object? sender, SelectionChangedEventArgs e)

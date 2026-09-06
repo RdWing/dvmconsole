@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Runtime;
 using Xunit;
@@ -217,6 +220,141 @@ public sealed class ConfigurationLoaderTests
         Assert.Equal("nxdn", keys.Keys[3].Protocol);
         Assert.Single(aliases);
         Assert.Equal("Radio 1", AliasFileLoader.FindAlias(aliases, 1));
+    }
+
+    [Fact]
+    public void TypedKeyCodecAcceptsLegacyHexAndRoundTripsAllFields()
+    {
+        KeyContainer parsed = KeyFileLoader.Parse("""
+            keys:
+              - system: Regional FNE
+                protocol: dmr
+                keyId: 0x2A
+                algId: 0x05
+                key: 001122AABB
+                vendorExtension: ignored
+            """);
+
+        KeyEntry key = Assert.Single(parsed.Keys);
+        Assert.Equal("Regional FNE", key.System);
+        Assert.Equal("dmr", key.Protocol);
+        Assert.Equal((ushort)0x2A, key.KeyId);
+        Assert.Equal(0x05, key.AlgId);
+        Assert.Equal("001122AABB", key.Key);
+
+        KeyContainer roundTrip = KeyFileLoader.Parse(KeyFileLoader.Serialize(parsed));
+        KeyEntry saved = Assert.Single(roundTrip.Keys);
+        Assert.Equal(key.Protocol, saved.Protocol);
+        Assert.Equal(key.System, saved.System);
+        Assert.Equal(key.KeyId, saved.KeyId);
+        Assert.Equal(key.AlgId, saved.AlgId);
+        Assert.Equal(key.Key, saved.Key);
+    }
+
+    [Fact]
+    public void KeyCodecWritesOnlyTheCompactPublicSchema()
+    {
+        var keys = new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    Name = "Dispatch AES",
+                    System = "Regional P25",
+                    Protocol = "p25",
+                    KeyId = 0x2A,
+                    AlgId = 0x84,
+                    Key = "00112233"
+                },
+                new KeyEntry
+                {
+                    Name = "Operations Basic Privacy",
+                    System = "Regional DMR",
+                    Protocol = "dmr",
+                    KeyId = 0x03,
+                    AlgId = 0x01,
+                    Key = "A1B2C3D4E5"
+                }
+            ]
+        };
+
+        string yaml = KeyFileLoader.Serialize(keys);
+
+        Assert.Contains("name: Dispatch AES", yaml, StringComparison.Ordinal);
+        Assert.Contains("system: Regional P25", yaml, StringComparison.Ordinal);
+        Assert.Contains("keyId: 0x2A", yaml, StringComparison.Ordinal);
+        Assert.Contains("algId: 0x84", yaml, StringComparison.Ordinal);
+        Assert.Contains("protocol: p25", yaml, StringComparison.Ordinal);
+        Assert.Contains("protocol: dmr", yaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("requiredLength", yaml, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("displayName", yaml, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("keyBytes", yaml, StringComparison.OrdinalIgnoreCase);
+        string[] serializedFields = yaml.Split('\n')
+            .Select(line => line.Trim().TrimStart('-').Trim())
+            .Where(line => line.Contains(':', StringComparison.Ordinal) && line != "keys:")
+            .Select(line => line[..line.IndexOf(':')])
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(["name", "system", "protocol", "keyId", "algId", "key"], serializedFields);
+
+        KeyEntry[] roundTrip = KeyFileLoader.Parse(yaml).Keys.ToArray();
+        Assert.Equal("Dispatch AES", roundTrip[0].Name);
+        Assert.Equal("Regional P25", roundTrip[0].System);
+        Assert.Equal("p25", roundTrip[0].Protocol);
+        Assert.Equal("Operations Basic Privacy", roundTrip[1].Name);
+        Assert.Equal("Regional DMR", roundTrip[1].System);
+        Assert.Equal("dmr", roundTrip[1].Protocol);
+    }
+
+    [Fact]
+    public void KeyValidationAllowsMatchingIdentitiesInDifferentSystemScopes()
+    {
+        var keys = new KeyContainer
+        {
+            Keys =
+            [
+                new KeyEntry
+                {
+                    System = "System A",
+                    Protocol = "dmr",
+                    KeyId = 1,
+                    AlgId = 1,
+                    Key = "0102030405"
+                },
+                new KeyEntry
+                {
+                    System = "System B",
+                    Protocol = "dmr",
+                    KeyId = 1,
+                    AlgId = 1,
+                    Key = "A1A2A3A4A5"
+                }
+            ]
+        };
+
+        Assert.Empty(KeyFileValidator.Validate(keys));
+    }
+
+    [Fact]
+    public void TypedAliasCodecHandlesEmptyFilesAndRoundTripsAliases()
+    {
+        Assert.Empty(AliasFileLoader.Parse(string.Empty));
+
+        var aliases = new List<RadioAlias>
+        {
+            new() { Alias = "true", Rid = 42 },
+            new() { Alias = "Medic 7", Rid = 7 }
+        };
+
+        string yaml = AliasFileLoader.Serialize(aliases);
+        List<RadioAlias> roundTrip = AliasFileLoader.Parse(yaml);
+
+        Assert.Contains("alias: 'true'", yaml, StringComparison.Ordinal);
+        Assert.Equal(2, roundTrip.Count);
+        Assert.Equal("true", roundTrip[0].Alias);
+        Assert.Equal((uint)42, roundTrip[0].Rid);
+        Assert.Equal("Medic 7", roundTrip[1].Alias);
     }
 
     [Fact]

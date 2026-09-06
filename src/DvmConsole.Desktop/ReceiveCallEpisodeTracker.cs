@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Core.Settings;
 using DvmConsole.FneClient;
 using DvmConsole.Operations;
@@ -335,14 +338,16 @@ internal sealed class ReceiveCallEpisodeTracker
 
     private void PurgeExpiredMappings(DateTimeOffset now)
     {
-        foreach (EpisodeState episode in episodes.Values
-                     .Where(candidate =>
-                         candidate.MappingExpiresAt is DateTimeOffset expiresAt &&
-                         expiresAt <= now)
-                     .ToArray())
+        List<EpisodeState>? expired = null;
+        foreach (EpisodeState episode in episodes.Values)
         {
-            RemoveEpisode(episode);
+            if (episode.MappingExpiresAt is DateTimeOffset expiresAt && expiresAt <= now)
+                (expired ??= []).Add(episode);
         }
+        if (expired is null)
+            return;
+        foreach (EpisodeState episode in expired)
+            RemoveEpisode(episode);
     }
 
     private void MakeRoomForEpisode()
@@ -403,7 +408,7 @@ internal sealed class ReceiveCallEpisodeTracker
                 traffic.SourceId,
                 traffic.DestinationId,
                 traffic.Slot,
-                traffic.CallType.Trim().ToUpperInvariant());
+                traffic.CallType);
 
         public bool Equals(ReceiveCallIdentity other)
             => Protocol == other.Protocol &&
@@ -436,17 +441,44 @@ internal sealed class ReceiveCallEpisodeTracker
     {
         private readonly TrafficEncryptionObservationState encryptionState = new(encryption);
         private readonly Queue<uint> replacementStreamOrder = [];
+        private uint[]? orderedStreamIds;
+        private ReceiveCallEpisodeSnapshot? snapshot;
+        private DateTimeOffset lastActivityAt = startedAt;
+        private DateTimeOffset? lastPhysicalEndAt;
+        private ReceivePhysicalEndReason? lastPhysicalEndReason;
+        private DateTimeOffset? completedAt;
+        private DateTimeOffset? mappingExpiresAt;
 
         public long EpisodeId { get; } = episodeId;
         public ReceiveCallIdentity Identity { get; } = identity;
         public uint PrimaryStreamId { get; } = primaryStreamId;
         public HashSet<uint> StreamIds { get; } = [primaryStreamId];
         public DateTimeOffset StartedAt { get; } = startedAt;
-        public DateTimeOffset LastActivityAt { get; set; } = startedAt;
-        public DateTimeOffset? LastPhysicalEndAt { get; set; }
-        public ReceivePhysicalEndReason? LastPhysicalEndReason { get; set; }
-        public DateTimeOffset? CompletedAt { get; set; }
-        public DateTimeOffset? MappingExpiresAt { get; set; }
+        public DateTimeOffset LastActivityAt
+        {
+            get => lastActivityAt;
+            set { if (lastActivityAt != value) { lastActivityAt = value; snapshot = null; } }
+        }
+        public DateTimeOffset? LastPhysicalEndAt
+        {
+            get => lastPhysicalEndAt;
+            set { if (lastPhysicalEndAt != value) { lastPhysicalEndAt = value; snapshot = null; } }
+        }
+        public ReceivePhysicalEndReason? LastPhysicalEndReason
+        {
+            get => lastPhysicalEndReason;
+            set { if (lastPhysicalEndReason != value) { lastPhysicalEndReason = value; snapshot = null; } }
+        }
+        public DateTimeOffset? CompletedAt
+        {
+            get => completedAt;
+            set { if (completedAt != value) { completedAt = value; snapshot = null; } }
+        }
+        public DateTimeOffset? MappingExpiresAt
+        {
+            get => mappingExpiresAt;
+            set => mappingExpiresAt = value;
+        }
         public EncryptionSnapshot Encryption => encryptionState.Encryption;
 
         public EpisodeStreamUpdate TrackStream(uint streamId, int maximumStreams)
@@ -463,6 +495,8 @@ internal sealed class ReceiveCallEpisodeTracker
 
             StreamIds.Add(streamId);
             replacementStreamOrder.Enqueue(streamId);
+            orderedStreamIds = null;
+            snapshot = null;
             return new EpisodeStreamUpdate(Added: true, removedStreamId);
         }
 
@@ -481,7 +515,10 @@ internal sealed class ReceiveCallEpisodeTracker
         }
 
         public void ObserveEncryption(FneTrafficFrame traffic)
-            => encryptionState.Observe(traffic);
+        {
+            if (encryptionState.Observe(traffic))
+                snapshot = null;
+        }
 
         public void ObservePhysicalEnd(DateTimeOffset endedAt, ReceivePhysicalEndReason reason)
         {
@@ -499,7 +536,7 @@ internal sealed class ReceiveCallEpisodeTracker
         }
 
         public ReceiveCallEpisodeSnapshot Snapshot()
-            => new(
+            => snapshot ??= new ReceiveCallEpisodeSnapshot(
                 EpisodeId,
                 Identity.SystemName,
                 Identity.Protocol,
@@ -508,7 +545,7 @@ internal sealed class ReceiveCallEpisodeTracker
                 Identity.Slot,
                 Identity.CallType,
                 PrimaryStreamId,
-                StreamIds
+                orderedStreamIds ??= StreamIds
                     .OrderBy(streamId => streamId == PrimaryStreamId ? 0 : 1)
                     .ThenBy(streamId => streamId)
                     .ToArray(),

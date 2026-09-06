@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -12,12 +15,11 @@ namespace DvmConsole.Presentation;
 
 public sealed partial class ConfigurationStudioZonesView : UserControl
 {
-    private const double NarrowWidth = 1180;
-    private const double PhoneWidth = 400;
     private ConfigurationStudioViewModel? subscribedViewModel;
     private int queuedSelectionCommitVersion;
     private int queuedChannelScrollVersion;
     private bool narrowLayout;
+    private bool stackedInspectorLayout;
     private bool phoneLayout;
     private bool responsiveLayoutInitialized;
     private Control? draggedCard;
@@ -322,10 +324,17 @@ public sealed partial class ConfigurationStudioZonesView : UserControl
 
     private void ApplyResponsiveLayout(double width)
     {
-        bool useNarrow = width > 0 && width < NarrowWidth;
-        bool usePhone = width > 0 && width < PhoneWidth;
-        if (responsiveLayoutInitialized && useNarrow == narrowLayout && usePhone == phoneLayout)
-            return;
+        ConfigurationStudioResponsiveLayout responsive =
+            ConfigurationStudioResponsiveLayoutPolicy.Evaluate(width, Bounds.Height);
+        bool useNarrow = responsive.UsePhoneChannelList;
+        bool stackInspector = responsive.StackInspector;
+        bool useSingleColumn = useNarrow;
+        bool usePhone = responsive.UseTouchTargets;
+        bool enteringNarrow = useNarrow && (!responsiveLayoutInitialized || !narrowLayout);
+        bool layoutChanged = !responsiveLayoutInitialized ||
+            useNarrow != narrowLayout ||
+            stackInspector != stackedInspectorLayout ||
+            usePhone != phoneLayout;
 
         Grid? layout = this.FindControl<Grid>("ZoneLayout");
         Grid? channelPane = this.FindControl<Grid>("ChannelPane");
@@ -336,41 +345,58 @@ public sealed partial class ConfigurationStudioZonesView : UserControl
         TextBox? search = this.FindControl<TextBox>("ChannelSearchBox");
         Menu? menu = this.FindControl<Menu>("ZoneEditMenu");
         Grid? desktopTable = this.FindControl<Grid>("DesktopChannelTable");
+        ScrollViewer? desktopTableScroller = this.FindControl<ScrollViewer>("DesktopChannelTableScroller");
         ListBox? narrowList = this.FindControl<ListBox>("narrowChannelList");
+        Border? liveLayout = this.FindControl<Border>("liveZoneLayoutDrawer");
         if (layout is null || channelPane is null || inspector is null || header is null ||
             headerBorder is null || heading is null || search is null || menu is null ||
-            desktopTable is null || narrowList is null)
+            desktopTable is null || desktopTableScroller is null || narrowList is null || liveLayout is null)
         {
             return;
         }
 
+        liveLayout.MaxHeight = responsive.PreviewMaximumHeight;
+        if (!layoutChanged)
+            return;
+
+        if (enteringNarrow && ViewModel is { } viewModel)
+            viewModel.IsZonePreviewExpanded = false;
+
         IReadOnlyList<ChannelConfiguration> selectedChannels = GetSelectedChannelRows();
         narrowLayout = useNarrow;
+        stackedInspectorLayout = stackInspector;
         phoneLayout = usePhone;
         responsiveLayoutInitialized = true;
         Classes.Set("phone", usePhone);
         ApplyPhoneTouchTargets(usePhone, inspector, search);
 
-        layout.ColumnDefinitions = new ColumnDefinitions(useNarrow ? "*" : "*,316");
-        layout.RowDefinitions = new RowDefinitions(useNarrow ? "3*,2*" : "*");
-        Grid.SetColumn(inspector, useNarrow ? 0 : 1);
-        Grid.SetRow(inspector, useNarrow ? 1 : 0);
-        inspector.BorderThickness = useNarrow ? new Thickness(0, 1, 0, 0) : new Thickness(1, 0, 0, 0);
+        layout.ColumnDefinitions = new ColumnDefinitions(stackInspector ? "*" : "*,316");
+        layout.RowDefinitions = new RowDefinitions(stackInspector ? "55*,45*" : "*");
+        Grid.SetColumn(inspector, stackInspector ? 0 : 1);
+        Grid.SetRow(inspector, stackInspector ? 1 : 0);
+        inspector.BorderThickness = stackInspector ? new Thickness(0, 1, 0, 0) : new Thickness(1, 0, 0, 0);
+        inspector.MinHeight = 0;
 
-        channelPane.RowDefinitions = new RowDefinitions(useNarrow ? "Auto,*,Auto" : "55,*,Auto");
-        header.ColumnDefinitions = new ColumnDefinitions(useNarrow ? "*,58" : "*,216,58");
-        header.RowDefinitions = new RowDefinitions(useNarrow ? "Auto,Auto" : "Auto");
-        headerBorder.Padding = useNarrow ? new Thickness(12, 8) : new Thickness(20, 0, 12, 0);
+        channelPane.RowDefinitions = new RowDefinitions(
+            useSingleColumn ? "92,*,Auto" : "55,*,Auto");
+        header.ColumnDefinitions = new ColumnDefinitions(
+            useSingleColumn ? "*,58" : "*,216,58");
+        // A lone Auto row retains only its measured height inside the fixed
+        // 55-pixel header. Centered controls would then be arranged against a
+        // near-zero cell and clip above the page. Stretch the desktop row.
+        header.RowDefinitions = new RowDefinitions(useSingleColumn ? "Auto,Auto" : "*");
+        headerBorder.Padding = useSingleColumn ? new Thickness(12, 8) : new Thickness(20, 0, 12, 0);
         Grid.SetColumn(heading, 0);
         Grid.SetRow(heading, 0);
-        Grid.SetColumn(menu, useNarrow ? 1 : 2);
+        Grid.SetColumn(menu, useSingleColumn ? 1 : 2);
         Grid.SetRow(menu, 0);
-        Grid.SetColumn(search, useNarrow ? 0 : 1);
-        Grid.SetRow(search, useNarrow ? 1 : 0);
-        Grid.SetColumnSpan(search, useNarrow ? 2 : 1);
-        search.Margin = useNarrow ? new Thickness(0, 8, 0, 0) : default;
+        Grid.SetColumn(search, useSingleColumn ? 0 : 1);
+        Grid.SetRow(search, useSingleColumn ? 1 : 0);
+        Grid.SetColumnSpan(search, useSingleColumn ? 2 : 1);
+        search.Margin = useSingleColumn ? new Thickness(0, 8, 0, 0) : default;
 
         desktopTable.IsVisible = !useNarrow;
+        desktopTableScroller.IsVisible = !useNarrow;
         narrowList.IsVisible = useNarrow;
         RestoreSelectedRows(selectedChannels);
         QueueSelectedChannelScroll();

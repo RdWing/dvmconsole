@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using Xunit;
 
@@ -61,6 +64,35 @@ public sealed class PcmFrameAssemblerTests
         Assert.Throws<IOException>(() => assembler.FlushPadded(
             _ => throw new IOException("tail send failed")));
         Assert.Equal(0, assembler.BufferedSamples);
+    }
+
+    [Fact]
+    public void BorrowedHandoffReusesTheAssemblerBufferAndPadsTheTail()
+    {
+        var assembler = new PcmFrameAssembler(frameSize: 4);
+        var frames = new List<short[]>();
+
+        Assert.Equal(1, assembler.AppendBorrowed(
+            new short[] { 1, 2, 3, 4, 5, 6 },
+            frame => frames.Add(frame.ToArray())));
+        Assert.True(assembler.FlushPaddedBorrowed(frame => frames.Add(frame.ToArray())));
+
+        Assert.Equal(new short[] { 1, 2, 3, 4 }, frames[0]);
+        Assert.Equal(new short[] { 5, 6, 0, 0 }, frames[1]);
+        Assert.Equal(0, assembler.BufferedSamples);
+    }
+
+    [Fact]
+    public void BorrowedHandoffClearsCompletedStateBeforePublishing()
+    {
+        var assembler = new PcmFrameAssembler(frameSize: 4);
+
+        Assert.Throws<IOException>(() => assembler.AppendBorrowed(
+            new short[] { 1, 2, 3, 4 },
+            _ => throw new IOException("send failed")));
+
+        Assert.Equal(0, assembler.BufferedSamples);
+        Assert.False(assembler.FlushPaddedBorrowed(_ => throw new InvalidOperationException()));
     }
 
     private static short[] CreateSamples(int start, int count)

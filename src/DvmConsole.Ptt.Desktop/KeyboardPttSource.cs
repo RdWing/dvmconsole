@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Ptt;
 
 public enum KeyboardPttKey
@@ -73,13 +76,15 @@ public sealed class KeyboardPttSource : IPttSource
     public ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (started)
-        {
-            SetPressed(false);
-            activationKeyDown = false;
-            started = false;
-        }
+        Stop();
         return ValueTask.CompletedTask;
+    }
+
+    internal void Stop()
+    {
+        started = false;
+        activationKeyDown = false;
+        SetPressed(false);
     }
 
     public bool HandleKeyDown(KeyboardPttKey key)
@@ -119,6 +124,15 @@ public sealed class KeyboardPttSource : IPttSource
         }
 
         return true;
+    }
+
+    // Clears a latched toggle without treating an OS key-repeat as a new
+    // press. The physical key-up edge still resets activationKeyDown.
+    public void ReleaseToggleLatch()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (started && ToggleMode)
+            SetPressed(false);
     }
 
     public ValueTask DisposeAsync()

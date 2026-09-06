@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Application;
 using DvmConsole.Media;
@@ -41,6 +44,7 @@ internal static class ReceiveDiagnosticsText
         string queueStages = latest.HasQueueDelayBreakdown
             ? $"jitter/worker queue {latest.QueueDelay.TotalMilliseconds:0} ms " +
               $"(jitter hold {latest.JitterBufferHoldDuration.TotalMilliseconds:0} ms; " +
+              $"ordered audio drain {latest.OrderedDrainHoldDuration.TotalMilliseconds:0} ms; " +
               $"{jitterTarget}; worker backlog {latest.WorkerBacklogDuration.TotalMilliseconds:0} ms)"
             : $"jitter/decoder queue {latest.QueueDelay.TotalMilliseconds:0} ms ({jitterTarget})";
         string processingPrivacy = latest.EncryptedSessionProcessing switch
@@ -194,6 +198,7 @@ internal static class ReceiveDiagnosticsText
               $"jitter/worker queue {pipeline.MaximumQueueDelay.TotalMilliseconds:0} ms " +
               $"(jitter hold max {pipeline.MaximumJitterBufferHoldDuration.TotalMilliseconds:0} ms, " +
               $"jitter target up to {pipeline.MaximumJitterBufferTargetDelay.TotalMilliseconds:0} ms, " +
+              $"ordered audio drain max {pipeline.MaximumOrderedDrainHoldDuration.TotalMilliseconds:0} ms, " +
               $"worker backlog max {pipeline.MaximumWorkerBacklogDuration.TotalMilliseconds:0} ms), " +
               $"session gate max {pipeline.MaximumSessionGateDelay.TotalMilliseconds:0} ms, " +
               $"session processing max {pipeline.MaximumSessionProcessingDuration.TotalMilliseconds:0} ms, " +

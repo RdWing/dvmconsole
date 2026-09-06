@@ -1,6 +1,51 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Diagnostics;
 
 namespace DvmConsole.Desktop;
+
+internal interface IReceivePresentationPort
+{
+    bool IsDisposing { get; }
+    bool HasUiThreadAccess { get; }
+    long GetTimestamp();
+    void Post(Action action);
+    void Present(SystemViewModel system, SystemTrafficWorkItem workItem, bool publishDiagnostics);
+    void ObserveTiming(string systemName, TimeSpan queueDelay, TimeSpan applyDuration) { }
+}
+
+internal sealed class ReceivePresentationPort(
+    Func<bool> isDisposing,
+    Func<bool> hasUiThreadAccess,
+    Action<Action> post,
+    Action<SystemViewModel, SystemTrafficWorkItem, bool> present,
+    Func<long>? getTimestamp = null,
+    Action<string, TimeSpan, TimeSpan>? observeTiming = null) : IReceivePresentationPort
+{
+    private readonly Func<long> clock = getTimestamp ?? Stopwatch.GetTimestamp;
+
+    public bool IsDisposing => isDisposing();
+    public bool HasUiThreadAccess => hasUiThreadAccess();
+    public long GetTimestamp() => clock();
+    public void ObserveTiming(string systemName, TimeSpan queueDelay, TimeSpan applyDuration)
+    {
+        try
+        {
+            observeTiming?.Invoke(systemName, queueDelay, applyDuration);
+        }
+        catch
+        {
+            // A diagnostic sink cannot strand the remaining presentation batch.
+        }
+    }
+    public void Post(Action action) => post(action);
+    public void Present(
+        SystemViewModel system,
+        SystemTrafficWorkItem workItem,
+        bool publishDiagnostics)
+        => present(system, workItem, publishDiagnostics);
+}
 
 internal sealed class ReceivePresentationController
 {
@@ -10,39 +55,28 @@ internal sealed class ReceivePresentationController
     private readonly object sync = new();
     private readonly Dictionary<SystemViewModel, SystemTrafficBuffer> pendingBySystem = [];
     private readonly HashSet<SystemViewModel> scheduledSystems = [];
-    private readonly Func<bool> isDisposing;
-    private readonly Func<bool> hasUiThreadAccess;
-    private readonly Action<Action> postToUiThread;
-    private readonly Action<SystemViewModel, SystemTrafficWorkItem, bool> present;
+    private readonly IReceivePresentationPort port;
     private readonly TimeSpan maximumBatchDuration;
-    private readonly Func<long> getTimestamp;
 
     public ReceivePresentationController(
-        Func<bool> isDisposing,
-        Func<bool> hasUiThreadAccess,
-        Action<Action> postToUiThread,
-        Action<SystemViewModel, SystemTrafficWorkItem, bool> present,
-        TimeSpan? maximumBatchDuration = null,
-        Func<long>? getTimestamp = null)
+        IReceivePresentationPort port,
+        TimeSpan? maximumBatchDuration = null)
     {
-        this.isDisposing = isDisposing ?? throw new ArgumentNullException(nameof(isDisposing));
-        this.hasUiThreadAccess = hasUiThreadAccess ?? throw new ArgumentNullException(nameof(hasUiThreadAccess));
-        this.postToUiThread = postToUiThread ?? throw new ArgumentNullException(nameof(postToUiThread));
-        this.present = present ?? throw new ArgumentNullException(nameof(present));
+        this.port = port ?? throw new ArgumentNullException(nameof(port));
         this.maximumBatchDuration = maximumBatchDuration ?? DefaultMaximumBatchDuration;
         if (this.maximumBatchDuration <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(maximumBatchDuration));
-        this.getTimestamp = getTimestamp ?? Stopwatch.GetTimestamp;
     }
 
     public void Present(SystemViewModel system, SystemTrafficWorkItem workItem)
     {
         ArgumentNullException.ThrowIfNull(system);
-        if (isDisposing())
+        if (port.IsDisposing)
             return;
-        if (hasUiThreadAccess())
+        workItem = workItem with { PresentationQueuedTimestamp = port.GetTimestamp() };
+        if (port.HasUiThreadAccess)
         {
-            present(system, workItem, true);
+            Apply(system, workItem, true);
             return;
         }
 
@@ -61,12 +95,21 @@ internal sealed class ReceivePresentationController
         }
 
         if (schedule)
-            postToUiThread(() => Drain(system));
+            port.Post(() => Drain(system));
+    }
+
+    private void Apply(SystemViewModel system, SystemTrafficWorkItem workItem, bool publishDiagnostics)
+    {
+        long started = port.GetTimestamp();
+        port.Present(system, workItem, publishDiagnostics);
+        TimeSpan duration = Stopwatch.GetElapsedTime(started, port.GetTimestamp());
+        TimeSpan queueDelay = Stopwatch.GetElapsedTime(workItem.PresentationQueuedTimestamp, started);
+        port.ObserveTiming(system.Name, queueDelay, duration);
     }
 
     private void Drain(SystemViewModel system)
     {
-        if (isDisposing())
+        if (port.IsDisposing)
         {
             lock (sync)
             {
@@ -77,7 +120,7 @@ internal sealed class ReceivePresentationController
         }
 
         int processed = 0;
-        long batchStarted = getTimestamp();
+        long batchStarted = port.GetTimestamp();
         while (true)
         {
             SystemTrafficWorkItem? workItem = null;
@@ -96,13 +139,13 @@ internal sealed class ReceivePresentationController
             if (empty)
                 return;
 
-            present(system, workItem!.Value, false);
+            Apply(system, workItem!.Value, false);
             processed++;
 
             if (processed >= MaximumBatchSize ||
-                Stopwatch.GetElapsedTime(batchStarted, getTimestamp()) >= maximumBatchDuration)
+                Stopwatch.GetElapsedTime(batchStarted, port.GetTimestamp()) >= maximumBatchDuration)
             {
-                postToUiThread(() => Drain(system));
+                port.Post(() => Drain(system));
                 return;
             }
         }

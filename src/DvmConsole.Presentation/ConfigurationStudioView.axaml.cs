@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
@@ -8,12 +11,11 @@ namespace DvmConsole.Presentation;
 
 public sealed partial class ConfigurationStudioView : UserControl
 {
-    private const double NarrowWidth = 880;
+    private const double NarrowWidth = 1180;
     private const double PhoneWidth = 400;
     private bool responsiveLayoutInitialized;
     private bool narrowLayout;
     private bool phoneLayout;
-    private int historyRestoreSettlementVersion;
 
     public ConfigurationStudioView()
     {
@@ -75,14 +77,16 @@ public sealed partial class ConfigurationStudioView : UserControl
         if (ViewModel is not { } viewModel)
             return;
 
-        int version = ++historyRestoreSettlementVersion;
-        viewModel.BeginHistoryRestoreBindingSettlement();
-        restore(viewModel);
-        Dispatcher.UIThread.Post(() =>
+        int version = viewModel.BeginHistoryRestoreBindingSettlement();
+        try
         {
-            if (version == historyRestoreSettlementVersion)
-                viewModel.CompleteHistoryRestoreBindingSettlement();
-        }, DispatcherPriority.ContextIdle);
+            restore(viewModel);
+        }
+        finally
+        {
+            Dispatcher.UIThread.Post(() => viewModel.CompleteHistoryRestoreBindingSettlement(version),
+                DispatcherPriority.ContextIdle);
+        }
     }
 
     private void HandleSaveAsClick(object? sender, RoutedEventArgs e)
@@ -129,8 +133,9 @@ public sealed partial class ConfigurationStudioView : UserControl
     {
         bool useNarrow = width > 0 && width < NarrowWidth;
         bool usePhone = width > 0 && width < PhoneWidth;
-        if (responsiveLayoutInitialized && useNarrow == narrowLayout && usePhone == phoneLayout)
-            return;
+        bool layoutChanged = !responsiveLayoutInitialized ||
+            useNarrow != narrowLayout ||
+            usePhone != phoneLayout;
 
         Grid? shell = this.FindControl<Grid>("ShellLayout");
         Grid? workspace = this.FindControl<Grid>("Workspace");
@@ -139,21 +144,34 @@ public sealed partial class ConfigurationStudioView : UserControl
         Grid? pageHost = this.FindControl<Grid>("PageHost");
         Border? validationDrawer = this.FindControl<Border>("ValidationDrawer");
         Grid? footerGrid = this.FindControl<Grid>("FooterGrid");
+        Border? footer = this.FindControl<Border>("Footer");
         Button? validationToggle = this.FindControl<Button>("ValidationToggle");
-        StackPanel? footerActions = this.FindControl<StackPanel>("FooterActions");
+        WrapPanel? footerActions = this.FindControl<WrapPanel>("FooterActions");
+        Border? unknownFieldsDivider = this.FindControl<Border>("UnknownFieldsDivider");
+        TextBlock? unknownFieldsLabel = this.FindControl<TextBlock>("UnknownFieldsLabel");
         if (shell is null || workspace is null || navigation is null || pageHost is null ||
-            validationDrawer is null || footerGrid is null || validationToggle is null ||
-            footerActions is null)
+            validationDrawer is null || footerGrid is null || footer is null ||
+            validationToggle is null || footerActions is null ||
+            unknownFieldsDivider is null || unknownFieldsLabel is null)
         {
             return;
         }
 
+        validationDrawer.Height = Math.Clamp(
+            Bounds.Height * (useNarrow ? 0.38 : 0.32),
+            160,
+            320);
+        if (!layoutChanged)
+            return;
+
         responsiveLayoutInitialized = true;
         narrowLayout = useNarrow;
         phoneLayout = usePhone;
-        shell.RowDefinitions = new RowDefinitions(useNarrow ? "45,*,Auto" : "45,*,74");
+        shell.RowDefinitions = new RowDefinitions(
+            usePhone ? "45,*,160" : useNarrow ? "45,*,102" : "45,*,74");
         workspace.ColumnDefinitions = new ColumnDefinitions(useNarrow ? "*" : "286,*");
-        workspace.RowDefinitions = new RowDefinitions(useNarrow ? "220,*" : "*");
+        workspace.RowDefinitions = new RowDefinitions(
+            usePhone ? "110,*" : useNarrow ? "170,*" : "*");
         Grid.SetColumn(pageHost, useNarrow ? 0 : 1);
         Grid.SetRow(pageHost, useNarrow ? 1 : 0);
         navigation.SetCompactLayout(useNarrow, usePhone);
@@ -169,10 +187,14 @@ public sealed partial class ConfigurationStudioView : UserControl
         footerActions.HorizontalAlignment = useNarrow
             ? Avalonia.Layout.HorizontalAlignment.Left
             : Avalonia.Layout.HorizontalAlignment.Right;
-        footerActions.Orientation = useNarrow
-            ? Avalonia.Layout.Orientation.Vertical
-            : Avalonia.Layout.Orientation.Horizontal;
-        footerActions.Spacing = useNarrow ? 8 : 6;
+        footerActions.Orientation = Avalonia.Layout.Orientation.Horizontal;
+        footerActions.ItemSpacing = 6;
+        footerActions.LineSpacing = useNarrow ? 8 : 6;
+        footer.Padding = useNarrow
+            ? new Thickness(12, 7, 12, 5)
+            : new Thickness(18, 12, 18, 6);
+        unknownFieldsDivider.IsVisible = !useNarrow;
+        unknownFieldsLabel.IsVisible = !useNarrow;
 
         // Keep the footer actions measurable even when the desktop window is
         // first arranged at a constrained height. A local zero MinHeight can

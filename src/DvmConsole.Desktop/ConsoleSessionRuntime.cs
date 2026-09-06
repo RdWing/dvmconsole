@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 
 namespace DvmConsole.Desktop;
@@ -6,16 +9,20 @@ internal sealed class ConsoleSessionRuntime : IAsyncDisposable
 {
     private readonly ConsoleSessionServices services;
     private readonly IApplicationScheduler scheduler;
+    private readonly Action<Exception> faultHandler;
     private readonly object timerOwnershipSync = new();
     private readonly ScheduledWorkRegistrationGroup timers = new();
     private bool timerOwnershipRegistered;
 
     public ConsoleSessionRuntime(
         ConsoleSessionServices services,
-        IApplicationScheduler? scheduler = null)
+        IApplicationScheduler? scheduler = null,
+        Action<Exception>? faultHandler = null)
     {
         this.services = services ?? throw new ArgumentNullException(nameof(services));
         this.scheduler = scheduler ?? AvaloniaApplicationScheduler.Instance;
+        this.faultHandler = faultHandler ??
+            (exception => DesktopCrashLog.Write("Scheduled application work", exception));
     }
 
     public void StartTimer(TimeSpan interval, EventHandler tick)
@@ -33,9 +40,19 @@ internal sealed class ConsoleSessionRuntime : IAsyncDisposable
             EnsureTimerOwnership();
             IScheduledWork work = scheduler.CreatePeriodic(
                 interval,
-                _ =>
+                cancellationToken =>
                 {
-                    tick(this, EventArgs.Empty);
+                    try
+                    {
+                        tick(this, EventArgs.Empty);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                    }
+                    catch (Exception exception)
+                    {
+                        faultHandler(exception);
+                    }
                     return ValueTask.CompletedTask;
                 },
                 startImmediately);

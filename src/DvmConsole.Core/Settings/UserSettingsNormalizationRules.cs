@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 namespace DvmConsole.Core.Settings;
 
 internal static class UserSettingsNormalizationRules
@@ -250,7 +253,7 @@ internal static class UserSettingsNormalizationRules
             : settings.AudioOutputDeviceId.Trim();
         settings.AudioProcessingMode = settings.AudioProcessingMode?.Trim() switch
         {
-            UserSettings.AppleVoiceProcessingMode => UserSettings.AppleVoiceProcessingMode,
+            UserSettings.AppleVoiceProcessingMode => UserSettings.DvmConsoleAudioProcessingMode,
             UserSettings.WindowsCommunicationsProcessingMode => UserSettings.WindowsCommunicationsProcessingMode,
             _ => UserSettings.DvmConsoleAudioProcessingMode
         };
@@ -468,6 +471,21 @@ internal static class UserSettingsNormalizationRules
             Steps = steps
         };
     }
+
+    internal static Dictionary<int, ToolbarToneAssignmentSetting> NormalizeToolbarToneAssignments(
+        Dictionary<int, ToolbarToneAssignmentSetting>? assignments)
+        => (assignments ?? [])
+            .Where(pair => pair.Key is >= 1 and <= 3 && pair.Value is not null &&
+                !string.IsNullOrWhiteSpace(pair.Value.PresetName) && pair.Value.PresetName.Length <= 80)
+            .ToDictionary(pair => pair.Key, pair => new ToolbarToneAssignmentSetting
+            {
+                PresetName = pair.Value.PresetName.Trim(),
+                IsCustomAudio = pair.Value.IsCustomAudio,
+                // Preserve invalid/missing identities rather than silently
+                // downgrading a targeted assignment to a name-only lookup.
+                AssetId = pair.Value.IsCustomAudio ? pair.Value.AssetId?.Trim() : null,
+                FilePath = pair.Value.IsCustomAudio ? pair.Value.FilePath?.Trim() : null
+            });
 
     internal static List<TonePresetSetting> NormalizeTonePresets(IEnumerable<TonePresetSetting>? presets)
     {

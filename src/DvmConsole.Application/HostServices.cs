@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Ptt;
 using DvmConsole.Vocoder;
@@ -131,6 +134,7 @@ internal interface IMonotonicTimeSource
 internal interface IReceiveWorkQueueScheduler : IMonotonicTimeSource
 {
     ValueTask<bool> WaitAsync(CoalescingWakeSignal signal, TimeSpan timeout);
+    Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken = default);
 }
 
 internal sealed class SystemReceiveWorkQueueScheduler : IReceiveWorkQueueScheduler
@@ -151,6 +155,9 @@ internal sealed class SystemReceiveWorkQueueScheduler : IReceiveWorkQueueSchedul
 
     public ValueTask<bool> WaitAsync(CoalescingWakeSignal signal, TimeSpan timeout)
         => signal.WaitAsync(timeout);
+
+    public Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken = default)
+        => Task.Delay(delay, cancellationToken);
 }
 
 public sealed record ConsoleHostServices(

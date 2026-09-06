@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
@@ -15,6 +18,8 @@ public sealed class ConsoleListViewModel : IAsyncDisposable
     private readonly Dictionary<ChannelId, ChannelMeterSample> pendingMeters = [];
     private bool meterDispatchScheduled;
     private int disposed;
+    private int presentationActive = 1;
+    private int presentationGeneration;
 
     public ConsoleListViewModel(IConsoleApplicationSession session, ChannelPttController ptt)
     {
@@ -57,14 +62,37 @@ public sealed class ConsoleListViewModel : IAsyncDisposable
         await ptt.ReleaseAllAsync(CancellationToken.None);
     }
 
+    public void SetPresentationActive(bool active)
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+            throw new InvalidOperationException("Presentation activation belongs to the UI dispatcher.");
+        if (Interlocked.Exchange(ref presentationActive, active ? 1 : 0) == (active ? 1 : 0))
+            return;
+        Interlocked.Increment(ref presentationGeneration);
+        lock (meterSync)
+            pendingMeters.Clear();
+        if (active && Volatile.Read(ref disposed) == 0)
+            ApplySnapshot(session.Snapshot);
+    }
+
     private void HandleSnapshotChanged(object? sender, ConsoleSnapshotChangedEventArgs args)
-        => RunOnUiThread(() => ApplySnapshot(args.Current));
+    {
+        if (Volatile.Read(ref presentationActive) == 0 || Volatile.Read(ref disposed) != 0)
+            return;
+        int generation = Volatile.Read(ref presentationGeneration);
+        RunOnUiThread(() =>
+        {
+            if (generation == Volatile.Read(ref presentationGeneration) &&
+                Volatile.Read(ref presentationActive) != 0 && Volatile.Read(ref disposed) == 0)
+                ApplySnapshot(args.Current, args.ChangedChannels);
+        });
+    }
 
     private void HandleMeterSampled(object? sender, ChannelMeterSample sample)
     {
         lock (meterSync)
         {
-            if (Volatile.Read(ref disposed) != 0)
+            if (Volatile.Read(ref disposed) != 0 || Volatile.Read(ref presentationActive) == 0)
                 return;
             pendingMeters[sample.ChannelId] = sample;
             if (meterDispatchScheduled)
@@ -80,7 +108,7 @@ public sealed class ConsoleListViewModel : IAsyncDisposable
         ChannelMeterSample[] samples;
         lock (meterSync)
         {
-            if (Volatile.Read(ref disposed) != 0)
+            if (Volatile.Read(ref disposed) != 0 || Volatile.Read(ref presentationActive) == 0)
             {
                 pendingMeters.Clear();
                 meterDispatchScheduled = false;
@@ -157,11 +185,12 @@ public sealed class ConsoleListViewModel : IAsyncDisposable
         Items.Add(item);
     }
 
-    private void ApplySnapshot(ConsoleRuntimeSnapshot snapshot)
+    private void ApplySnapshot(ConsoleRuntimeSnapshot snapshot, IReadOnlyCollection<ChannelId>? changed = null)
     {
-        foreach ((ChannelId id, ChannelListItemViewModel item) in itemsById)
+        foreach (ChannelId id in changed ?? (IEnumerable<ChannelId>)itemsById.Keys)
         {
-            if (snapshot.Channels.TryGetValue(id, out ChannelControlSnapshot? state))
+            if (itemsById.TryGetValue(id, out ChannelListItemViewModel? item) &&
+                snapshot.Channels.TryGetValue(id, out ChannelControlSnapshot? state))
                 item.ApplyState(state);
         }
     }
@@ -232,6 +261,7 @@ public sealed class ChannelListItemViewModel : INotifyPropertyChanged
         !state.Transmitting &&
         (state.SelectedTransmitEncrypted || state.TransmitKeyAvailable);
     public bool IsExpanded => isExpanded;
+    public AudioMeterState Meter => new(meterRms, meterPeak);
     public double MeterRmsWidth => Math.Clamp(meterRms, 0, 100);
     public double MeterPeakX => Math.Clamp(meterPeak, 0, 100) - 1;
     public bool IsMeterPeakVisible => meterPeak > 0;
@@ -329,40 +359,55 @@ public sealed class ChannelListItemViewModel : INotifyPropertyChanged
         if (state.HasSameContent(replacement))
             return;
 
+        ChannelControlSnapshot previous = state;
         state = replacement;
-        OnPropertiesChanged(
-            nameof(StateText),
-            nameof(LastCallerText),
-            nameof(ReceiveEnabled),
-            nameof(ReceiveActive),
-            nameof(ReceiveButtonText),
-            nameof(IsTransmitting),
-            nameof(IsPttEnabled),
-            nameof(CanSelectTransmitTargets),
-            nameof(PttText),
-            nameof(IsTransmitSelected),
-            nameof(IsPageSelected),
-            nameof(IsAlertSelected),
-            nameof(IsTransmitEncrypted),
-            nameof(CanToggleEncryption),
-            nameof(VolumeText),
-            nameof(VolumeSliderValue),
-            nameof(ReceiveEncryptionText),
-            nameof(HasReceiveEncryptionObservation),
-            nameof(TransmitEncryptionText),
-            nameof(AuthorityText),
-            nameof(HasAuthorityFailure),
-            nameof(TarText),
-            nameof(IsTarStatusVisible),
-            nameof(PlaybackText),
-            nameof(IsPlaybackStatusVisible),
-            nameof(RouteText),
-            nameof(MuteText),
-            nameof(IsMuteStatusVisible),
-            nameof(PatchText),
-            nameof(IsPatchStatusVisible),
-            nameof(DiagnosticText),
-            nameof(HasDiagnostic));
+        if (previous.StateText != state.StateText)
+            OnPropertyChanged(nameof(StateText));
+        if (previous.LastCaller != state.LastCaller)
+            OnPropertyChanged(nameof(LastCallerText));
+        if (previous.ReceiveEnabled != state.ReceiveEnabled)
+            OnPropertiesChanged(nameof(ReceiveEnabled), nameof(ReceiveButtonText));
+        if (previous.ReceiveActive != state.ReceiveActive)
+            OnPropertyChanged(nameof(ReceiveActive));
+        if (previous.Transmitting != state.Transmitting)
+            OnPropertiesChanged(nameof(IsTransmitting), nameof(PttText));
+        if (previous.Transmitting != state.Transmitting || previous.ReceiveActive != state.ReceiveActive ||
+            previous.Authority != state.Authority || previous.SelectedTransmitEncrypted != state.SelectedTransmitEncrypted ||
+            previous.TransmitKeyAvailable != state.TransmitKeyAvailable)
+            OnPropertiesChanged(nameof(IsPttEnabled), nameof(CanSelectTransmitTargets));
+        if (previous.TransmitSelected != state.TransmitSelected)
+            OnPropertyChanged(nameof(IsTransmitSelected));
+        if (previous.PageSelected != state.PageSelected)
+            OnPropertyChanged(nameof(IsPageSelected));
+        if (previous.AlertSelected != state.AlertSelected)
+            OnPropertyChanged(nameof(IsAlertSelected));
+        if (previous.SelectedTransmitEncrypted != state.SelectedTransmitEncrypted)
+            OnPropertyChanged(nameof(IsTransmitEncrypted));
+        if (previous.Transmitting != state.Transmitting ||
+            previous.TransmitEncryptionConfigured != state.TransmitEncryptionConfigured ||
+            previous.TransmitEncryptionSelectable != state.TransmitEncryptionSelectable ||
+            previous.SelectedTransmitEncrypted != state.SelectedTransmitEncrypted ||
+            previous.TransmitKeyAvailable != state.TransmitKeyAvailable)
+            OnPropertiesChanged(nameof(CanToggleEncryption), nameof(TransmitEncryptionText));
+        if (previous.Gain != state.Gain)
+            OnPropertiesChanged(nameof(VolumeText), nameof(VolumeSliderValue));
+        if (previous.ObservedReceiveEncrypted != state.ObservedReceiveEncrypted)
+            OnPropertiesChanged(nameof(ReceiveEncryptionText), nameof(HasReceiveEncryptionObservation));
+        if (previous.Authority != state.Authority || previous.AuthorityReason != state.AuthorityReason)
+            OnPropertiesChanged(nameof(AuthorityText), nameof(HasAuthorityFailure));
+        if (previous.Recording != state.Recording || previous.RecordingFinalizing != state.RecordingFinalizing ||
+            previous.RecordingFault != state.RecordingFault || previous.TarArmed != state.TarArmed)
+            OnPropertiesChanged(nameof(TarText), nameof(IsTarStatusVisible));
+        if (previous.RecordingPlayback != state.RecordingPlayback)
+            OnPropertiesChanged(nameof(PlaybackText), nameof(IsPlaybackStatusVisible));
+        if (previous.OutputRoute != state.OutputRoute)
+            OnPropertyChanged(nameof(RouteText));
+        if (previous.EffectiveMuteReason != state.EffectiveMuteReason)
+            OnPropertiesChanged(nameof(MuteText), nameof(IsMuteStatusVisible));
+        if (!previous.Patches.SequenceEqual(state.Patches))
+            OnPropertiesChanged(nameof(PatchText), nameof(IsPatchStatusVisible));
+        if (previous.PendingOperation != state.PendingOperation || previous.Fault != state.Fault)
+            OnPropertiesChanged(nameof(DiagnosticText), nameof(HasDiagnostic));
     }
 
     internal void ApplyMeter(ChannelMeterSample sample)
@@ -375,7 +420,7 @@ public sealed class ChannelListItemViewModel : INotifyPropertyChanged
 
         meterRms = sample.Rms;
         meterPeak = sample.Peak;
-        OnPropertiesChanged(nameof(MeterRmsWidth), nameof(MeterPeakX), nameof(IsMeterPeakVisible));
+        OnPropertyChanged(nameof(Meter));
     }
 
     private static ChannelControlSnapshot EmptyState(ChannelId id)

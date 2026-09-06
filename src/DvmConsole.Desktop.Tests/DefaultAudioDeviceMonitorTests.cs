@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Audio;
 using DvmConsole.Desktop;
 using Xunit;
@@ -114,11 +117,89 @@ public sealed class DefaultAudioDeviceMonitorTests
         Assert.NotEqual(first.OutputSignature, second.OutputSignature);
     }
 
+    [Fact]
+    public async Task PlatformNotificationWakesTheMonitorBeforeItsFallbackPoll()
+    {
+        var provider = new FakeTopologyProvider
+        {
+            Current = new AudioDeviceTopology("input-1", "output-1")
+        };
+        var source = new FakeDeviceChangeSource();
+        var changed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var monitor = new DefaultAudioDeviceMonitor(
+            provider,
+            (_, _) =>
+            {
+                changed.TrySetResult();
+                return Task.CompletedTask;
+            },
+            source,
+            pollInterval: TimeSpan.FromMinutes(1),
+            maximumPollInterval: TimeSpan.FromMinutes(1));
+
+        monitor.Start();
+        await provider.FirstRead.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        provider.Current = new AudioDeviceTopology("input-2", "output-1");
+        source.RaiseChanged();
+
+        await changed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(source.Started);
+    }
+
+    [Fact]
+    public async Task PlatformNotificationRefreshesDefaultRoutesWhenDeviceNamesAreUnchanged()
+    {
+        var provider = new FakeTopologyProvider
+        {
+            Current = new AudioDeviceTopology("input-1", "output-1")
+        };
+        var source = new FakeDeviceChangeSource();
+        var changed = new TaskCompletionSource<AudioDeviceTopologyChange>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var monitor = new DefaultAudioDeviceMonitor(
+            provider,
+            (change, _) =>
+            {
+                changed.TrySetResult(change);
+                return Task.CompletedTask;
+            },
+            source,
+            pollInterval: TimeSpan.FromMinutes(1),
+            maximumPollInterval: TimeSpan.FromMinutes(1));
+
+        monitor.Start();
+        await provider.FirstRead.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        source.RaiseChanged();
+
+        AudioDeviceTopologyChange notification = await changed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(notification.InputChanged);
+        Assert.True(notification.OutputChanged);
+    }
+
     private sealed class FakeTopologyProvider : IAudioDeviceTopologyProvider
     {
         public required AudioDeviceTopology Current { get; set; }
+        public TaskCompletionSource FirstRead { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public AudioDeviceTopology Read() => Current;
+        public AudioDeviceTopology Read()
+        {
+            FirstRead.TrySetResult();
+            return Current;
+        }
+    }
+
+    private sealed class FakeDeviceChangeSource : IAudioDeviceChangeSource
+    {
+        public event EventHandler? Changed;
+        public bool Started { get; private set; }
+
+        public void Start() => Started = true;
+        public void RaiseChanged() => Changed?.Invoke(this, EventArgs.Empty);
+        public void Dispose()
+        {
+        }
     }
 
     private sealed class SyntheticDefaultAudioBackend :

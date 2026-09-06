@@ -1,7 +1,12 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using System.Security.Cryptography;
 using System.Text;
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
+using DvmConsole.Core.IO;
+using DvmConsole.Core.Settings;
 using YamlDotNet.RepresentationModel;
 
 namespace DvmConsole.Configuration.Yaml;
@@ -9,7 +14,7 @@ namespace DvmConsole.Configuration.Yaml;
 public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActiveConfigurationService
 {
     private const string EmptyConfiguration = "systems: []\nzones: []\ngroups: []\n";
-    private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly SerializedWorkerExecutor executor;
     private readonly string root;
     private readonly string catalogPath;
     private readonly IClock clock;
@@ -20,8 +25,11 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         root = Path.GetFullPath(rootPath);
         catalogPath = Path.Combine(root, "catalog.json");
+        executor = new SerializedWorkerExecutor(
+            () => CrossProcessStoreLock.Acquire(Path.Combine(root, ".store.lock")));
         this.clock = clock ?? SystemClock.Instance;
         EnsureLayout();
+        using IDisposable processLock = CrossProcessStoreLock.Acquire(Path.Combine(root, ".store.lock"));
         if (File.Exists(catalogPath) || File.Exists(catalogPath + ".pending") || File.Exists(catalogPath + ".backup"))
         {
             AtomicLibraryFile.Recover(catalogPath, ConfigurationLibraryJsonContext.Default.CatalogState);
@@ -51,15 +59,13 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(candidates);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        await executor.RunAsync(workerToken =>
         {
             CatalogState catalog = LoadCatalog();
             bool changed = false;
             foreach (LegacyConfigurationCandidate candidate in candidates)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                workerToken.ThrowIfCancellationRequested();
                 if (string.IsNullOrWhiteSpace(candidate.DisplayName) ||
                     string.IsNullOrWhiteSpace(candidate.OriginIdentity))
                 {
@@ -75,16 +81,12 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                 CatalogEntryState entry = NewEntry(candidate.DisplayName, isReadOnly: false, origin);
                 entry.IsLegacyCandidate = true;
                 catalog.Entries.Add(entry);
-                Directory.CreateDirectory(EntryRoot(entry.Id));
+                AppDataFileProtection.EnsureDirectory(EntryRoot(entry.Id));
                 changed = true;
             }
             if (changed)
                 SaveCatalog(catalog);
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ConfigurationDraft> CreateDraftAsync(
@@ -92,10 +94,9 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        return await executor.RunAsync(workerToken =>
         {
+            workerToken.ThrowIfCancellationRequested();
             EnsureDraftCanBeReplaced();
             ClearDrafts();
             var state = new DraftState
@@ -106,11 +107,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
             };
             WriteDraft(state, EmptyConfiguration, new Dictionary<string, byte[]>());
             return ToDraft(state, EmptyConfiguration);
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ConfigurationImportResult> ImportAsync(
@@ -120,16 +117,17 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(options);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        return await executor.RunAsync(async workerToken =>
         {
-            byte[] primary = await ReadAllBytesAsync(source.Primary, cancellationToken).ConfigureAwait(false);
+            byte[] primary = await ReadAllBytesAsync(
+                source.Primary,
+                ManagedResourceLimits.ConfigurationYamlBytes,
+                workerToken).ConfigureAwait(false);
             string yaml = DecodeYaml(primary);
             (yaml, string? compatibilityWarning) = RepairMisplacedZoneEntries(yaml);
             ConfigurationDocument document = ParseAndValidate(yaml, source.Primary.DisplayName);
             (string managedYaml, Dictionary<string, byte[]> companions, List<string> warnings) =
-                await PrepareImportBundleAsync(document, source, options, cancellationToken).ConfigureAwait(false);
+                await PrepareImportBundleAsync(document, source, options, workerToken).ConfigureAwait(false);
             if (compatibilityWarning is not null)
                 warnings.Insert(0, compatibilityWarning);
             string fingerprint = ComputeFingerprint(primary, companions);
@@ -221,21 +219,16 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                 ReusedExisting: false,
                 AppendedRevision: append,
                 warnings);
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ConfigurationDraft> OpenDraftAsync(
         ConfigurationId id,
         CancellationToken cancellationToken = default)
     {
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        return await executor.RunAsync(workerToken =>
         {
+            workerToken.ThrowIfCancellationRequested();
             DraftState? activeDraft = TryReadDraftState();
             if (activeDraft is not null && activeDraft.Id == id.Value)
                 return ReadDraft(activeDraft);
@@ -244,7 +237,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
 
             CatalogEntryState entry = GetEntry(LoadCatalog(), id);
             string revisionRoot = RevisionRoot(entry.Id, entry.CurrentRevision);
-            string yaml = File.ReadAllText(Path.Combine(revisionRoot, "codeplug.yml"));
+            string yaml = ReadManagedYaml(Path.Combine(revisionRoot, "codeplug.yml"));
             RevisionMetadataState metadata = ReadRevisionMetadata(revisionRoot);
             var state = new DraftState
             {
@@ -257,11 +250,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
             Dictionary<string, byte[]> companions = ReadCompanions(revisionRoot, metadata.CompanionNames);
             WriteDraft(state, yaml, companions);
             return ToDraft(state, yaml);
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ConfigurationDraft> StageDraftAsync(
@@ -271,10 +260,9 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
     {
         ArgumentNullException.ThrowIfNull(draft);
         ArgumentNullException.ThrowIfNull(companions);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        return await executor.RunAsync(workerToken =>
         {
+            workerToken.ThrowIfCancellationRequested();
             DraftState? activeDraft = TryReadDraftState();
             if (activeDraft is null || activeDraft.Id != draft.Id.Value)
                 throw new InvalidOperationException("The draft is no longer the active Configuration Studio draft.");
@@ -291,11 +279,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                 stagedCompanions[EnsureSafeCompanionName(name)] = content.ToArray();
             WriteDraft(activeDraft, draft.Yaml, stagedCompanions);
             return ToDraft(activeDraft, draft.Yaml);
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ConfigurationCommit> CommitAsync(
@@ -303,10 +287,9 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(draft);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        return await executor.RunAsync(workerToken =>
         {
+            workerToken.ThrowIfCancellationRequested();
             DraftState? activeDraft = TryReadDraftState();
             if (activeDraft is null || activeDraft.Id != draft.Id.Value)
                 throw new InvalidOperationException("The draft is no longer the active Configuration Studio draft.");
@@ -332,29 +315,20 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                 draft.Warnings);
             ClearDrafts();
             return commit;
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask DiscardDraftAsync(
         ConfigurationId id,
         CancellationToken cancellationToken = default)
     {
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        await executor.RunAsync(workerToken =>
         {
+            workerToken.ThrowIfCancellationRequested();
             DraftState? state = TryReadDraftState();
             if (state is not null && state.Id == id.Value)
                 ClearDrafts();
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ConfigurationReference> DuplicateAsync(
@@ -363,15 +337,14 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(copyName);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        return await executor.RunAsync(workerToken =>
         {
+            workerToken.ThrowIfCancellationRequested();
             CatalogState catalog = LoadCatalog();
             CatalogEntryState source = GetEntry(catalog, id);
             string sourceRoot = RevisionRoot(source.Id, source.CurrentRevision);
             RevisionMetadataState sourceMetadata = ReadRevisionMetadata(sourceRoot);
-            string yaml = File.ReadAllText(Path.Combine(sourceRoot, "codeplug.yml"));
+            string yaml = ReadManagedYaml(Path.Combine(sourceRoot, "codeplug.yml"));
             yaml = ConfigurationCopyPolicy.RemoveTrustScopedWebAuthorization(yaml);
 
             CatalogEntryState target = NewEntry(copyName, source.IsReadOnly, origin: null);
@@ -386,11 +359,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                 source.IsReadOnly,
                 []);
             return commit.Reference;
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask ExportAsync(
@@ -402,71 +371,89 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(options);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        await executor.RunAsync(async workerToken =>
         {
-            CatalogState catalog = LoadCatalog();
-            CatalogEntryState entry = GetEntry(catalog, configuration.Id);
-            EnsureRevisionExists(entry.Id, configuration.Revision.Value);
-            string revisionRoot = RevisionRoot(entry.Id, configuration.Revision.Value);
-            RevisionMetadataState metadata = ReadRevisionMetadata(revisionRoot);
-            string storedYaml = File.ReadAllText(Path.Combine(revisionRoot, "codeplug.yml"));
-            ConfigurationDocument document = ConfigurationDocument.Parse(storedYaml);
-            string exportYaml;
-            if (options.Sanitized)
+            IExportDocumentTransaction? transaction = null;
+            IExportDocumentSet exportDestination = destination;
+            if (destination is ITransactionalExportDocumentSet transactional)
             {
-                exportYaml = document.SerializeSanitized();
-            }
-            else if (document.IsReadOnly)
-            {
-                exportYaml = document.SourceText;
-            }
-            else
-            {
-                RewriteCompanionReferencesForExport(document);
-                document.MarkDirty();
-                exportYaml = document.Serialize();
+                transaction = await transactional.BeginTransactionAsync(workerToken).ConfigureAwait(false);
+                exportDestination = transaction;
             }
 
-            _ = ParseAndValidate(exportYaml, destination.Primary.DisplayName);
-
-            await WriteTextAsync(destination.Primary, exportYaml, cancellationToken).ConfigureAwait(false);
-            var expectedCompanions = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
-            if (!options.Sanitized && options.IncludeCompanions)
+            try
             {
-                foreach (string companionName in metadata.CompanionNames)
+                CatalogState catalog = LoadCatalog();
+                CatalogEntryState entry = GetEntry(catalog, configuration.Id);
+                EnsureRevisionExists(entry.Id, configuration.Revision.Value);
+                string revisionRoot = RevisionRoot(entry.Id, configuration.Revision.Value);
+                RevisionMetadataState metadata = ReadRevisionMetadata(revisionRoot);
+                string storedYaml = ReadManagedYaml(Path.Combine(revisionRoot, "codeplug.yml"));
+                ConfigurationDocument document = ConfigurationDocument.Parse(storedYaml);
+                string exportYaml;
+                if (options.Sanitized)
                 {
-                    IWritableDocument target = await destination
-                        .CreateCompanionAsync(companionName, cancellationToken)
-                        .ConfigureAwait(false);
-                    byte[] content = File.ReadAllBytes(Path.Combine(revisionRoot, "companions", companionName));
-                    expectedCompanions[companionName] = content;
-                    await WriteBytesAsync(target, content, cancellationToken).ConfigureAwait(false);
+                    exportYaml = document.SerializeSanitized();
                 }
-            }
+                else if (document.IsReadOnly)
+                {
+                    exportYaml = document.SourceText;
+                }
+                else
+                {
+                    RewriteCompanionReferencesForExport(document);
+                    document.MarkDirty();
+                    exportYaml = document.Serialize();
+                }
 
-            await ValidateExportReadbackAsync(
-                    destination,
-                    exportYaml,
-                    expectedCompanions,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            gate.Release();
-        }
+                _ = ParseAndValidate(exportYaml, exportDestination.Primary.DisplayName);
+
+                await WriteTextAsync(exportDestination.Primary, exportYaml, workerToken).ConfigureAwait(false);
+                var expectedCompanions = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+                if (!options.Sanitized && options.IncludeCompanions)
+                {
+                    foreach (string companionName in metadata.CompanionNames)
+                    {
+                        IWritableDocument target = await exportDestination
+                            .CreateCompanionAsync(companionName, workerToken)
+                            .ConfigureAwait(false);
+                        byte[] content = ReadManagedCompanion(
+                            Path.Combine(revisionRoot, "companions", companionName));
+                        expectedCompanions[companionName] = content;
+                        await WriteBytesAsync(target, content, workerToken).ConfigureAwait(false);
+                    }
+                }
+
+                await ValidateExportReadbackAsync(
+                        exportDestination,
+                        exportYaml,
+                        expectedCompanions,
+                        workerToken)
+                    .ConfigureAwait(false);
+                if (transaction is not null)
+                    await transaction.CommitAsync(workerToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                if (transaction is not null)
+                    await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
+            finally
+            {
+                if (transaction is not null)
+                    await transaction.DisposeAsync().ConfigureAwait(false);
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask MoveToTrashAsync(
         ConfigurationId id,
         CancellationToken cancellationToken = default)
     {
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        await executor.RunAsync(workerToken =>
         {
+            workerToken.ThrowIfCancellationRequested();
             CatalogState catalog = LoadCatalog();
             if (catalog.Active?.Id == id.Value)
                 throw new InvalidOperationException("The active configuration cannot be removed.");
@@ -487,21 +474,16 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                 Directory.Move(target, source);
                 throw;
             }
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask RestoreFromTrashAsync(
         ConfigurationId id,
         CancellationToken cancellationToken = default)
     {
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        await executor.RunAsync(workerToken =>
         {
+            workerToken.ThrowIfCancellationRequested();
             CatalogState catalog = LoadCatalog();
             CatalogEntryState entry = catalog.Trash.FirstOrDefault(candidate => candidate.Id == id.Value)
                 ?? throw new KeyNotFoundException($"Configuration '{id}' is not in trash.");
@@ -521,31 +503,21 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                 Directory.Move(target, source);
                 throw;
             }
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async IAsyncEnumerable<ConfigurationSummary> ListAsync(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        ConfigurationSummary[] snapshot;
-        try
+        ConfigurationSummary[] snapshot = await executor.RunAsync(workerToken =>
         {
+            workerToken.ThrowIfCancellationRequested();
             CatalogState catalog = LoadCatalog();
-            snapshot = catalog.Entries
+            return catalog.Entries
                 .OrderByDescending(entry => entry.ModifiedAt)
                 .Select(entry => ToSummary(catalog, entry))
                 .ToArray();
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
 
         foreach (ConfigurationSummary entry in snapshot)
         {
@@ -557,21 +529,15 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
     public async IAsyncEnumerable<ConfigurationSummary> ListTrashAsync(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        ConfigurationSummary[] snapshot;
-        try
+        ConfigurationSummary[] snapshot = await executor.RunAsync(workerToken =>
         {
+            workerToken.ThrowIfCancellationRequested();
             CatalogState catalog = LoadCatalog();
-            snapshot = catalog.Trash
+            return catalog.Trash
                 .OrderByDescending(entry => entry.ModifiedAt)
                 .Select(entry => ToTrashSummary(entry))
                 .ToArray();
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
 
         foreach (ConfigurationSummary entry in snapshot)
         {
@@ -585,10 +551,9 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        await executor.RunAsync(workerToken =>
         {
+            workerToken.ThrowIfCancellationRequested();
             CatalogState catalog = LoadCatalog();
             CatalogEntryState entry = GetEntry(catalog, configuration.Id);
             EnsureRevisionExists(entry.Id, configuration.Revision.Value);
@@ -600,19 +565,14 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
             entry.LastOpenedAt = clock.UtcNow;
             SaveCatalog(catalog);
             Volatile.Write(ref activeConfiguration, configuration);
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask ReloadAsync(CancellationToken cancellationToken = default)
     {
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        await executor.RunAsync(workerToken =>
         {
+            workerToken.ThrowIfCancellationRequested();
             CatalogState catalog = LoadCatalog();
             if (catalog.Active is null)
                 return;
@@ -625,39 +585,19 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                 new ConfigurationReference(
                     new ConfigurationId(catalog.Active.Id),
                     new ConfigurationRevision(catalog.Active.Revision)));
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask DeactivateAsync(CancellationToken cancellationToken = default)
     {
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        await SwitchToWorkerAsync(cancellationToken).ConfigureAwait(false);
-        try
+        await executor.RunAsync(workerToken =>
         {
+            workerToken.ThrowIfCancellationRequested();
             CatalogState catalog = LoadCatalog();
             catalog.Active = null;
             SaveCatalog(catalog);
             Volatile.Write(ref activeConfiguration, null);
-        }
-        finally
-        {
-            gate.Release();
-        }
-    }
-
-    private static async ValueTask SwitchToWorkerAsync(CancellationToken cancellationToken)
-    {
-        // A library operation can perform substantial catalog, YAML, and
-        // companion-file work. Always schedule that work on the default task
-        // scheduler instead of inheriting an Avalonia or test synchronization
-        // context. Task.Run is intentional here: ForceYielding can still depend
-        // on the caller's constrained execution context and deadlock a legacy
-        // synchronous startup bridge.
-        await Task.Run(static () => { }, cancellationToken).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     private ConfigurationCommit CommitRevision(
@@ -675,10 +615,18 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         Guid revision = Guid.NewGuid();
         DateTimeOffset committedAt = clock.UtcNow;
         string revisionRoot = RevisionRoot(entry.Id, revision);
-        Directory.CreateDirectory(Path.Combine(revisionRoot, "companions"));
+        AppDataFileProtection.EnsureDirectory(Path.Combine(revisionRoot, "companions"));
         File.WriteAllText(Path.Combine(revisionRoot, "codeplug.yml"), yaml, new UTF8Encoding(false));
+        AppDataFileProtection.EnsureFile(Path.Combine(revisionRoot, "codeplug.yml"));
         foreach ((string name, byte[] content) in companions)
-            File.WriteAllBytes(Path.Combine(revisionRoot, "companions", EnsureSafeCompanionName(name)), content);
+        {
+            string companionPath = Path.Combine(
+                revisionRoot,
+                "companions",
+                EnsureSafeCompanionName(name));
+            File.WriteAllBytes(companionPath, content);
+            AppDataFileProtection.EnsureFile(companionPath);
+        }
 
         var metadata = new RevisionMetadataState
         {
@@ -760,8 +708,11 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                 continue;
             }
 
-            byte[] content = await ReadAllBytesAsync(companion, cancellationToken).ConfigureAwait(false);
-            string name = AllocateCompanionName(reference, content, companions);
+            byte[] content = await ReadAllBytesAsync(
+                companion,
+                ManagedResourceLimits.ConfigurationCompanionBytes,
+                cancellationToken).ConfigureAwait(false);
+            string name = PortableCompanionNameAllocator.Allocate(reference, content, companions);
             companions[name] = content;
             rewrites[reference] = $"companions/{name}";
         }
@@ -882,7 +833,10 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         IReadOnlyDictionary<string, byte[]> expectedCompanions,
         CancellationToken cancellationToken)
     {
-        byte[] primary = await ReadAllBytesAsync(destination.Primary, cancellationToken).ConfigureAwait(false);
+        byte[] primary = await ReadAllBytesAsync(
+            destination.Primary,
+            ManagedResourceLimits.ConfigurationYamlBytes,
+            cancellationToken).ConfigureAwait(false);
         string readbackYaml = DecodeYaml(primary);
         if (!string.Equals(readbackYaml, expectedYaml, StringComparison.Ordinal))
             throw new IOException("The exported codeplug did not match the bytes written to the destination.");
@@ -893,7 +847,10 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                 .ConfigureAwait(false);
             if (companion is null)
                 throw new IOException($"Exported companion '{name}' could not be read back.");
-            byte[] actualContent = await ReadAllBytesAsync(companion, cancellationToken).ConfigureAwait(false);
+            byte[] actualContent = await ReadAllBytesAsync(
+                companion,
+                ManagedResourceLimits.ConfigurationCompanionBytes,
+                cancellationToken).ConfigureAwait(false);
             if (!actualContent.AsSpan().SequenceEqual(expectedContent))
                 throw new IOException($"Exported companion '{name}' did not match the bytes written to the destination.");
         }
@@ -943,29 +900,6 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         }
     }
 
-    private static string AllocateCompanionName(
-        string reference,
-        byte[] content,
-        IReadOnlyDictionary<string, byte[]> existing)
-    {
-        string normalized = reference.Replace('\\', '/');
-        string candidate = SanitizeFileName(normalized[(normalized.LastIndexOf('/') + 1)..]);
-        if (candidate.Length == 0)
-            candidate = "companion";
-        if (!existing.ContainsKey(candidate))
-            return candidate;
-        string extension = Path.GetExtension(candidate);
-        string stem = Path.GetFileNameWithoutExtension(candidate);
-        string suffix = Convert.ToHexString(SHA256.HashData(content))[..8].ToLowerInvariant();
-        return $"{stem}-{suffix}{extension}";
-    }
-
-    private static string SanitizeFileName(string value)
-    {
-        char[] invalid = Path.GetInvalidFileNameChars();
-        return new string(value.Where(character => !invalid.Contains(character) && character is not '/' and not '\\').ToArray());
-    }
-
     private static bool IsSafeRelativeReference(string reference)
     {
         if (string.IsNullOrWhiteSpace(reference) || Path.IsPathRooted(reference))
@@ -979,7 +913,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
 
     private static string EnsureSafeCompanionName(string name)
     {
-        string safe = SanitizeFileName(name);
+        string safe = PortableCompanionNameAllocator.Sanitize(name);
         if (safe.Length == 0 || !string.Equals(safe, name, StringComparison.Ordinal))
             throw new InvalidDataException($"Unsafe managed companion name '{name}'.");
         return safe;
@@ -1034,7 +968,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
     }
 
     private ConfigurationDraft ReadDraft(DraftState state)
-        => ToDraft(state, File.ReadAllText(Path.Combine(DraftRoot(state.Id), "codeplug.yml")));
+        => ToDraft(state, ReadManagedYaml(Path.Combine(DraftRoot(state.Id), "codeplug.yml")));
 
     private static ConfigurationDraft ToDraft(DraftState state, string yaml)
         => new(
@@ -1052,10 +986,18 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         IReadOnlyDictionary<string, byte[]> companions)
     {
         string draftRoot = DraftRoot(state.Id);
-        Directory.CreateDirectory(Path.Combine(draftRoot, "companions"));
+        AppDataFileProtection.EnsureDirectory(Path.Combine(draftRoot, "companions"));
         File.WriteAllText(Path.Combine(draftRoot, "codeplug.yml"), yaml, new UTF8Encoding(false));
+        AppDataFileProtection.EnsureFile(Path.Combine(draftRoot, "codeplug.yml"));
         foreach ((string name, byte[] content) in companions)
-            File.WriteAllBytes(Path.Combine(draftRoot, "companions", EnsureSafeCompanionName(name)), content);
+        {
+            string companionPath = Path.Combine(
+                draftRoot,
+                "companions",
+                EnsureSafeCompanionName(name));
+            File.WriteAllBytes(companionPath, content);
+            AppDataFileProtection.EnsureFile(companionPath);
+        }
         AtomicLibraryFile.Write(
             DraftStatePath,
             state,
@@ -1077,7 +1019,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
             ? Directory.EnumerateFiles(directory)
                 .ToDictionary(
                     path => Path.GetFileName(path),
-                    File.ReadAllBytes,
+                    ReadManagedCompanion,
                     StringComparer.OrdinalIgnoreCase)
             : [];
     }
@@ -1087,7 +1029,8 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         IEnumerable<string> companionNames)
         => companionNames.ToDictionary(
             name => name,
-            name => File.ReadAllBytes(Path.Combine(revisionRoot, "companions", EnsureSafeCompanionName(name))),
+            name => ReadManagedCompanion(
+                Path.Combine(revisionRoot, "companions", EnsureSafeCompanionName(name))),
             StringComparer.OrdinalIgnoreCase);
 
     private void ClearDrafts()
@@ -1271,21 +1214,36 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
 
     private void EnsureLayout()
     {
-        Directory.CreateDirectory(root);
-        Directory.CreateDirectory(Path.Combine(root, "entries"));
-        Directory.CreateDirectory(DraftsRoot);
-        Directory.CreateDirectory(Path.Combine(root, "trash"));
+        AppDataFileProtection.EnsureDirectory(root, repairExistingTree: true);
+        AppDataFileProtection.EnsureDirectory(Path.Combine(root, "entries"));
+        AppDataFileProtection.EnsureDirectory(DraftsRoot);
+        AppDataFileProtection.EnsureDirectory(Path.Combine(root, "trash"));
     }
 
     private static async ValueTask<byte[]> ReadAllBytesAsync(
         IReadableDocument document,
+        int maximumBytes,
         CancellationToken cancellationToken)
     {
         await using Stream stream = await document.OpenReadAsync(cancellationToken).ConfigureAwait(false);
-        using var buffer = new MemoryStream();
-        await stream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-        return buffer.ToArray();
+        return await BoundedResourceReader.ReadBytesAsync(
+            stream,
+            maximumBytes,
+            document.DisplayName,
+            cancellationToken).ConfigureAwait(false);
     }
+
+    private static string ReadManagedYaml(string path)
+        => BoundedResourceReader.ReadUtf8File(
+            path,
+            ManagedResourceLimits.ConfigurationYamlBytes,
+            "Managed configuration YAML");
+
+    private static byte[] ReadManagedCompanion(string path)
+        => BoundedResourceReader.ReadFile(
+            path,
+            ManagedResourceLimits.ConfigurationCompanionBytes,
+            "Managed configuration companion");
 
     private static async ValueTask WriteTextAsync(
         IWritableDocument document,

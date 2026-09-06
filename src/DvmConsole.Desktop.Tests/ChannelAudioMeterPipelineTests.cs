@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2025-2026 RdWing
+// SPDX-License-Identifier: AGPL-3.0-only
+
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.FneClient;
@@ -125,8 +128,9 @@ public sealed class ChannelAudioMeterPipelineTests
         Assert.Contains(physicalUpdates, update => update.StreamId == 8 && update.Level > 0);
         Assert.Contains(physicalUpdates, update => update.StreamId == 7 && update.Level == 0);
 
+        var coalescer = new ChannelAudioMeterUpdateCoalescer();
         ChannelAudioMeterUpdate presented = Assert.Single(
-            MainWindowViewModel.CoalesceReceiveMeterUpdates(physicalUpdates));
+            coalescer.CoalesceReceive(physicalUpdates));
         Assert.True(presented.Level > 0);
         Assert.Equal(
             physicalUpdates.Max(update => update.PeakLevel),
@@ -172,14 +176,7 @@ public sealed class ChannelAudioMeterPipelineTests
         channel.SetAudioLevel(50, ChannelAudioDirection.Receive, streamId: 9);
 
         Assert.Equal(
-            [
-                nameof(ChannelViewModel.AudioLevel),
-                nameof(ChannelViewModel.AudioFillWidth),
-                nameof(ChannelViewModel.AudioPeakLevel),
-                nameof(ChannelViewModel.AudioPeakMarkerX),
-                nameof(ChannelViewModel.AudioPeakMarkerBrush),
-                nameof(ChannelViewModel.IsAudioPeakVisible)
-            ],
+            [nameof(ChannelViewModel.AudioMeter)],
             changedProperties);
         Assert.DoesNotContain(nameof(ChannelViewModel.VolumeSliderValue), changedProperties);
     }
@@ -203,6 +200,28 @@ public sealed class ChannelAudioMeterPipelineTests
             update => update.Direction == ChannelAudioDirection.Transmit);
         Assert.Equal(receive.Level, transmit.Level, precision: 10);
         Assert.Equal(receive.PeakLevel, transmit.PeakLevel, precision: 10);
+    }
+
+    [Fact]
+    public void DelayedTransmitTickPresentsTheNewestAudioInsteadOfAStaleBacklog()
+    {
+        ChannelViewModel channel = CreateReceivingChannel(FneTrafficProtocol.P25, streamId: 7);
+        var pipeline = new ChannelAudioMeterPipeline();
+
+        pipeline.Observe(
+            channel,
+            streamId: 8,
+            Enumerable.Repeat((short)30_000, 1_600).ToArray(),
+            ChannelAudioDirection.Transmit);
+        pipeline.Observe(
+            channel,
+            streamId: 8,
+            Enumerable.Repeat((short)1_000, 400).ToArray(),
+            ChannelAudioDirection.Transmit);
+
+        ChannelAudioMeterUpdate update = Assert.Single(pipeline.Advance());
+
+        Assert.InRange(update.Level, 35, 45);
     }
 
     [Fact]
