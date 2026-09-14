@@ -11,6 +11,7 @@ namespace DvmConsole.Presentation;
 public sealed partial class ConfigurationStudioStreamsView : UserControl
 {
     private const double NarrowWidth = 760;
+    private bool? narrowLayout;
     private int queuedZoneChangeVersion;
 
     public ConfigurationStudioStreamsView()
@@ -54,7 +55,11 @@ public sealed partial class ConfigurationStudioStreamsView : UserControl
         if (body is null || inspector is null)
             return;
 
-        bool narrow = width > 0 && width < NarrowWidth;
+        if (width <= 0) return;
+        this.FindControl<StackPanel>("StreamsHeading")!.Width = Math.Min(320, Math.Max(0, width - 36));
+        bool narrow = width < NarrowWidth;
+        if (narrowLayout == narrow) return;
+        narrowLayout = narrow;
         body.ColumnDefinitions = new ColumnDefinitions(narrow ? "*" : "3*,2*");
         body.RowDefinitions = new RowDefinitions(narrow ? "Auto,Auto" : "Auto");
         Grid.SetColumn(inspector, narrow ? 0 : 1);

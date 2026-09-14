@@ -7,7 +7,7 @@ using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
 
-public sealed class DesktopConfigurationMaterializerTests
+public sealed class ManagedConfigurationMaterializerTests
 {
     [Fact]
     public async Task LeaseKeepsMaterializationAliveAndDeletesItOnDispose()
@@ -17,7 +17,7 @@ public sealed class DesktopConfigurationMaterializerTests
         {
             ConfigurationReference reference = await ImportConfigurationAsync(root);
             string runtimeRoot = Path.Combine(root, "runtime");
-            var materializer = new DesktopConfigurationMaterializer(
+            var materializer = new ManagedConfigurationMaterializer(
                 new ManagedConfigurationLibrary(Path.Combine(root, "library")),
                 runtimeRoot);
 
@@ -25,7 +25,7 @@ public sealed class DesktopConfigurationMaterializerTests
             string directory = Path.GetDirectoryName(lease.Path)!;
             Assert.True(File.Exists(lease.Path));
 
-            _ = new DesktopConfigurationMaterializer(
+            _ = new ManagedConfigurationMaterializer(
                 new ManagedConfigurationLibrary(Path.Combine(root, "library")),
                 runtimeRoot);
             Assert.True(Directory.Exists(directory));
@@ -52,7 +52,7 @@ public sealed class DesktopConfigurationMaterializerTests
             Directory.CreateDirectory(legacyOrphan);
             File.WriteAllText(Path.Combine(legacyOrphan, "codeplug.yml"), "systems: []\n");
 
-            _ = new DesktopConfigurationMaterializer(
+            _ = new ManagedConfigurationMaterializer(
                 new ManagedConfigurationLibrary(Path.Combine(root, "library")),
                 runtimeRoot);
 
@@ -83,7 +83,7 @@ public sealed class DesktopConfigurationMaterializerTests
             """);
         var library = new ManagedConfigurationLibrary(Path.Combine(root, "library"));
         ConfigurationImportResult result = await library.ImportAsync(
-            new DesktopConfigurationDocumentSet(sourcePath),
+            new FileConfigurationDocumentSet(sourcePath),
             new ConfigurationImportOptions());
         return result.Reference;
     }

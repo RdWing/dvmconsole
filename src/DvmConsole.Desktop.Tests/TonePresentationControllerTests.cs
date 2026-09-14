@@ -16,7 +16,7 @@ public sealed class TonePresentationControllerTests
             ToneFrequencyHz = 1000,
             ToneDurationSeconds = 0.5
         };
-        var workspace = new ToneWorkspaceViewModel(settings)
+        var workspace = new ToneWorkspaceViewModel(settings, DesktopAlertToneFiles.Instance)
         {
             TonePresetName = "Dispatch alert"
         };
@@ -38,7 +38,7 @@ public sealed class TonePresentationControllerTests
     public void InvalidPatternDoesNotPersist()
     {
         var settings = new UserSettings();
-        var workspace = new ToneWorkspaceViewModel(settings);
+        var workspace = new ToneWorkspaceViewModel(settings, DesktopAlertToneFiles.Instance);
         workspace.MutableToneSequenceSteps[0].FrequencyText = "2600";
         var session = new RecordingToneSession();
         var controller = new TonePresentationController(workspace, settings, session);
@@ -58,7 +58,7 @@ public sealed class TonePresentationControllerTests
     public void NonFiniteToneValuesDoNotPersist(string frequency, string duration)
     {
         var settings = new UserSettings();
-        var workspace = new ToneWorkspaceViewModel(settings);
+        var workspace = new ToneWorkspaceViewModel(settings, DesktopAlertToneFiles.Instance);
         workspace.MutableToneSequenceSteps[0].FrequencyText = frequency;
         workspace.MutableToneSequenceSteps[0].DurationText = duration;
         var session = new RecordingToneSession();
@@ -82,7 +82,7 @@ public sealed class TonePresentationControllerTests
     public async Task DeletedDtmfAndTonePresetsCanBeRestoredThroughOperatorUndo()
     {
         var settings = new UserSettings();
-        var workspace = new ToneWorkspaceViewModel(settings);
+        var workspace = new ToneWorkspaceViewModel(settings, DesktopAlertToneFiles.Instance);
         var dtmf = new DtmfPresetViewModel(new DtmfPresetSetting
         {
             Name = "Dispatch",

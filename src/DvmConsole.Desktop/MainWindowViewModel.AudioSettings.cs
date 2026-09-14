@@ -59,27 +59,6 @@ public sealed partial class MainWindowViewModel : IAudioInputSettingsSession
     private Task ApplyAudioInputSettingsAsync(bool restartActiveAudio)
         => audioInputSettingsController.ApplyAsync(restartActiveAudio);
 
-    private static AudioInputProcessingOptions CreateAudioInputProcessingOptions(
-        string deviceId,
-        AudioProcessingMode processingMode,
-        bool agcEnabled,
-        double agcTargetDbfs,
-        double gain,
-        double lowGainDb,
-        double midGainDb,
-        double highGainDb)
-        => new()
-        {
-            DeviceId = deviceId,
-            ProcessingMode = processingMode,
-            AgcEnabled = agcEnabled,
-            AgcTargetDbfs = agcTargetDbfs,
-            Gain = gain,
-            LowGainDb = lowGainDb,
-            MidGainDb = midGainDb,
-            HighGainDb = highGainDb
-        };
-
     private void HandleAudioCommandFault(Exception exception)
     {
         DesktopCrashLog.Write("Audio settings command", exception);
@@ -306,9 +285,7 @@ public sealed partial class MainWindowViewModel : IAudioInputSettingsSession
 
     private IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions>
         BuildReceiveAudioProcessingOptions()
-        => rxAudioProcessingModes.ToDictionary(
-            mode => mode.VocoderMode,
-            mode => mode.ToVocoderOptions());
+        => ConsoleReceiveProcessingProfile.Capture(userSettings.RxAudioProcessingOptions);
 
     internal async Task ApplyRxJitterBufferAsync(SystemViewModel system)
     {
@@ -320,10 +297,8 @@ public sealed partial class MainWindowViewModel : IAudioInputSettingsSession
         userSettings.RxJitterBuffersBySystem[system.Name] = configured;
         PersistUserSettings();
         system.RestoreJitterBuffer(configured);
-        Volatile.Write(
-            ref receiveJitterBufferSettingsBySystem,
-            BuildReceiveJitterBufferSettingsBySystem());
-        adaptiveReceiveJitter.Reset(system.Name);
+        receiveBufferingRuntime.Apply(BuildReceiveJitterBufferSettingsBySystem());
+        receiveBufferingRuntime.Reset(system.Name);
         receiveJitterEffectiveness.Reset(system.Name);
         RefreshJitterBufferTelemetry(system);
 
@@ -339,46 +314,16 @@ public sealed partial class MainWindowViewModel : IAudioInputSettingsSession
     }
 
     private ReceiveJitterBufferProfile GetReceiveJitterBufferProfile(
-        ChannelViewModel channel,
-        FneTrafficProtocol protocol)
-    {
-        string systemName = channel.Definition.SystemName;
-        RxJitterBufferSetting configured = GetReceiveJitterBufferSetting(systemName);
-        ReceiveJitterBufferConfiguration configuration =
-            ReceiveJitterBufferPolicy.GetConfiguration(protocol, configured);
-        return adaptiveReceiveJitter.GetProfile(
-            systemName,
-            FneReceiveWorkQueueAdapter.ToRadioProtocol(protocol),
-            configuration);
-    }
-
-    private void ObserveAdaptiveReceiveJitter(
-        SystemViewModel system,
-        FneTrafficFrame traffic)
-    {
-        RxJitterBufferSetting configured = GetReceiveJitterBufferSetting(system.Name);
-        ReceiveJitterBufferConfiguration configuration =
-            ReceiveJitterBufferPolicy.GetConfiguration(traffic.Protocol, configured);
-        adaptiveReceiveJitter.Observe(
-            system.Name,
-            traffic,
-            traffic.TransportIngressTimestamp,
-            configuration);
-    }
+        ChannelId channel, DvmConsole.Core.Runtime.RadioMediaProtocol protocol)
+        => receiveBufferingRuntime.GetProfile(channelMedia.State(channel).Runtime.Definition.SystemName, protocol);
 
     private RxJitterBufferSetting GetReceiveJitterBufferSetting(string systemName)
-    {
-        IReadOnlyDictionary<string, RxJitterBufferSetting> settings =
-            Volatile.Read(ref receiveJitterBufferSettingsBySystem);
-        return settings.TryGetValue(systemName, out RxJitterBufferSetting? systemSettings)
-            ? systemSettings
-            : RxJitterBufferSetting.Normalize(userSettings.RxJitterBuffer);
-    }
+        => receiveBufferingRuntime.GetOptions(systemName).ToSetting();
 
-    private IReadOnlyDictionary<string, RxJitterBufferSetting> BuildReceiveJitterBufferSettingsBySystem()
+    private IReadOnlyDictionary<string, ConsoleReceiveBufferingOptions> BuildReceiveJitterBufferSettingsBySystem()
     {
         RxJitterBufferSetting fallback = RxJitterBufferSetting.Normalize(userSettings.RxJitterBuffer);
-        var configured = new Dictionary<string, RxJitterBufferSetting>(StringComparer.OrdinalIgnoreCase);
+        var configured = new Dictionary<string, ConsoleReceiveBufferingOptions>(StringComparer.OrdinalIgnoreCase);
         foreach (SystemViewModel system in Systems)
         {
             RxJitterBufferSetting systemSettings = userSettings.RxJitterBuffersBySystem.TryGetValue(
@@ -387,7 +332,7 @@ public sealed partial class MainWindowViewModel : IAudioInputSettingsSession
                     ? RxJitterBufferSetting.Normalize(stored)
                     : RxJitterBufferSetting.Normalize(fallback);
             system.RestoreJitterBuffer(systemSettings);
-            configured[system.Name] = systemSettings;
+            configured[system.Name] = ConsoleReceiveBufferingOptions.FromSetting(systemSettings);
         }
         return configured;
     }
@@ -399,9 +344,9 @@ public sealed partial class MainWindowViewModel : IAudioInputSettingsSession
             receiveJitterEffectiveness.GetSnapshot(system.Name);
 
         system.UpdateJitterBufferTelemetry(new ReceiveJitterBufferTelemetry(
-            GetLearnedDelay(system.Name, FneTrafficProtocol.P25, settings),
-            GetLearnedDelay(system.Name, FneTrafficProtocol.Dmr, settings),
-            GetLearnedDelay(system.Name, FneTrafficProtocol.Nxdn, settings),
+            GetLearnedDelay(system.Name, FneTrafficProtocol.P25),
+            GetLearnedDelay(system.Name, FneTrafficProtocol.Dmr),
+            GetLearnedDelay(system.Name, FneTrafficProtocol.Nxdn),
             settings.P25Adaptive,
             settings.DmrAdaptive,
             settings.NxdnAdaptive,
@@ -409,57 +354,14 @@ public sealed partial class MainWindowViewModel : IAudioInputSettingsSession
             effectiveness.DeadlineMissedPackets));
     }
 
-    private TimeSpan GetLearnedDelay(
-        string systemName,
-        FneTrafficProtocol protocol,
-        RxJitterBufferSetting settings)
-    {
-        ReceiveJitterBufferConfiguration configuration =
-            ReceiveJitterBufferPolicy.GetConfiguration(protocol, settings);
-        return adaptiveReceiveJitter.GetProfile(
-            systemName,
-            FneReceiveWorkQueueAdapter.ToRadioProtocol(protocol),
-            configuration).TargetDelay;
-    }
+    private TimeSpan GetLearnedDelay(string systemName, FneTrafficProtocol protocol)
+        => receiveBufferingRuntime.GetProfile(systemName,
+            FneReceiveWorkQueueAdapter.ToRadioProtocol(protocol)).TargetDelay;
 
-    private async Task RestartReceiveVocoderSessionsAsync(bool includePatchSources = true)
-    {
-        if (Volatile.Read(ref disposeStarted) != 0)
-            return;
-
-        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            ChannelViewModel[] activeChannels = ResolveChannels(audioCoordinator.ActiveChannels);
-            if (activeChannels.Length > 0)
-            {
-                foreach (ChannelViewModel channel in activeChannels)
-                    await receiveAudioWork.StopAsync(channel).ConfigureAwait(false);
-                await audioCoordinator.StopAsync().ConfigureAwait(false);
-                foreach (ChannelViewModel channel in activeChannels)
-                {
-                    if (channel.IsAudioEnabled)
-                        await StartAudioAsync(channel).ConfigureAwait(false);
-                    else if (channel.IsRecordingEnabled)
-                        await EnsureRecordingAudioAsync(channel).ConfigureAwait(false);
-                }
-            }
-
-            if (includePatchSources)
-            {
-                ChannelViewModel[] patchChannels = GetActivePatchSourceChannels();
-                await DrainPatchSourceWorkAsync().ConfigureAwait(false);
-                await patchSourceDecode.StopAllAsync().ConfigureAwait(false);
-                await patchSourceDecode.ApplyChannelsAsync(
-                    patchChannels.Select(channel => (DvmConsole.Application.ReceiveChannelDescriptor)channel))
-                    .ConfigureAwait(false);
-            }
-        }
-        finally
-        {
-            audioReconfigurationLock.Release();
-        }
-    }
+    private Task RestartReceiveVocoderSessionsAsync(bool includePatchSources = true)
+        => receiveRuntime.RebuildDecodersAsync(includePatchSources
+            ? () => patchRuntime.RebuildDecodersAsync(systemChannelIds, GetActivePatchSourceChannels())
+            : null);
 
     private static void ReplaceAudioDeviceOptions(
         ObservableCollection<AudioDeviceOptionViewModel> target,

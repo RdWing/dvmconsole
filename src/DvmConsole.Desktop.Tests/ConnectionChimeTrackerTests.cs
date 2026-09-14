@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2025-2026 RdWing
 // SPDX-License-Identifier: AGPL-3.0-only
 
-using DvmConsole.Desktop;
-using DvmConsole.FneClient;
+using DvmConsole.Application;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
@@ -14,13 +13,13 @@ public sealed class ConnectionChimeTrackerTests
     {
         var tracker = new ConnectionChimeTracker();
 
-        Assert.False(tracker.ShouldPlay("Alpha", FneConnectionState.Disconnected));
-        Assert.False(tracker.ShouldPlay("Alpha", FneConnectionState.Starting));
-        Assert.True(tracker.ShouldPlay("Alpha", FneConnectionState.Connected));
-        Assert.False(tracker.ShouldPlay("Alpha", FneConnectionState.Connected));
-        Assert.False(tracker.ShouldPlay("Alpha", FneConnectionState.Stopping));
-        Assert.True(tracker.ShouldPlay("Alpha", FneConnectionState.Disconnected));
-        Assert.False(tracker.ShouldPlay("Alpha", FneConnectionState.Disconnected));
+        Assert.False(tracker.ShouldPlay("Alpha", RadioConnectionState.Disconnected));
+        Assert.False(tracker.ShouldPlay("Alpha", RadioConnectionState.Starting));
+        Assert.True(tracker.ShouldPlay("Alpha", RadioConnectionState.Connected));
+        Assert.False(tracker.ShouldPlay("Alpha", RadioConnectionState.Connected));
+        Assert.False(tracker.ShouldPlay("Alpha", RadioConnectionState.Stopping));
+        Assert.True(tracker.ShouldPlay("Alpha", RadioConnectionState.Disconnected));
+        Assert.False(tracker.ShouldPlay("Alpha", RadioConnectionState.Disconnected));
     }
 
     [Fact]
@@ -28,8 +27,8 @@ public sealed class ConnectionChimeTrackerTests
     {
         var tracker = new ConnectionChimeTracker();
 
-        Assert.True(tracker.ShouldPlay("Alpha", FneConnectionState.Connected));
-        Assert.True(tracker.ShouldPlay("Alpha", FneConnectionState.Faulted));
-        Assert.False(tracker.ShouldPlay("Alpha", FneConnectionState.Disconnected));
+        Assert.True(tracker.ShouldPlay("Alpha", RadioConnectionState.Connected));
+        Assert.True(tracker.ShouldPlay("Alpha", RadioConnectionState.Faulted));
+        Assert.False(tracker.ShouldPlay("Alpha", RadioConnectionState.Disconnected));
     }
 }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 using Xunit;
+using DvmConsole.Application;
 
 namespace DvmConsole.Desktop.Tests;
 

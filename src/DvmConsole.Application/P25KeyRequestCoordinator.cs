@@ -12,6 +12,8 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
     private readonly object sync = new();
     private readonly Dictionary<string, RequestSchedule> schedules = new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<TimeSpan, CancellationToken, Task> delayAsync;
+    private readonly HashSet<RequestSchedule> ownedSchedules = new();
+    private readonly AsyncDisposal disposal = new();
     private bool disposed;
 
     public P25KeyRequestCoordinator()
@@ -52,13 +54,14 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
         {
             if (disposed)
                 return Task.CompletedTask;
-            schedule = new RequestSchedule(new CancellationTokenSource());
+            schedule = new RequestSchedule();
+            ownedSchedules.Add(schedule);
             schedules.Remove(systemName, out replaced);
             schedules[systemName] = schedule;
         }
 
-        replaced?.Cancellation.Cancel();
-        schedule.Task = RunAsync(
+        replaced?.Cancel();
+        _ = RunAsync(
             systemName,
             requests,
             isConnected,
@@ -67,7 +70,7 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
             retryKey,
             handleFailure,
             schedule);
-        return schedule.Task;
+        return schedule.Completion.Task;
     }
 
     public void Cancel(string systemName)
@@ -76,10 +79,12 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
         RequestSchedule? schedule;
         lock (sync)
             schedules.Remove(systemName, out schedule);
-        schedule?.Cancellation.Cancel();
+        schedule?.Cancel();
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() => disposal.RunAsync(DisposeCoreAsync);
+
+    private async Task DisposeCoreAsync()
     {
         RequestSchedule[] active;
         lock (sync)
@@ -87,13 +92,13 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
             if (disposed)
                 return;
             disposed = true;
-            active = schedules.Values.ToArray();
+            active = ownedSchedules.ToArray();
             schedules.Clear();
         }
 
         foreach (RequestSchedule schedule in active)
-            schedule.Cancellation.Cancel();
-        await Task.WhenAll(active.Select(schedule => schedule.Task)).ConfigureAwait(false);
+            schedule.Cancel();
+        await Task.WhenAll(active.Select(schedule => schedule.Completion.Task)).ConfigureAwait(false);
     }
 
     private async Task RunAsync(
@@ -106,7 +111,8 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
         Action<Exception>? handleFailure,
         RequestSchedule schedule)
     {
-        CancellationToken cancellationToken = schedule.Cancellation.Token;
+        CancellationToken cancellationToken = schedule.Token;
+        Exception? failure = null;
         try
         {
             await delayAsync(StartupDelay, cancellationToken).ConfigureAwait(false);
@@ -136,17 +142,30 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
         {
             // Connection lifecycle cancellation is expected.
         }
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
         finally
         {
-            lock (sync)
+            schedule.Finish(() => CompleteSchedule(systemName, schedule, failure));
+        }
+    }
+
+    private void CompleteSchedule(string systemName, RequestSchedule schedule, Exception? failure)
+    {
+        lock (sync)
+        {
+            if (schedules.TryGetValue(systemName, out RequestSchedule? current) &&
+                ReferenceEquals(current, schedule))
             {
-                if (schedules.TryGetValue(systemName, out RequestSchedule? current) &&
-                    ReferenceEquals(current, schedule))
-                {
-                    schedules.Remove(systemName);
-                }
+                schedules.Remove(systemName);
             }
-            schedule.Cancellation.Dispose();
+            ownedSchedules.Remove(schedule);
+            if (failure is null)
+                schedule.Completion.TrySetResult();
+            else
+                schedule.Completion.TrySetException(failure);
         }
     }
 
@@ -180,9 +199,62 @@ internal sealed class P25KeyRequestCoordinator : IAsyncDisposable
         return true;
     }
 
-    private sealed class RequestSchedule(CancellationTokenSource cancellation)
+    private sealed class RequestSchedule
     {
-        public CancellationTokenSource Cancellation { get; } = cancellation;
-        public Task Task { get; set; } = Task.CompletedTask;
+        private readonly object sync = new();
+        private readonly CancellationTokenSource cancellation = new();
+        private Action? complete;
+        private bool finished;
+        private int cancelling;
+
+        public CancellationToken Token { get; }
+        public TaskCompletionSource Completion { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public RequestSchedule() => Token = cancellation.Token;
+
+        public void Cancel()
+        {
+            lock (sync)
+            {
+                if (finished)
+                    return;
+                cancelling++;
+            }
+            try
+            {
+                cancellation.Cancel();
+            }
+            finally
+            {
+                lock (sync)
+                {
+                    cancelling--;
+                    CompleteIfReady();
+                }
+            }
+        }
+
+        public void Finish(Action onCompleted)
+        {
+            lock (sync)
+            {
+                finished = true;
+                complete = onCompleted;
+                CompleteIfReady();
+            }
+        }
+
+        private void CompleteIfReady()
+        {
+            // Cancellation callbacks can finish the worker synchronously. Keep its
+            // source alive until all Cancel calls have returned before retiring it.
+            if (!finished || cancelling != 0 || complete is null)
+                return;
+            cancellation.Dispose();
+            Action onCompleted = complete;
+            complete = null;
+            onCompleted();
+        }
     }
 }

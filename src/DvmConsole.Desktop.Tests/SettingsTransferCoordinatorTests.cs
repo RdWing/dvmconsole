@@ -118,10 +118,10 @@ public sealed class SettingsTransferCoordinatorTests
         try
         {
             store.Save(new UserSettings { LockWidgets = false, RecordingRootPath = Path.Combine(root, "recordings") });
-            MainWindowViewModel Load() => MainWindowViewModel.Load(
+            Task<MainWindowViewModel> LoadAsync() => MainWindowViewModel.LoadAsync(
                 codeplug, store, serialPortProvider: static () => [], networkDisabledDemo: true,
                 configurationReference: reference, useLegacyPathFallback: false);
-            MainWindowViewModel original = Load();
+            MainWindowViewModel original = await LoadAsync();
             host = new MainWindowSessionHost(original, (_, _) => { }, _ => { }, () => { }, () => { });
             ChannelViewModel card = original.Systems[0].Channels[0];
             original.MoveChannelWidget(card, 10, 20, persist: true);
@@ -142,9 +142,27 @@ public sealed class SettingsTransferCoordinatorTests
             new UserSettingsStore(Path.Combine(root, "source.json")).Export(source, export);
             export.Position = 0;
             SettingsImportStage stage = original.StageSettingsImport(export, "operator-settings.json");
+            var preparationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var continuePreparation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var transfer = new SettingsTransferCoordinator(() =>
-                new DesktopSettingsTransferSession(host.ViewModel, host, Load, replacement => host.ReplaceAsync(replacement)));
-            await transfer.ImportAsync(stage);
+                new DesktopSettingsTransferSession(host.ViewModel, host, async () =>
+                {
+                    preparationEntered.TrySetResult();
+                    await continuePreparation.Task;
+                    return await LoadAsync();
+                }, replacement => host.ReplaceAsync(replacement)));
+            Task importing = transfer.ImportAsync(stage);
+            try
+            {
+                await preparationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Same(original, host.ViewModel);
+                Assert.False(importing.IsCompleted);
+            }
+            finally
+            {
+                continuePreparation.TrySetResult();
+                await importing;
+            }
             Assert.NotSame(original, host.ViewModel);
             ChannelViewModel imported = host.ViewModel.Systems[0].Channels[0];
             Assert.Equal(matchingNames && restoreReceive, imported.IsAudioEnabled);
@@ -157,7 +175,7 @@ public sealed class SettingsTransferCoordinatorTests
                 Assert.DoesNotContain(host.ViewModel.Systems.SelectMany(system => system.Channels), candidate => candidate.SettingsKey == importedKey);
             await host.DisposeAsync();
             host = null;
-            await using MainWindowViewModel restarted = Load();
+            await using MainWindowViewModel restarted = await LoadAsync();
             ChannelViewModel restored = restarted.Systems[0].Channels[0];
             Assert.Equal(matchingNames && restoreReceive, restored.IsAudioEnabled);
             if (matchingNames)

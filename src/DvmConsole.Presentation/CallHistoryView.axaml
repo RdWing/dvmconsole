@@ -7,6 +7,21 @@
              x:Class="DvmConsole.Presentation.CallHistoryView"
              x:DataType="presentation:ICallHistoryViewModel">
   <UserControl.Styles>
+    <Style Selector="StackPanel.filter-field"><Setter Property="Orientation" Value="Horizontal"/><Setter Property="Spacing" Value="6"/></Style>
+    <Style Selector="StackPanel.filter-text-field"><Setter Property="Spacing" Value="6"/></Style>
+    <Style Selector="TextBlock.filter-label"><Setter Property="IsVisible" Value="False"/></Style>
+    <Style Selector="WrapPanel.filter-group"><Setter Property="ItemSpacing" Value="8"/><Setter Property="LineSpacing" Value="8"/></Style>
+    <Style Selector="presentation|CallHistoryView.touch-history StackPanel.filter-field">
+      <Setter Property="Orientation" Value="Vertical"/><Setter Property="Spacing" Value="8"/>
+    </Style>
+    <Style Selector="presentation|CallHistoryView.touch-history TextBlock.filter-label"><Setter Property="IsVisible" Value="True"/></Style>
+    <Style Selector="presentation|CallHistoryView.touch-history WrapPanel.filter-group">
+      <Setter Property="ItemSpacing" Value="16"/><Setter Property="LineSpacing" Value="16"/><Setter Property="Margin" Value="0,8,0,12"/>
+    </Style>
+    <Style Selector="presentation|CallHistoryView.touch-history Expander TextBox, presentation|CallHistoryView.touch-history Expander DatePicker">
+      <Setter Property="MinHeight" Value="44"/>
+    </Style>
+
     <Style Selector="Border.history-row">
       <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />
       <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
@@ -57,40 +72,54 @@
       <Setter Property="HorizontalAlignment" Value="Left" />
       <Setter Property="Margin" Value="0,3,0,0" />
     </Style>
+    <Style Selector="presentation|CallHistoryView.touch-history Button">
+      <Setter Property="MinHeight" Value="44" />
+    </Style>
+    <Style Selector="presentation|CallHistoryView.touch-history TextBox">
+      <Setter Property="MinHeight" Value="44" />
+    </Style>
+    <Style Selector="presentation|CallHistoryView.touch-history ComboBox">
+      <Setter Property="MinHeight" Value="44" />
+    </Style>
+    <Style Selector="presentation|CallHistoryView.touch-history DatePicker">
+      <Setter Property="MinHeight" Value="44" />
+    </Style>
   </UserControl.Styles>
 
-  <Grid Margin="10" RowDefinitions="Auto,Auto,*" RowSpacing="10">
-    <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto" RowSpacing="8" ColumnSpacing="8">
+  <Grid x:Name="HistoryLayout" Margin="10" RowDefinitions="Auto,Auto,*" RowSpacing="10">
+    <Grid x:Name="HistoryHeader" RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto" RowSpacing="8" ColumnSpacing="8">
       <TextBlock Classes="history-heading" Text="Event History" VerticalAlignment="Center" />
-      <WrapPanel Grid.Column="1" ItemSpacing="8">
-        <Button Content="Export CSV…" AutomationProperties.Name="Export call history as CSV" Click="HandleExportClick" />
-        <Button Content="Clear session" AutomationProperties.Name="Clear session history" Click="HandleClearClick" />
+      <WrapPanel x:Name="HistoryHeaderActions" Grid.Column="1" ItemSpacing="8">
+        <Button x:Name="ExportHistoryButton" Content="Export CSV…" AutomationProperties.Name="Export call history as CSV" Click="HandleExportClick" />
+        <Button x:Name="ClearHistoryButton" Content="Clear session" AutomationProperties.Name="Clear session history" Click="HandleClearClick" />
       </WrapPanel>
-      <TextBox Grid.Row="1" Grid.ColumnSpan="2"
+      <TextBox x:Name="HistorySearch" Grid.Row="1" Grid.ColumnSpan="2"
                Watermark="Search events, calls, aliases, IDs, filenames, and diagnostics"
                Text="{Binding CallHistoryFilterText, Mode=TwoWay}" />
     </Grid>
-    <Expander Grid.Row="1" Header="Advanced filters">
+    <Expander x:Name="HistoryFilters" Grid.Row="1" Header="Advanced filters">
+      <ScrollViewer x:Name="HistoryFilterScroller" HorizontalScrollBarVisibility="Disabled">
       <StackPanel Spacing="8" Margin="0,8,0,0">
-        <WrapPanel ItemSpacing="8" LineSpacing="8">
-          <StackPanel Orientation="Horizontal" Spacing="6"><TextBlock Text="Direction" VerticalAlignment="Center" /><ComboBox Width="140" ItemsSource="{Binding RecordingDirectionFilters}" SelectedItem="{Binding RecordingDirectionFilter, Mode=TwoWay}" /></StackPanel>
-          <StackPanel Orientation="Horizontal" Spacing="6"><TextBlock Text="Protocol" VerticalAlignment="Center" /><ComboBox Width="140" ItemsSource="{Binding RecordingProtocolFilters}" SelectedItem="{Binding RecordingProtocolFilter, Mode=TwoWay}" /></StackPanel>
-          <StackPanel Orientation="Horizontal" Spacing="6"><TextBlock Text="Encryption" VerticalAlignment="Center" /><ComboBox Width="140" ItemsSource="{Binding RecordingEncryptionFilters}" SelectedItem="{Binding RecordingEncryptionFilter, Mode=TwoWay}" /></StackPanel>
+        <WrapPanel Classes="filter-group">
+          <StackPanel Classes="filter-field"><TextBlock Text="Direction" VerticalAlignment="Center" /><ComboBox AutomationProperties.Name="Direction filter" Width="140" ItemsSource="{Binding RecordingDirectionFilters}" SelectedItem="{Binding RecordingDirectionFilter, Mode=TwoWay}" /></StackPanel>
+          <StackPanel Classes="filter-field"><TextBlock Text="Protocol" VerticalAlignment="Center" /><ComboBox AutomationProperties.Name="Protocol filter" Width="140" ItemsSource="{Binding RecordingProtocolFilters}" SelectedItem="{Binding RecordingProtocolFilter, Mode=TwoWay}" /></StackPanel>
+          <StackPanel Classes="filter-field"><TextBlock Text="Encryption" VerticalAlignment="Center" /><ComboBox AutomationProperties.Name="Encryption filter" Width="140" ItemsSource="{Binding RecordingEncryptionFilters}" SelectedItem="{Binding RecordingEncryptionFilter, Mode=TwoWay}" /></StackPanel>
           <Button Content="Clear filters" AutomationProperties.Name="Clear call history filters" Click="HandleClearFiltersClick" />
         </WrapPanel>
-        <WrapPanel ItemSpacing="8" LineSpacing="8">
-          <TextBox Width="150" Watermark="System" Text="{Binding RecordingSystemFilterText, Mode=TwoWay}" />
-          <TextBox Width="150" Watermark="Channel" Text="{Binding RecordingChannelFilterText, Mode=TwoWay}" />
-          <TextBox Width="150" Watermark="Talkgroup ID" Text="{Binding RecordingTalkgroupFilterText, Mode=TwoWay}" />
-          <TextBox Width="150" Watermark="Subscriber ID" Text="{Binding RecordingSubscriberFilterText, Mode=TwoWay}" />
-          <TextBox Width="150" Watermark="Alias" Text="{Binding RecordingAliasFilterText, Mode=TwoWay}" />
+        <WrapPanel Classes="filter-group">
+          <StackPanel Classes="filter-text-field" Width="150"><TextBlock Classes="filter-label" Text="System"/><TextBox Watermark="System" AutomationProperties.Name="System filter" Text="{Binding RecordingSystemFilterText, Mode=TwoWay}" /></StackPanel>
+          <StackPanel Classes="filter-text-field" Width="150"><TextBlock Classes="filter-label" Text="Channel"/><TextBox Watermark="Channel" AutomationProperties.Name="Channel filter" Text="{Binding RecordingChannelFilterText, Mode=TwoWay}" /></StackPanel>
+          <StackPanel Classes="filter-text-field" Width="150"><TextBlock Classes="filter-label" Text="Talkgroup ID"/><TextBox Watermark="Talkgroup ID" AutomationProperties.Name="Talkgroup ID filter" Text="{Binding RecordingTalkgroupFilterText, Mode=TwoWay}" /></StackPanel>
+          <StackPanel Classes="filter-text-field" Width="150"><TextBlock Classes="filter-label" Text="Subscriber ID"/><TextBox Watermark="Subscriber ID" AutomationProperties.Name="Subscriber ID filter" Text="{Binding RecordingSubscriberFilterText, Mode=TwoWay}" /></StackPanel>
+          <StackPanel Classes="filter-text-field" Width="150"><TextBlock Classes="filter-label" Text="Alias"/><TextBox Watermark="Alias" AutomationProperties.Name="Alias filter" Text="{Binding RecordingAliasFilterText, Mode=TwoWay}" /></StackPanel>
         </WrapPanel>
-        <WrapPanel ItemSpacing="8" LineSpacing="8">
-          <StackPanel Orientation="Horizontal" Spacing="6"><TextBlock Text="From" VerticalAlignment="Center" /><DatePicker Width="190" SelectedDate="{Binding RecordingStartDateFilter, Mode=TwoWay}" /></StackPanel>
-          <StackPanel Orientation="Horizontal" Spacing="6"><TextBlock Text="Through" VerticalAlignment="Center" /><DatePicker Width="190" SelectedDate="{Binding RecordingEndDateFilter, Mode=TwoWay}" /></StackPanel>
+        <WrapPanel Classes="filter-group">
+          <StackPanel Classes="filter-field"><TextBlock Text="From" VerticalAlignment="Center" /><DatePicker Width="190" SelectedDate="{Binding RecordingStartDateFilter, Mode=TwoWay}" /></StackPanel>
+          <StackPanel Classes="filter-field"><TextBlock Text="Through" VerticalAlignment="Center" /><DatePicker Width="190" SelectedDate="{Binding RecordingEndDateFilter, Mode=TwoWay}" /></StackPanel>
           <TextBlock Classes="history-caption" Text="{Binding HistoryFilterSummary}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
         </WrapPanel>
       </StackPanel>
+      </ScrollViewer>
     </Expander>
     <ListBox x:Name="HistoryList"
              Grid.Row="2"
@@ -147,7 +176,7 @@
                         IsEnabled="{Binding HasPlayableRecording}"
                         ToolTip.Tip="{Binding RecordingPlaybackHelpText}"
                         Click="HandlePlaybackToggleClick" />
-                <Button Classes="history-action" Content="Open" AutomationProperties.Name="Open call recording" Tag="{Binding}" IsEnabled="{Binding HasPlayableRecording}" ToolTip.Tip="{Binding RecordingDetailsText}" Click="HandleOpenClick" />
+                <Button Classes="history-action" Content="{Binding $parent[presentation:CallHistoryView].RecordingOpenActionText}" AutomationProperties.Name="{Binding $parent[presentation:CallHistoryView].RecordingOpenActionText}" Tag="{Binding}" IsEnabled="{Binding HasPlayableRecording}" ToolTip.Tip="{Binding RecordingDetailsText}" Click="HandleOpenClick" />
                 <Button Classes="history-action" Content="Delete" AutomationProperties.Name="Delete call recording" Tag="{Binding}" Click="HandleDeleteClick" />
               </WrapPanel>
             </presentation:ResponsiveCallHistoryRow>

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 using DvmConsole.Audio;
+using DvmConsole.Core.Diagnostics;
 using DvmConsole.Ptt;
 using DvmConsole.Vocoder;
 using System.Diagnostics;
@@ -40,6 +41,18 @@ public interface IRadioSession : IRadioTrafficEndpoint, IAsyncDisposable
     event EventHandler<TalkgroupAuthorityRecord>? AuthorityChanged;
     ValueTask StartAsync(CancellationToken cancellationToken = default);
     ValueTask QuiesceAsync(CancellationToken cancellationToken = default);
+}
+
+/// <summary>Optional synchronous transport closure for a host shutdown safety fence.</summary>
+public interface IRadioSessionAbort
+{
+    void Abort();
+}
+
+/// <summary>Optional protocol-neutral diagnostics from a radio transport.</summary>
+public interface IRadioLogSource
+{
+    event EventHandler<DebugLogEntry>? LogPublished;
 }
 
 public interface IRadioSessionFactory

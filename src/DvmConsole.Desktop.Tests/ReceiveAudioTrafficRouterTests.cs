@@ -21,6 +21,21 @@ public sealed class ReceiveAudioTrafficRouterTests
         => this.output = output;
 
     [Fact]
+    public void IngressUsesTheApplicationOwnedRouteRuntime()
+    {
+        ChannelViewModel channel = Channel("Dispatch", "100", slot: 1);
+        var shared = new ConsoleReceiveRouteState([channel.SessionDefinition]);
+        var router = new ReceiveAudioTrafficRouter(
+            new Dictionary<(FneTrafficProtocol, uint), ChannelViewModel[]>
+            {
+                [(FneTrafficProtocol.Dmr, 100)] = [channel]
+            }, shared);
+        router.ObserveIngress(TraceTraffic(1, 77, 100, definitiveStart: true),
+            (_, _) => false, DateTimeOffset.UnixEpoch);
+        Assert.True(shared.Runtime.IsActive(channel.SessionDefinition.RouteKey, 77));
+    }
+
+    [Fact]
     public void RoutesTarArmedCardWithoutLiveRxAsDecodeTarget()
     {
         ChannelViewModel tarOnly = Channel("TAR only", "100", slot: 1);
@@ -91,20 +106,70 @@ public sealed class ReceiveAudioTrafficRouterTests
     }
 
     [Fact]
+    public void SharedRecordingDispatchKeepsLogicalEpisodeAndArmedRouteOwnership()
+    {
+        ChannelViewModel rx = Channel("RX", "100", slot: 1);
+        ChannelViewModel tar = Channel("TAR", "100", slot: 1);
+        var channels = new[] { rx, tar }.ToDictionary(channel => channel.Id, channel => channel.SessionState);
+        using var runtime = new ConsoleRecordingRuntime(channels.Values);
+        var targets = runtime.Targets;
+        var episodes = new ReceiveCallEpisodeTracker();
+        var sink = new RecordingSink();
+        bool stopped = false;
+        runtime.Initialize(channels, episodes, new ConsoleCallHistory(), sink,
+            id => id == tar.Id ? tar : rx, isStopping: () => stopped);
+        var traffic = Traffic(slot: 0);
+        episodes.Observe(rx.Definition.SystemName, traffic, DateTimeOffset.UtcNow);
+        Assert.True(episodes.TryGet(rx.Definition.SystemName, traffic.Protocol, traffic.StreamId, out var episode));
+        runtime.ObserveDecoded(rx.Id, traffic.StreamId, 2, new short[] { 42 });
+        Assert.Empty(sink.Samples);
+        tar.SetRecordingEnabled(true);
+        targets.Refresh();
+        runtime.ObserveRecordingTraffic(rx.Id, traffic);
+        runtime.ObserveDecoded(rx.Id, traffic.StreamId, 2, new short[] { 42 });
+        Assert.Equal((tar.Id, episode!.PrimaryStreamId, traffic.StreamId, episode.EpisodeId), Assert.Single(sink.Samples));
+        Assert.Equal(Assert.Single(sink.Samples), Assert.Single(sink.Frames));
+        stopped = true;
+        runtime.ObserveRecordingTraffic(rx.Id, traffic);
+        runtime.ObserveDecoded(rx.Id, traffic.StreamId, 2, new short[] { 43 });
+        Assert.Single(sink.Samples);
+        Assert.Single(sink.Frames);
+        stopped = false;
+        tar.SetRecordingEnabled(false);
+        targets.Refresh();
+        runtime.ObserveDecoded(rx.Id, traffic.StreamId, 2, new short[] { 43 });
+        Assert.Single(sink.Samples);
+    }
+
+    private sealed class RecordingSink : IReceiveRecordingSink
+    {
+        public List<(ChannelId, uint, uint, long?)> Samples { get; } = [];
+        public List<(ChannelId, uint, uint, long?)> Frames { get; } = [];
+        public void WriteEpisodeSamples(ChannelRecordingDescriptor channel, uint episodeStreamId, uint physicalStreamId,
+            uint sourceId, ReadOnlyMemory<short> samples, long? receiveEpisodeId = null)
+            => Samples.Add((channel.Id, episodeStreamId, physicalStreamId, receiveEpisodeId));
+        public void ObserveEpisodeTraffic(ChannelRecordingDescriptor channel, uint episodeStreamId, uint physicalStreamId,
+            IRadioMediaFrame traffic, long? receiveEpisodeId = null)
+            => Frames.Add((channel.Id, episodeStreamId, physicalStreamId, receiveEpisodeId));
+        public void StopEpisode(ChannelRecordingDescriptor channel, long receiveEpisodeId) { }
+        public void StopChannel(ChannelRecordingDescriptor channel) { }
+    }
+
+    [Fact]
     public void RecordingTargetIndexTracksTarStateByLogicalRoute()
     {
         ChannelViewModel rxOwner = Channel("Dispatch RX", "100", slot: 1);
         ChannelViewModel tarCopy = Channel("Dispatch TAR", "100", slot: 1);
-        var index = new ReceiveRecordingTargetIndex([rxOwner, tarCopy]);
+        var index = new ReceiveRecordingTargetIndex([rxOwner.SessionState, tarCopy.SessionState]);
 
-        Assert.Null(index.Resolve(rxOwner));
+        Assert.Null(index.Resolve(rxOwner.Id));
         tarCopy.SetRecordingEnabled(true);
         index.Refresh();
-        Assert.Same(tarCopy, index.Resolve(rxOwner));
+        Assert.Equal(tarCopy.Id, index.Resolve(rxOwner.Id));
 
         tarCopy.SetRecordingEnabled(false);
         index.Refresh();
-        Assert.Null(index.Resolve(rxOwner));
+        Assert.Null(index.Resolve(rxOwner.Id));
     }
 
     [Fact]

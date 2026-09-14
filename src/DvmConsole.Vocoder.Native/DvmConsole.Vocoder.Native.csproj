@@ -46,7 +46,7 @@
     <ProjectReference Include="../DvmConsole.Vocoder.Abstractions/DvmConsole.Vocoder.Abstractions.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(DvmConsoleStaticVocoder)' != 'true'">
     <Content Include="$(NativeVocoderOutputPath)"
              Link="$(NativeVocoderLibraryName)"
              CopyToOutputDirectory="PreserveNewest"
@@ -54,7 +54,7 @@
              Visible="false" />
   </ItemGroup>
 
-  <Target Name="BuildRequiredNativeVocoder" BeforeTargets="PrepareForBuild">
+  <Target Name="BuildRequiredNativeVocoder" BeforeTargets="PrepareForBuild" Condition="'$(DvmConsoleStaticVocoder)' != 'true'">
     <Exec Command="cargo $(NativeVocoderCargoExtension) build --manifest-path &quot;$(NativeVocoderCargoManifest)&quot; --locked $(NativeVocoderReleaseArgument) $(NativeVocoderTargetArgument)"
           EnvironmentVariables="$(NativeVocoderEnvironment)" />
     <Error Condition="!Exists('$(NativeVocoderOutputPath)')"

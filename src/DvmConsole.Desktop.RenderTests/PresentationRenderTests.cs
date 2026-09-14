@@ -25,6 +25,255 @@ namespace DvmConsole.Desktop.RenderTests;
 public sealed class PresentationRenderTests
 {
     [AvaloniaFact]
+    public async Task AccessiblePttReleaseFencesPendingStartup()
+    {
+        var commands = new RecordingConsoleCommands
+        {
+            PendingSelectedStart = new(TaskCreationOptions.RunContinuationsAsynchronously)
+        };
+        await using var session = CreateSession(1, commands);
+        await using var console = new DvmConsole.Mobile.MobileConsoleView(ConsoleHostFormFactor.Phone,
+            applicationSession: session, ownsSession: false);
+        var host = new Window { Width = 390, Height = 768, Content = console };
+        try
+        {
+            host.Show();
+            host.UpdateLayout();
+            await console.SetTogglePttModeAsync(true);
+            var button = console.GetVisualDescendants().OfType<Button>().Single(b => b.Content as string == "TX (1)");
+            var binding = Assert.IsType<PttAccessibilityBinding>(button.GetValue(PttAccessibilityBinding.BindingProperty));
+            Assert.True(binding.TryActivate());
+            Assert.True(binding.TryActivate());
+            Assert.Equal(1, commands.SelectedStarts);
+            commands.PendingSelectedStart.SetResult(true);
+            await commands.LateSelectedStop.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(commands.IsSelectedPttRequested);
+        }
+        finally { host.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(390, false)]
+    [InlineData(1024, false)]
+    [InlineData(390, true)]
+    public async Task AccessiblePttHonorsModeAndNavigationCleanup(double width, bool selected)
+    {
+        var commands = new RecordingConsoleCommands();
+        await using var session = CreateSession(1, commands);
+        await using var console = new DvmConsole.Mobile.MobileConsoleView(ConsoleHostFormFactor.Tablet,
+            applicationSession: session, ownsSession: false);
+        var host = new Window { Width = width, Height = 768, Content = console };
+        try
+        {
+            host.Show();
+            host.UpdateLayout();
+            Button button = selected
+                ? console.GetVisualDescendants().OfType<Button>().Single(b => b.Content as string == "TX (1)")
+                : console.GetVisualDescendants().OfType<Button>().Single(b => b.Classes.Contains("ptt"));
+            var binding = Assert.IsType<PttAccessibilityBinding>(button.GetValue(PttAccessibilityBinding.BindingProperty));
+            int Starts() => selected ? commands.SelectedStarts : commands.PttStarts;
+            int Stops() => selected ? commands.SelectedStops : commands.PttStops;
+            Assert.False(binding.TryActivate());
+            Assert.Equal(0, Starts());
+            await console.SetTogglePttModeAsync(true);
+            Assert.True(binding.TryActivate());
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            Assert.Equal(1, Starts());
+            Assert.True(binding.TryActivate());
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            Assert.Equal(1, Stops());
+            Assert.True(binding.TryActivate());
+            host.Content = new TextBlock { Text = "Settings" };
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            Assert.Equal(2, Stops());
+            Assert.False(binding.TryActivate());
+        }
+        finally { host.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(320)]
+    [InlineData(390)]
+    [InlineData(1024)]
+    public async Task MobileTransmitSelectionDoesNotMoveChannelControls(double width)
+    {
+        await using var session = CreateSession(1, new RecordingConsoleCommands());
+        await using var console = new DvmConsole.Mobile.MobileConsoleView(ConsoleHostFormFactor.Phone,
+            applicationSession: session, ownsSession: false);
+        var host = new Window { Width = width, Height = 768, Content = console };
+        try
+        {
+            host.Show();
+            host.UpdateLayout();
+            var row = console.GetVisualDescendants().OfType<Border>().First(border => border.Classes.Contains("channel-list-row"));
+            var position = row.TranslatePoint(default, host);
+            var states = session.Snapshot.Channels.ToDictionary(pair => pair.Key, pair => pair.Value with { TransmitSelected = false });
+            session.PublishSnapshot(session.Snapshot with { Channels = states });
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            host.UpdateLayout();
+            Assert.Equal(position, row.TranslatePoint(default, host));
+        }
+        finally { host.Close(); }
+    }
+
+    [AvaloniaFact]
+    public async Task MobileSelectedPttReleaseFencesLateStartAndRejectsOverlappingPress()
+    {
+        var commands = new RecordingConsoleCommands
+        {
+            PendingSelectedStart = new(TaskCreationOptions.RunContinuationsAsynchronously)
+        };
+        await using var session = CreateSession(1, commands);
+        await using var console = new DvmConsole.Mobile.MobileConsoleView(ConsoleHostFormFactor.Phone,
+            applicationSession: session, ownsSession: false);
+        var host = new Window { Width = 390, Height = 768, Content = console };
+        try
+        {
+            host.Show();
+            host.UpdateLayout();
+            Button button = console.GetVisualDescendants().OfType<Button>()
+                .Single(b => b.Content as string == "TX (1)");
+            Point point = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host)!.Value;
+            host.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+            host.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+            host.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+            host.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+            Assert.Equal(1, commands.SelectedStarts);
+            commands.PendingSelectedStart.SetResult(true);
+            await commands.LateSelectedStop.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(commands.IsSelectedPttRequested);
+        }
+        finally { host.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(390, false, false)]
+    [InlineData(390, true, false)]
+    [InlineData(1024, true, false)]
+    [InlineData(390, false, true)]
+    [InlineData(390, true, true)]
+    public async Task MobilePttModeAppliesToCardsListAndSelectedChannels(double width, bool toggle, bool selected)
+    {
+        var commands = new RecordingConsoleCommands();
+        await using var session = CreateSession(1, commands);
+        var preferences = new MobilePttPreferences();
+        await using var console = new DvmConsole.Mobile.MobileConsoleView(ConsoleHostFormFactor.Tablet,
+            preferences, applicationSession: session, ownsSession: false);
+        var host = new Window { Width = width, Height = 768, Content = console };
+        try
+        {
+            host.Show();
+            host.UpdateLayout();
+            await console.SetTogglePttModeAsync(toggle);
+            Button button = selected
+                ? console.GetVisualDescendants().OfType<Button>().Single(b => b.Content as string == "TX (1)")
+                : console.GetVisualDescendants().OfType<Button>().Single(b => b.Classes.Contains("ptt"));
+            Point point = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host)!.Value;
+            int Starts() => selected ? commands.SelectedStarts : commands.PttStarts;
+            int Stops() => selected ? commands.SelectedStops : commands.PttStops;
+            host.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+            host.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            Assert.Equal(1, Starts());
+            Assert.Equal(toggle ? 0 : 1, Stops());
+            if (toggle)
+            {
+                host.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+                host.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+                await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+                Assert.Equal(1, Stops());
+                host.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+                host.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+                // Changing mode must clear latched intent before publishing the new preference.
+                await console.SetTogglePttModeAsync(false);
+                Assert.Equal(2, Stops());
+                await console.SetTogglePttModeAsync(true);
+                host.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+                host.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+                host.Content = new TextBlock { Text = "Settings" };
+                await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+                Assert.Equal(3, Starts());
+                Assert.Equal(3, Stops());
+            }
+            await using var reopened = new DvmConsole.Mobile.MobileConsoleView(ConsoleHostFormFactor.Phone,
+                preferences, applicationSession: session, ownsSession: false);
+            Assert.Equal(toggle, reopened.TogglePttMode);
+        }
+        finally { host.Close(); }
+    }
+
+    private sealed class MobilePttPreferences : DvmConsole.Mobile.IMobileLayoutPreferences, DvmConsole.Mobile.IMobilePttPreferences
+    {
+        private readonly Dictionary<string, bool> values = [];
+        public ConsoleRendererPreference? Read(string id) => ConsoleRendererPreference.Cards;
+        public void Write(string id, ConsoleRendererPreference preference) { }
+        public bool ReadTogglePtt(string id) => values.GetValueOrDefault(id);
+        public void WriteTogglePtt(string id, bool enabled) => values[id] = enabled;
+    }
+
+    [AvaloniaTheory]
+    [InlineData("release", false)]
+    [InlineData("capture loss", false)]
+    [InlineData("renderer change", false)]
+    [InlineData("navigation", true)]
+    [InlineData("key release", false)]
+    [InlineData("focus loss", false)]
+    public async Task MobileCardPttUsesSharedControllerAndReleasesOnGestureLoss(string ending, bool delayedStart)
+    {
+        var commands = new RecordingConsoleCommands
+        {
+            PendingPttStart = delayedStart ? new(TaskCreationOptions.RunContinuationsAsynchronously) : null
+        };
+        await using var session = CreateSession(1, commands);
+        await using var console = new DvmConsole.Mobile.MobileConsoleView(ConsoleHostFormFactor.Tablet,
+            applicationSession: session, ownsSession: false);
+        var host = new Window { Width = 1024, Height = 768, Content = console };
+        IPointer? pointer = null;
+        host.AddHandler(InputElement.PointerPressedEvent, (_, args) => pointer = args.Pointer,
+            Avalonia.Interactivity.RoutingStrategies.Tunnel, true);
+        try
+        {
+            host.Show();
+            host.UpdateLayout();
+            Button button = console.GetVisualDescendants().OfType<ChannelCardContent>().Single()
+                .FindControl<Button>("PttButton")!;
+            Assert.True(button.IsEffectivelyEnabled);
+            Point point = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host)!.Value;
+            bool keyboard = ending is "key release" or "focus loss";
+            if (keyboard)
+            {
+                button.Focus();
+                button.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Space });
+                button.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Space });
+            }
+            else host.MouseDown(point, MouseButton.Left, RawInputModifiers.None);
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            Assert.Equal(1, commands.PttStarts);
+            Assert.Equal(0, commands.PttStops);
+            switch (ending)
+            {
+                case "release": host.MouseUp(point, MouseButton.Left, RawInputModifiers.None); break;
+                case "capture loss": Assert.NotNull(pointer); pointer.Capture(host); break;
+                case "renderer change": console.SelectRenderer(ConsoleRendererPreference.List); break;
+                case "navigation": host.Content = new TextBlock { Text = "Settings" }; break;
+                case "key release":
+                    button.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyUpEvent, Key = Key.Space });
+                    break;
+                case "focus loss":
+                    button.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(InputElement.LostFocusEvent));
+                    break;
+            }
+            commands.PendingPttStart?.SetResult(true);
+            await commands.PttStopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+            Assert.Equal(1, commands.PttStops);
+            host.MouseUp(point, MouseButton.Left, RawInputModifiers.None);
+            Assert.Equal(1, commands.PttStarts);
+        }
+        finally { host.Close(); }
+    }
+
+    [AvaloniaFact]
     public void PackagedDocumentationViewerLoadsWithTheMinimalMarkdownDependencyGraph()
     {
         var window = new DocumentationWindow();
@@ -163,7 +412,7 @@ public sealed class PresentationRenderTests
     [InlineData(360, true)]
     public async Task VirtualizedListHasNoHorizontalOverflowAtAcceptanceWidths(double width, bool dark)
     {
-        await using ConsoleApplicationSession session = CreateSession(channelCount: 34);
+        await using ConsoleApplicationSession session = CreateSession(channelCount: 200);
         await using var ptt = new ChannelPttController(
             static (_, _) => ValueTask.FromResult(true),
             static (_, _) => ValueTask.CompletedTask);
@@ -220,7 +469,7 @@ public sealed class PresentationRenderTests
     [InlineData(1488, 2.0)]
     public async Task VirtualizedListHasNoHorizontalOverflowAtSupportedUiScales(double width, double scale)
     {
-        await using ConsoleApplicationSession session = CreateSession(channelCount: 34);
+        await using ConsoleApplicationSession session = CreateSession(channelCount: 200);
         await using var ptt = new ChannelPttController(
             static (_, _) => ValueTask.FromResult(true),
             static (_, _) => ValueTask.CompletedTask);
@@ -269,7 +518,7 @@ public sealed class PresentationRenderTests
             host.UpdateLayout();
 
             ListBoxItem row = Assert.IsType<ListBoxItem>(
-                list.GetVisualDescendants().OfType<ListBoxItem>().First());
+                list.GetVisualDescendants().OfType<ListBoxItem>().First(item => item.DataContext is ChannelListItemViewModel));
             Button pttButton = Assert.Single(
                 row.GetVisualDescendants().OfType<Button>(),
                 button => string.Equals(button.Content as string, "PTT", StringComparison.Ordinal));
@@ -401,38 +650,120 @@ public sealed class PresentationRenderTests
         }
     }
 
-    [AvaloniaFact]
-    public async Task ExpandingAListRowPreservesItsViewportPosition()
+    [AvaloniaTheory]
+    [InlineData(390, false)]
+    [InlineData(1024, false)]
+    [InlineData(390, true)]
+    [InlineData(1024, true)]
+    public async Task ExpandedMobileRowsKeepTheirPositionAcrossTransmitMute(double width, bool expandAll)
     {
-        await using ConsoleApplicationSession session = CreateSession(channelCount: 34);
+        await using var session = CreateSession(40);
+        await using var ptt = new ChannelPttController(static (_, _) => ValueTask.FromResult(true),
+            static (_, _) => ValueTask.CompletedTask);
+        var list = new ChannelListView { AdaptToNarrowWidth = true };
+        list.Classes.Add("touch");
+        list.Attach(session, ptt);
+        var model = (ConsoleListViewModel)list.DataContext!;
+        foreach (var item in model.Items)
+        {
+            item.UseTouchText = true;
+            if (expandAll || item == model.Items[^1] || item == model.Items[^3]) item.ToggleExpansion();
+        }
+        var baseline = session.Snapshot.Channels.ToDictionary(pair => pair.Key,
+            pair => pair.Value with { EffectiveMuteReason = null, StateText = "Idle", Transmitting = false });
+        session.PublishSnapshot(session.Snapshot with { Channels = baseline });
+        var host = new Window { Width = width, Height = 768, Content = list };
+        try
+        {
+            host.Show(); host.UpdateLayout();
+            var scroller = list.GetVisualDescendants().OfType<ScrollViewer>().First();
+            scroller.Offset = new Vector(0, double.MaxValue);
+            host.UpdateLayout();
+            var row = list.GetVisualDescendants().OfType<Border>().Last(r => r.Classes.Contains("channel-list-row"));
+            var item = (ChannelListItemViewModel)row.DataContext!;
+            double initialY = row.TranslatePoint(default, scroller)!.Value.Y;
+            double initialHeight = row.Bounds.Height;
+            for (int cycle = 0; cycle < 3; cycle++)
+                foreach (bool transmitting in new[] { true, false })
+                {
+                    var button = row.GetVisualDescendants().OfType<Button>().Single(b => b.Classes.Contains("ptt"));
+                    var position = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host)!.Value;
+                    if (transmitting) host.MouseDown(position, MouseButton.Left);
+                    else host.MouseUp(position, MouseButton.Left);
+                    var states = baseline.ToDictionary(pair => pair.Key, pair => pair.Value with
+                    {
+                        EffectiveMuteReason = transmitting ? "console transmit" : null,
+                        Transmitting = transmitting && pair.Key == item.Id,
+                        StateText = transmitting ? "RX muted during console transmit" : "Idle"
+                    });
+                    session.PublishSnapshot(session.Snapshot with { Channels = states });
+                    await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+                    host.UpdateLayout();
+                    row = list.GetVisualDescendants().OfType<Border>().Single(r =>
+                        r.Classes.Contains("channel-list-row") && ReferenceEquals(r.DataContext, item));
+                    Assert.Equal(initialHeight, row.Bounds.Height, precision: 1);
+                    Assert.Equal(initialY, row.TranslatePoint(default, scroller)!.Value.Y, precision: 1);
+                }
+        }
+        finally { host.Close(); await list.DetachAsync(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(880, 7000)]
+    [InlineData(390, 2000)]
+    [InlineData(390, 7000)]
+    [InlineData(390, 14000)]
+    [InlineData(360, 7000)]
+    [InlineData(420, 7000)]
+    public async Task ExpandingAListRowPreservesItsViewportPosition(double width, double offset)
+    {
+        await using ConsoleApplicationSession session = CreateSession(channelCount: 200);
         await using var ptt = new ChannelPttController(
             static (_, _) => ValueTask.FromResult(true),
             static (_, _) => ValueTask.CompletedTask);
-        var list = new ChannelListView();
+        var list = new ChannelListView { AdaptToNarrowWidth = true };
         list.Attach(session, ptt);
-        var host = new Window { Width = 880, Height = 320, Content = list };
+        var host = new Window { Width = width, Height = 320, Content = list };
 
         try
         {
             host.Show();
             host.UpdateLayout();
             ScrollViewer scroller = Assert.Single(list.GetVisualDescendants().OfType<ScrollViewer>());
-            scroller.Offset = new Vector(0, 700);
+            scroller.Offset = new Vector(0, offset);
             host.UpdateLayout();
             Border row = list.GetVisualDescendants()
                 .OfType<Border>()
                 .Where(candidate => candidate.Classes.Contains("channel-list-row"))
                 .First(candidate => candidate.TranslatePoint(default, scroller) is Point position &&
                     position.Y >= 0 && position.Y + candidate.Bounds.Height <= scroller.Viewport.Height);
+            if (width < 600)
+            {
+                var summary = row.GetVisualDescendants().OfType<Grid>().Single(grid => grid.Classes.Contains("list-summary"));
+                foreach (var button in summary.GetVisualDescendants().OfType<Button>()
+                    .Where(button => button.Classes.Contains("list-rx") || button.Classes.Contains("ptt")))
+                    // Odd pixel heights can round a centered button by half a pixel.
+                    Assert.InRange(Math.Abs(summary.Bounds.Height / 2 -
+                        (button.TranslatePoint(default, summary)!.Value.Y + button.Bounds.Height / 2)),
+                        0, 0.5 / host.RenderScaling + 0.001);
+            }
             object? rowItem = row.DataContext;
             double initialY = row.TranslatePoint(default, scroller)!.Value.Y;
             Point clickPoint = row.TranslatePoint(new Point(150, 24), host)!.Value;
 
             host.MouseDown(clickPoint, MouseButton.Left, RawInputModifiers.None);
             host.MouseUp(clickPoint, MouseButton.Left, RawInputModifiers.None);
+            // No deferred correction: the next frame must already contain the final viewport.
+            Border immediateRow = Assert.Single(list.GetVisualDescendants().OfType<Border>(),
+                candidate => candidate.Classes.Contains("channel-list-row") && ReferenceEquals(candidate.DataContext, rowItem));
+            Assert.Equal(initialY, immediateRow.TranslatePoint(default, scroller)!.Value.Y, precision: 1);
+            Dispatcher.UIThread.RunJobs(DispatcherPriority.Background);
             await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
             host.UpdateLayout();
 
+            Assert.True(list.GetVisualDescendants().OfType<Border>().Any(candidate =>
+                candidate.Classes.Contains("channel-list-row") && ReferenceEquals(candidate.DataContext, rowItem)),
+                $"Lost {((ChannelListItemViewModel)rowItem!).Name}; expanded={((ChannelListItemViewModel)rowItem!).IsExpanded}; offset={scroller.Offset.Y}; visible={string.Join(",", list.GetVisualDescendants().OfType<Border>().Where(candidate => candidate.Classes.Contains("channel-list-row")).Select(candidate => ((ChannelListItemViewModel)candidate.DataContext!).Name))}");
             Border restoredRow = Assert.Single(
                 list.GetVisualDescendants().OfType<Border>(),
                 candidate => candidate.Classes.Contains("channel-list-row") &&
@@ -446,6 +777,60 @@ public sealed class PresentationRenderTests
             await list.DetachAsync();
             host.Close();
         }
+    }
+
+    [AvaloniaFact]
+    public async Task SingleZoneUsesOnlyTheCollapsibleSystemHeading()
+    {
+        await using var session = CreateSession(8);
+        await using var ptt = new ChannelPttController(static (_, _) => ValueTask.FromResult(true),
+            static (_, _) => ValueTask.CompletedTask);
+        await using var model = new ConsoleListViewModel(session, ptt);
+        var system = Assert.IsType<ConsoleListGroupViewModel>(model.VisibleRows[0]);
+        Assert.Equal(9, model.VisibleRows.Count);
+        Assert.All(model.VisibleRows.Skip(1), row => Assert.IsType<ChannelListItemViewModel>(row));
+        model.ToggleGroup(system);
+        Assert.Single(model.VisibleRows);
+        model.ToggleGroup(system);
+        Assert.Equal(9, model.VisibleRows.Count);
+    }
+
+    [AvaloniaFact]
+    public async Task ListGroupsCollapseIndependentlyAndRetainChannelState()
+    {
+        await using var fixture = CreateSession(8);
+        var firstSystem = fixture.Topology.Systems[0];
+        var secondSystem = new SystemDescriptor(SystemId.FromName("Second FNE"), "Second FNE", "Mixed");
+        var firstZone = fixture.Topology.Zones[0];
+        var secondZoneId = ZoneId.FromName("Second zone");
+        ChannelDescriptor[] channels = fixture.Topology.Channels.Select((channel, index) => channel with
+        {
+            SystemId = index < 4 ? firstSystem.Id : secondSystem.Id,
+            ZoneId = index % 4 < 2 ? firstZone.Id : secondZoneId
+        }).ToArray();
+        var topology = new ConsoleTopologySnapshot(null, [firstSystem, secondSystem],
+            [firstZone, new ZoneDescriptor(secondZoneId, "Second zone", [])], channels);
+        await using var session = new ConsoleApplicationSession(topology, fixture.Snapshot, new NoOpConsoleCommands());
+        await using var ptt = new ChannelPttController(static (_, _) => ValueTask.FromResult(true),
+            static (_, _) => ValueTask.CompletedTask);
+        await using var model = new ConsoleListViewModel(session, ptt);
+        Assert.Equal(14, model.VisibleRows.Count);
+        var system = Assert.IsType<ConsoleListGroupViewModel>(model.VisibleRows[0]);
+        var zone = Assert.IsType<ConsoleListGroupViewModel>(model.VisibleRows[1]);
+        ChannelListItemViewModel channel = model.Items[0];
+        channel.ToggleExpansion();
+        model.ToggleGroup(zone);
+        Assert.Equal(12, model.VisibleRows.Count);
+        Assert.DoesNotContain(channel, model.VisibleRows);
+        model.ToggleGroup(system);
+        Assert.Equal(8, model.VisibleRows.Count);
+        model.ToggleGroup(system);
+        Assert.Equal(12, model.VisibleRows.Count);
+        Assert.False(zone.IsExpanded);
+        model.ToggleGroup(zone);
+        Assert.Equal(14, model.VisibleRows.Count);
+        Assert.Same(channel, model.VisibleRows[2]);
+        Assert.True(channel.IsExpanded);
     }
 
     [AvaloniaFact]
@@ -496,8 +881,8 @@ public sealed class PresentationRenderTests
                 .Select(text => text.Text ?? string.Empty)
                 .ToArray();
             Assert.Contains("Test System", visibleText);
-            Assert.Contains("Test Zone", visibleText);
-            Assert.Contains("Volume 1.00×", visibleText);
+            Assert.DoesNotContain("Test Zone", visibleText);
+            Assert.DoesNotContain("Volume 1.00×", visibleText);
             Assert.DoesNotContain("Center", visibleText);
             Assert.DoesNotContain("Authority available", visibleText);
             Assert.DoesNotContain("Authority pending", visibleText);
@@ -577,6 +962,49 @@ public sealed class PresentationRenderTests
     }
 
     [AvaloniaFact]
+    public async Task CardsShareListStateCommandsAndDesktopOperationalColors()
+    {
+        var commands = new RecordingConsoleCommands();
+        await using ConsoleApplicationSession session = CreateSession(1, commands);
+        await using var ptt = new ChannelPttController(static (_, _) => ValueTask.FromResult(true),
+            static (_, _) => ValueTask.CompletedTask);
+        await using var model = new ConsoleListViewModel(session, ptt);
+        using var card = new ChannelSnapshotCardViewModel(model.Items[0]);
+        card.SetDarkMode(true);
+        await card.ToggleTransmitSelectionAsync();
+        Assert.Equal((card.Id, !model.Items[0].IsTransmitSelected), Assert.Single(commands.TransmitSelections));
+        int changes = 0;
+        card.PropertyChanged += (_, _) => changes++;
+        var channels = session.Snapshot.Channels.ToDictionary(pair => pair.Key, pair => pair.Value);
+        channels[card.Id] = channels[card.Id] with
+        {
+            ReceiveActive = true,
+            ReceiveEnabled = true,
+            LastCaller = "Dispatch 42",
+            TarArmed = true,
+            SelectedTransmitEncrypted = true
+        };
+        session.PublishSnapshot(session.Snapshot with { Channels = channels });
+        Assert.Equal(1, changes);
+        Assert.Equal("Last: Dispatch 42", card.LastCallerDisplayText);
+        Assert.Same(ConsoleCardPalette.Background(true, ConsoleCardActivity.Receiving), card.CardBackgroundBrush);
+        Assert.Same(ConsoleCardPalette.Selection(true, ConsoleCardSelection.Recording, true), card.RecordingSelectionBrush);
+        Assert.Equal("SECURE", card.EncryptionButtonText);
+        Assert.False(card.CanRecord); // No recording service was supplied.
+        channels = channels.ToDictionary(pair => pair.Key, pair => pair.Value);
+        channels[card.Id] = channels[card.Id] with { TransmitStarting = true };
+        session.PublishSnapshot(session.Snapshot with { Channels = channels });
+        Assert.Same(ConsoleCardPalette.Border(true, ConsoleCardActivity.TransmitStarting), card.CardBorderBrush);
+        card.Dispose();
+        changes = 0;
+        channels = channels.ToDictionary(pair => pair.Key, pair => pair.Value);
+        channels[card.Id] = channels[card.Id] with { LastCaller = "New call" };
+        session.PublishSnapshot(session.Snapshot with { Channels = channels });
+        Assert.Equal(0, changes);
+        Assert.False(card.IsPttControlEnabled);
+    }
+
+    [AvaloniaFact]
     public async Task ListUpdatesOnlyChangedPropertiesAndSuspendsHiddenPresentation()
     {
         await using ConsoleApplicationSession session = CreateSession(500);
@@ -609,6 +1037,47 @@ public sealed class PresentationRenderTests
         Assert.Equal("Volume 0.75×", model.Items[0].VolumeText);
         Assert.True(model.Items[0].IsExpanded);
         Assert.Equal(2, notifications.Count);
+    }
+
+    [AvaloniaFact]
+    public async Task SnapshotBurstPreservesEveryDirtyChannelAndRejectsRetiredUpdates()
+    {
+        await using ConsoleApplicationSession session = CreateSession(3);
+        await using var ptt = new ChannelPttController(
+            static (_, _) => ValueTask.FromResult(true), static (_, _) => ValueTask.CompletedTask);
+        await using var model = new ConsoleListViewModel(session, ptt);
+        int changes = 0;
+        foreach (var item in model.Items)
+            item.PropertyChanged += (_, args) => { if (args.PropertyName == nameof(item.VolumeText)) changes++; };
+        // Keep the UI dispatcher occupied while the producer publishes a burst.
+        Task.Factory.StartNew(() =>
+        {
+            for (int iteration = 0; iteration < 30; iteration++)
+            {
+                var channels = session.Snapshot.Channels.ToDictionary(pair => pair.Key, pair => pair.Value);
+                var id = model.Items[iteration % 3].Id;
+                channels[id] = channels[id] with { Gain = 0.01 * (iteration + 1) };
+                session.PublishSnapshot(session.Snapshot with { Channels = channels });
+            }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default).GetAwaiter().GetResult();
+        await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+        Assert.Equal(3, changes);
+        Assert.Collection(model.Items,
+            item => Assert.Equal("Volume 0.28×", item.VolumeText),
+            item => Assert.Equal("Volume 0.29×", item.VolumeText),
+            item => Assert.Equal("Volume 0.30×", item.VolumeText));
+
+        Task.Factory.StartNew(() =>
+        {
+            var channels = session.Snapshot.Channels.ToDictionary(pair => pair.Key, pair => pair.Value with { Gain = 0.5 });
+            session.PublishSnapshot(session.Snapshot with { Channels = channels });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default).GetAwaiter().GetResult();
+        model.SetPresentationActive(false);
+        model.SetPresentationActive(true);
+        Assert.Equal(6, changes);
+        await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
+        Assert.Equal(6, changes);
+        Assert.All(model.Items, item => Assert.Equal("Volume 0.50×", item.VolumeText));
     }
 
     [AvaloniaTheory]
@@ -652,6 +1121,57 @@ public sealed class PresentationRenderTests
             title.Focus();
             await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
             Assert.Equal(toggle ? 0 : 1, commands.PttStops);
+        }
+        finally { await list.DetachAsync(); host.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ListTarUsesDesktopPaletteAndVolumeKeepsOnlyItsAccessibleLabel(bool dark)
+    {
+        var commands = new RecordingConsoleCommands();
+        await using var session = CreateSession(1, commands);
+        await using var ptt = new ChannelPttController(static (_, _) => ValueTask.FromResult(true),
+            static (_, _) => ValueTask.CompletedTask);
+        var list = new ChannelListView { AdaptToNarrowWidth = true };
+        list.Attach(session, ptt);
+        var model = (ConsoleListViewModel)list.DataContext!;
+        var item = model.Items[0];
+        item.ToggleExpansion();
+        var host = new Window
+        {
+            Width = 390,
+            Height = 600,
+            Content = list,
+            RequestedThemeVariant = dark ? ThemeVariant.Dark : ThemeVariant.Light
+        };
+        try
+        {
+            host.Show();
+            host.UpdateLayout();
+            var tar = Assert.Single(list.GetVisualDescendants().OfType<Button>(), button => Equals(button.Content, "TAR"));
+            Assert.True(tar.IsEnabled);
+            foreach (var (label, kind) in new[] { ("TX", ConsoleCardSelection.Transmit),
+                ("PAGE", ConsoleCardSelection.Page), ("ALERT", ConsoleCardSelection.Alert) })
+            {
+                var control = list.GetVisualDescendants().OfType<Button>().Single(button => Equals(button.Content, label));
+                Assert.Same(ConsoleCardPalette.Selection(dark, kind, true), control.Background);
+                Assert.Same(ConsoleCardPalette.Selection(dark, kind, true, border: true), control.BorderBrush);
+            }
+            Assert.Same(ConsoleCardPalette.Selection(dark, ConsoleCardSelection.Recording, false), tar.Background);
+            tar.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal((item.Id, true), Assert.Single(commands.RecordingSelections));
+            var states = session.Snapshot.Channels.ToDictionary(pair => pair.Key, pair => pair.Value);
+            states[item.Id] = states[item.Id] with { TarArmed = true };
+            session.PublishSnapshot(session.Snapshot with { Channels = states });
+            Assert.Same(ConsoleCardPalette.Selection(dark, ConsoleCardSelection.Recording, true), tar.Background);
+            Assert.Same(ConsoleCardPalette.Selection(dark, ConsoleCardSelection.Recording, true, true), tar.BorderBrush);
+            Assert.Equal("TAR armed", AutomationProperties.GetHelpText(tar));
+            Assert.DoesNotContain(list.GetVisualDescendants().OfType<TextBlock>(), text => text.Text?.StartsWith("Volume ") == true);
+            var slider = Assert.Single(list.GetVisualDescendants().OfType<NeutralSnapSlider>());
+            Assert.Contains("Volume", AutomationProperties.GetName(slider));
+            Assert.Equal(44, slider.Bounds.Height);
         }
         finally { await list.DetachAsync(); host.Close(); }
     }
@@ -1550,10 +2070,39 @@ public sealed class PresentationRenderTests
             TransmitEncryptionConfigured: index == 0,
             TransmitEncryptionSelectable: index == 0);
 
-    private sealed class RecordingConsoleCommands : IConsoleCommands
+    private sealed class RecordingConsoleCommands : IConsoleCommands, IConsoleRecordingCommands, IConsoleSelectedTransmitCommands
     {
+        public bool IsSelectedPttRequested { get; private set; }
+        public int SelectedStarts { get; private set; }
+        public int SelectedStops { get; private set; }
+        public TaskCompletionSource<bool>? PendingSelectedStart { get; init; }
+        public TaskCompletionSource LateSelectedStop { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async ValueTask<bool> BeginSelectedPttAsync(CancellationToken cancellationToken = default)
+        {
+            SelectedStarts++;
+            // Deliberately ignore the earlier release to test the host's late-start fence.
+            bool started = PendingSelectedStart is null || await PendingSelectedStart.Task;
+            IsSelectedPttRequested = started;
+            return started;
+        }
+        public ValueTask EndSelectedPttAsync(CancellationToken cancellationToken = default)
+        {
+            if (IsSelectedPttRequested) SelectedStops++;
+            IsSelectedPttRequested = false;
+            if (PendingSelectedStart?.Task.IsCompleted == true) LateSelectedStop.TrySetResult();
+            return ValueTask.CompletedTask;
+        }
+        public List<(ChannelId, bool)> TransmitSelections { get; } = [];
+        public List<(ChannelId, bool)> RecordingSelections { get; } = [];
+        public ValueTask SetRecordingEnabledAsync(ChannelId channel, bool enabled, CancellationToken cancellationToken = default)
+        {
+            RecordingSelections.Add((channel, enabled));
+            return ValueTask.CompletedTask;
+        }
         public int PttStarts { get; private set; }
         public int PttStops { get; private set; }
+        public TaskCompletionSource<bool>? PendingPttStart { get; init; }
+        public TaskCompletionSource PttStopped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public ValueTask SetReceiveEnabledAsync(ChannelId channelId, bool enabled, CancellationToken cancellationToken = default)
             => ValueTask.CompletedTask;
@@ -1561,17 +2110,21 @@ public sealed class PresentationRenderTests
         public ValueTask<bool> BeginPttAsync(ChannelId channelId, CancellationToken cancellationToken = default)
         {
             PttStarts++;
-            return ValueTask.FromResult(true);
+            return PendingPttStart is null ? ValueTask.FromResult(true) : new(PendingPttStart.Task);
         }
 
         public ValueTask EndPttAsync(ChannelId channelId, CancellationToken cancellationToken = default)
         {
             PttStops++;
+            PttStopped.TrySetResult();
             return ValueTask.CompletedTask;
         }
 
         public ValueTask SetTransmitSelectedAsync(ChannelId channelId, bool selected, CancellationToken cancellationToken = default)
-            => ValueTask.CompletedTask;
+        {
+            TransmitSelections.Add((channelId, selected));
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask SetPageSelectedAsync(ChannelId channelId, bool selected, CancellationToken cancellationToken = default)
             => ValueTask.CompletedTask;
@@ -2082,7 +2635,7 @@ public sealed class PresentationRenderTests
         public string ConnectionStatus => "Disconnected";
         public string TrafficTotalsText => "RX 123,456 · TX 1,234";
         public string StreamTrafficText => "Active streams: none; previous stream 0x12345678";
-        public string ConnectionHealthText => "Local receive health · no discarded control traffic or UI backlog drops";
+        public string ConnectionHealthText => "Local receive health · no discarded control traffic";
     }
 
     private sealed class TestJitterMode : IRxJitterBufferModeViewModel

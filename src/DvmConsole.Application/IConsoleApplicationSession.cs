@@ -44,3 +44,9 @@ public interface IConsoleApplicationSession : IAsyncDisposable
     ValueTask QuiesceAsync(CancellationToken cancellationToken);
     ValueTask FlushSettingsAsync(CancellationToken cancellationToken);
 }
+
+/// <summary>Reopens a fully quiesced session when replacement publication rolls back.</summary>
+public interface IConsoleSessionReactivation
+{
+    void ReactivateAfterFailedReplacement();
+}

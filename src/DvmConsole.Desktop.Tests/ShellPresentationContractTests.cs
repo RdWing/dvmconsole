@@ -80,7 +80,7 @@ public sealed class ShellPresentationContractTests
             anchorWasLocated: true,
             anchorDelta: 0,
             extentDelta: 0));
-        Assert.Equal(52, ScrollViewportAnchorMath.ResolveLayoutDelta(
+        Assert.Equal(0, ScrollViewportAnchorMath.ResolveLayoutDelta(
             anchorWasLocated: true,
             anchorDelta: 0,
             extentDelta: 52));

@@ -21,7 +21,9 @@ internal sealed record MainWindowDocumentOptions(
     IAssetStore? AssetStore = null,
     string? CodeplugPath = null,
     ConfigurationReference? ConfigurationReference = null,
-    bool MigrateLegacyConfigurationOperatorState = false);
+    bool MigrateLegacyConfigurationOperatorState = false,
+    ConsoleTopologySnapshot? PreparedTopology = null,
+    ConsoleSessionState? PreparedState = null);
 
 internal sealed record MainWindowHostOptions(
     Func<IReadOnlyList<string>>? SerialPortProvider = null,
@@ -32,7 +34,9 @@ internal sealed record MainWindowHostOptions(
     IDesktopPrivacyPermissionService? PrivacyPermissionService = null,
     IAudioBackendFactory? AudioBackendFactory = null,
     IVocoderFactory? VocoderFactory = null,
-    MainWindowSessionComposition? SessionComposition = null);
+    MainWindowSessionComposition? SessionComposition = null,
+    ConsoleOperationalRuntime? OperationalRuntime = null,
+    MainWindowViewModel.PreparedLiveSession? PreparedLiveSession = null);
 
 internal sealed record MainWindowFeatureOptions(
     IEnumerable<GroupConfiguration>? GroupDefinitions = null,
@@ -63,6 +67,8 @@ internal sealed record MainWindowViewModelOptions(
     public IAssetStore? AssetStore => EffectiveDocument.AssetStore;
     public string? CodeplugPath => EffectiveDocument.CodeplugPath;
     public ConfigurationReference? ConfigurationReference => EffectiveDocument.ConfigurationReference;
+    public ConsoleSessionState? PreparedState => EffectiveDocument.PreparedState;
+    public ConsoleTopologySnapshot? PreparedTopology => EffectiveDocument.PreparedTopology;
     public bool MigrateLegacyConfigurationOperatorState => EffectiveDocument.MigrateLegacyConfigurationOperatorState;
     public Func<IReadOnlyList<string>>? SerialPortProvider => EffectiveHost.SerialPortProvider;
     public Func<string, int, IPttSource>? SerialPttFactory => EffectiveHost.SerialPttFactory;
@@ -73,6 +79,8 @@ internal sealed record MainWindowViewModelOptions(
     public IAudioBackendFactory? AudioBackendFactory => EffectiveHost.AudioBackendFactory;
     public IVocoderFactory? VocoderFactory => EffectiveHost.VocoderFactory;
     public MainWindowSessionComposition? SessionComposition => EffectiveHost.SessionComposition;
+    public ConsoleOperationalRuntime? OperationalRuntime => EffectiveHost.OperationalRuntime;
+    public MainWindowViewModel.PreparedLiveSession? PreparedLiveSession => EffectiveHost.PreparedLiveSession;
     public IEnumerable<GroupConfiguration>? GroupDefinitions => EffectiveFeatures.GroupDefinitions;
     public bool PatchSourceIdPassthrough => EffectiveFeatures.PatchSourceIdPassthrough;
     public bool NetworkDisabledDemo => EffectiveFeatures.NetworkDisabledDemo;

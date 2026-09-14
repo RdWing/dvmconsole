@@ -8,64 +8,30 @@ namespace DvmConsole.Desktop;
 public sealed partial class MainWindowViewModel
 {
     internal bool IsSessionInputSuppressed
-        => terminalFence.IsClosed || Volatile.Read(ref sessionInputSuppressed) != 0;
+        => operationalRuntime.Admission.IsSuppressed;
 
     internal void SuppressSessionInputForTransition()
     {
-        Volatile.Write(ref sessionInputSuppressed, 1);
+        operationalRuntime.Admission.Suspend();
+        transmitRuntime.Manual.CancelStartup();
         SuppressLiveReceiveOutputForShutdown();
     }
 
     internal void ResumeSessionInputAfterFailedTransition()
     {
-        if (!terminalFence.IsClosed && Volatile.Read(ref disposeStarted) == 0)
-            Volatile.Write(ref sessionInputSuppressed, 0);
+        terminalFence.TryRun(() =>
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref disposeStarted) != 0, this);
+            // Rollback restores listening and command admission before reconnecting.
+            // Operator mute is a separate audio policy and remains unchanged.
+            audioCoordinator.SetLivePlaybackDiscarded(discarded: false);
+            operationalRuntime.Admission.TryResume();
+        });
     }
 
-    internal async Task ReleaseAllPttForShutdownAsync(
-        CancellationToken cancellationToken = default)
-    {
-        var cleanup = new AsyncCleanup();
-        await cleanup.RunTaskAsync(() => generatedAudioOperation.CancelAndDrainAsync()).ConfigureAwait(false);
-        await cleanup.RunTaskAsync(
-            () => pttSession.StopAsync(cancellationToken).AsTask()).ConfigureAwait(false);
-
-        bool gateEntered = false;
-        bool admissionEntered = false;
-        try
-        {
-            await pttStateChangeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-            gateEntered = true;
-            await transmitAdmissionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            admissionEntered = true;
-            pttSession.ReleaseAllKeyboardToggleLatches();
-            ChannelViewModel[] active = ResolveChannels(transmitCoordinator.ActiveChannels)
-                .Concat(Systems
-                    .SelectMany(system => system.Channels)
-                    .Where(channel => channel.IsTransmitting))
-                .Distinct()
-                .ToArray();
-            if (active.Length > 0)
-            {
-                await cleanup.RunTaskAsync(() => StopTransmitCoreAsync(
-                    active,
-                    "Transmission stopped during application shutdown.")).ConfigureAwait(false);
-            }
-        }
-        catch (Exception exception)
-        {
-            cleanup.Capture(exception);
-        }
-        finally
-        {
-            if (admissionEntered)
-                transmitAdmissionGate.Release();
-            if (gateEntered)
-                pttStateChangeLock.Release();
-        }
-
-        cleanup.ThrowIfFailed();
-    }
+    internal Task ReleaseAllPttForShutdownAsync(CancellationToken cancellationToken = default)
+        => transmitRuntime.ReleaseForShutdownAsync(pttStateChangeLock, transmitAdmissionGate, transmitChannels,
+            pttSession.StopAsync, pttSession.ReleaseAllKeyboardToggleLatches, cancellationToken);
 
     internal void SuppressLiveReceiveOutputForShutdown()
     {
@@ -88,7 +54,8 @@ public sealed partial class MainWindowViewModel
 
     internal void ApplyFinalShutdownSafetyFence()
     {
-        terminalFence.TryClose();
+        operationalRuntime.Admission.Close();
+        transmitRuntime.Manual.CancelStartup();
         sessionUiCallbacks.Close();
         foreach (Exception exception in audioBackendProvider.StopImmediately())
             DesktopCrashLog.Write("Shutdown audio safety fence", exception);
@@ -107,30 +74,25 @@ public sealed partial class MainWindowViewModel
         }
 
         SuppressLiveReceiveOutputForShutdown();
-        foreach (SystemViewModel system in Systems)
-        {
-            try
-            {
-                system.Abort();
-            }
-            catch (Exception exception)
-            {
-                DesktopCrashLog.Write($"Shutdown network safety fence ({system.Name})", exception);
-            }
-        }
+        foreach (RadioConnectionTransition failure in connectionSession.Abort())
+            DesktopCrashLog.Write($"Shutdown network safety fence ({failure.SystemName})", failure.Exception!);
     }
 
     // Session replacement must stop network identity ownership before the new
     // view model becomes reachable from the window. Remaining audio and
     // presentation cleanup may then finish without competing for an FNE peer.
-    internal Task QuiesceFneSessionAsync(CancellationToken cancellationToken = default)
-        => connectionSession.DisconnectAsync(cancellationToken);
+    internal async Task QuiesceFneSessionAsync(CancellationToken cancellationToken = default)
+    {
+        var cleanup = new AsyncCleanup();
+        // Stopping keyboard/serial listeners does not release card PTT or tones.
+        // Join all accepted transmit work before a replacement can be published.
+        await cleanup.RunTaskAsync(() => ReleaseAllPttForShutdownAsync(cancellationToken)).ConfigureAwait(false);
+        await cleanup.RunTaskAsync(() => connectionSession.DisconnectAsync(cancellationToken)).ConfigureAwait(false);
+        cleanup.ThrowIfFailed();
+    }
 
     internal IReadOnlyList<SystemId> CaptureActiveFneSystemIds()
-        => Systems
-            .Where(system => system.IsConnectionActive)
-            .Select(system => SystemId.FromName(system.Name))
-            .ToArray();
+        => connectionSession.CaptureActiveSystemIds();
 
     internal Task RestoreFneSessionAsync(
         IReadOnlyList<SystemId> systemIds,

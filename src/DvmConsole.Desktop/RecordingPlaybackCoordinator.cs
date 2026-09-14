@@ -17,6 +17,7 @@ public sealed class RecordingPlaybackStateChangedEventArgs(
     public RecordingId RecordingId { get; } = recordingId;
     public string Path { get; } = path;
     public bool IsPlaying { get; } = isPlaying;
+    public RecordingCallIdentity? Identity { get; init; }
 }
 
 /// <summary>
@@ -54,6 +55,27 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         inner = CreateInner(createAudioBackend, getOutputDeviceId, faultHandler, startupObserver);
     }
 
+    internal RecordingPlaybackCoordinator(IRecordingStore recordingStore,
+        Func<IRecordingStore, ApplicationPlaybackCoordinator> createRuntime,
+        Action<Exception>? faultHandler)
+    {
+        this.faultHandler = faultHandler;
+        store = new RecordingPlaybackStoreAdapter(recordingStore);
+        inner = createRuntime(store);
+        inner.PlaybackStateChanged += HandlePlaybackStateChanged;
+    }
+
+    internal RecordingPlaybackCoordinator(RecordingPlaybackStoreAdapter store,
+        ApplicationPlaybackCoordinator runtime, Action<Exception>? faultHandler)
+    {
+        this.store = store;
+        inner = runtime;
+        this.faultHandler = faultHandler;
+        inner.PlaybackStateChanged += HandlePlaybackStateChanged;
+    }
+
+    internal void DetachRuntime() => inner.PlaybackStateChanged -= HandlePlaybackStateChanged;
+
     public event EventHandler<RecordingPlaybackStateChangedEventArgs>? PlaybackStateChanged;
 
     public bool IsPlaying(string? path = null)
@@ -64,8 +86,11 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
     public bool IsPlaying(RecordingId recordingId) => inner.IsPlaying(recordingId);
 
     public Task StartAsync(string path, CancellationToken cancellationToken = default)
+        => StartAsync(path, identity: null, cancellationToken);
+
+    public Task StartAsync(string path, RecordingCallIdentity? identity, CancellationToken cancellationToken = default)
     {
-        RecordingId recordingId = store.RegisterPath(path);
+        RecordingId recordingId = store.RegisterPath(path, identity: identity);
         return inner.StartAsync(recordingId, cancellationToken);
     }
 
@@ -73,9 +98,16 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         RecordingId recordingId,
         string? legacyPath = null,
         CancellationToken cancellationToken = default)
+        => StartAsync(recordingId, legacyPath, identity: null, cancellationToken);
+
+    public Task StartAsync(
+        RecordingId recordingId,
+        string? legacyPath,
+        RecordingCallIdentity? identity,
+        CancellationToken cancellationToken = default)
     {
         if (!string.IsNullOrWhiteSpace(legacyPath))
-            store.RegisterPath(legacyPath, recordingId);
+            store.RegisterPath(legacyPath, recordingId, identity);
         return inner.StartAsync(recordingId, cancellationToken);
     }
 
@@ -136,7 +168,8 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         var eventArgs = new RecordingPlaybackStateChangedEventArgs(
             e.RecordingId,
             path,
-            e.IsPlaying);
+            e.IsPlaying)
+        { Identity = e.Identity };
         foreach (EventHandler<RecordingPlaybackStateChangedEventArgs> handler in handlers.GetInvocationList())
         {
             try
@@ -157,11 +190,12 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         }
     }
 
-    private sealed class RecordingPlaybackStoreAdapter : IRecordingStore
+    internal sealed class RecordingPlaybackStoreAdapter : IRecordingStore
     {
         private readonly object sync = new();
         private readonly IRecordingStore? inner;
         private readonly Dictionary<RecordingId, string> pathsById = [];
+        private readonly Dictionary<RecordingId, RecordingCallIdentity> identitiesById = [];
         private readonly Dictionary<string, RecordingId> idsByPath =
             new(FileSystemPathIdentity.Comparer);
 
@@ -170,7 +204,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
             this.inner = inner;
         }
 
-        public RecordingId RegisterPath(string path, RecordingId? recordingId = null)
+        public RecordingId RegisterPath(string path, RecordingId? recordingId = null, RecordingCallIdentity? identity = null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(path);
             string fullPath = Path.GetFullPath(path);
@@ -180,10 +214,11 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
             lock (sync)
             {
                 if (recordingId is null && idsByPath.TryGetValue(fullPath, out RecordingId existing))
-                    return existing;
+                    recordingId = existing;
 
                 RecordingId id = recordingId ?? RecordingId.New();
                 pathsById[id] = fullPath;
+                if (identity is { } knownIdentity) identitiesById[id] = knownIdentity;
                 idsByPath[fullPath] = id;
                 return id;
             }
@@ -224,13 +259,21 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         public async ValueTask<Stream> OpenReadAsync(
             RecordingId id,
             CancellationToken cancellationToken = default)
+            => (await OpenPlaybackAsync(id, cancellationToken).ConfigureAwait(false)).Stream;
+
+        public async ValueTask<RecordingPlaybackSource> OpenPlaybackAsync(
+            RecordingId id, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (TryGetPath(id, out string registeredPath))
-                return OpenPath(registeredPath);
+            {
+                RecordingCallIdentity? identity;
+                lock (sync) identity = identitiesById.TryGetValue(id, out var known) ? known : null;
+                return new(OpenPath(registeredPath), identity);
+            }
 
             if (inner is not null)
-                return await inner.OpenReadAsync(id, cancellationToken).ConfigureAwait(false);
+                return await inner.OpenPlaybackAsync(id, cancellationToken).ConfigureAwait(false);
 
             throw new KeyNotFoundException($"Recording '{id}' has no desktop path fallback.");
         }

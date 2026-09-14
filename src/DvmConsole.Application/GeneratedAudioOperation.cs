@@ -28,6 +28,14 @@ public sealed class GeneratedAudioOperation : IAsyncDisposable
     private CancellationTokenSource lifetime = new();
     private readonly AsyncDisposal disposal = new();
     private int closing;
+    private readonly HashSet<PendingOperation> pending = [];
+
+    private sealed class PendingOperation(TransmitTarget[] targets, CancellationTokenSource cancellation)
+    {
+        public TransmitTarget[] Targets { get; } = targets;
+        public CancellationTokenSource Cancellation { get; } = cancellation;
+        public Task? CancellationRequested { get; set; }
+    }
 
     public GeneratedAudioOperation(IGeneratedAudioOperationPort port)
     {
@@ -49,49 +57,83 @@ public sealed class GeneratedAudioOperation : IAsyncDisposable
         ReadOnlyMemory<short> samples, GeneratedToneSequence? sequence, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(targets);
-        CancellationTokenSource linked;
+        PendingOperation operation;
         lock (sync)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref closing) != 0, this);
-            linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
+            operation = new(targets.ToArray(),
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token));
+            pending.Add(operation);
         }
-        using var cancellation = linked;
-        CancellationToken token = linked.Token;
-        await gate.WaitAsync(token).ConfigureAwait(false);
+        // Join the serial queue before dispatch so withdrawal reaches pending
+        // work and worker scheduling cannot reorder sends.
         try
         {
-            token.ThrowIfCancellationRequested();
-            await using IAsyncDisposable admission = await port.EnterTransmitAsync(token).ConfigureAwait(false);
-            port.Validate(targets);
-            if (sequence is not null)
-                samples = sequence.RenderPcm();
-            if (samples.IsEmpty)
-                throw new ArgumentException("Tone audio cannot be empty.", nameof(samples));
+            await gate.WaitAsync(operation.Cancellation.Token).ConfigureAwait(false);
             try
             {
-                // Include acquisition in the restoration scope: muting can fail
-                // after changing some routes, and failed rollback needs another release.
-                await port.MuteReceiveAsync().ConfigureAwait(false);
-                token.ThrowIfCancellationRequested();
-                Exception? monitorFailure = await GeneratedAudioMonitorSession.RunAsync(
-                    sequence is not null && port.MonitorEnabled,
-                    async monitorToken =>
-                    {
-                        using var monitorCancellation = CancellationTokenSource.CreateLinkedTokenSource(monitorToken, token);
-                        await port.MonitorAsync(samples, monitorCancellation.Token).ConfigureAwait(false);
-                    },
-                    () => port.TransmitAsync(targets, samples, sequence, token)).ConfigureAwait(false);
-                token.ThrowIfCancellationRequested();
-                return monitorFailure;
+                return await Task.Run(() => ExecuteAsync(operation.Targets, samples, sequence,
+                    operation.Cancellation.Token), CancellationToken.None).ConfigureAwait(false);
             }
-            finally
-            {
-                await port.RestoreReceiveAsync().ConfigureAwait(false);
-            }
+            finally { gate.Release(); }
         }
         finally
         {
-            gate.Release();
+            Task cancellationFinished;
+            lock (sync)
+            {
+                pending.Remove(operation);
+                cancellationFinished = operation.CancellationRequested ?? Task.CompletedTask;
+            }
+            try { await cancellationFinished.ConfigureAwait(false); }
+            finally { operation.Cancellation.Dispose(); }
+        }
+    }
+
+    /// <summary>Cancels captured work for withdrawn channels, including queued sends.</summary>
+    public Task CancelTargetsAsync(IReadOnlyCollection<ChannelId> channels)
+    {
+        ArgumentNullException.ThrowIfNull(channels);
+        if (channels.Count == 0) return Task.CompletedTask;
+        lock (sync)
+        {
+            return Task.WhenAll(pending.Where(operation =>
+                operation.Targets.Any(target => channels.Contains(target.Channel.Id)))
+                .Select(operation => operation.CancellationRequested ??= operation.Cancellation.CancelAsync())
+                .ToArray());
+        }
+    }
+
+    private async Task<Exception?> ExecuteAsync(IReadOnlyList<TransmitTarget> targets,
+        ReadOnlyMemory<short> samples, GeneratedToneSequence? sequence, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        await using IAsyncDisposable admission = await port.EnterTransmitAsync(token).ConfigureAwait(false);
+        port.Validate(targets);
+        if (sequence is not null)
+            samples = sequence.RenderPcm();
+        if (samples.IsEmpty)
+            throw new ArgumentException("Tone audio cannot be empty.", nameof(samples));
+        try
+        {
+            // Include acquisition in the restoration scope: muting can fail
+            // after changing some routes, and failed rollback needs another release.
+            await port.MuteReceiveAsync().ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            Exception? monitorFailure = await GeneratedAudioMonitorSession.RunAsync(
+                sequence is not null && port.MonitorEnabled,
+                async monitorToken =>
+                {
+                    using var monitorCancellation = CancellationTokenSource.CreateLinkedTokenSource(monitorToken, token);
+                    await port.MonitorAsync(samples, monitorCancellation.Token).ConfigureAwait(false);
+                },
+                () => port.TransmitAsync(targets, samples, sequence, token)).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            return monitorFailure;
+        }
+        finally
+        {
+            await port.RestoreReceiveAsync().ConfigureAwait(false);
         }
     }
 

@@ -30,6 +30,22 @@ public interface ICallHistoryItemViewModel
     string RecordingDetailsText { get; }
 }
 
+/// <summary>Searchable history facts without recording paths or storage objects.</summary>
+public interface IHistoryCatalogFilterItem : ICallHistoryItemViewModel
+{
+    DateTimeOffset Timestamp { get; }
+    bool IsEvent { get; }
+    bool EncryptionKnown { get; }
+    bool Encrypted { get; }
+    string DisplayDestinationText { get; }
+    string DisplaySourceText { get; }
+    string CallerText { get; }
+    string EventMessage { get; }
+    IReadOnlyList<uint> StreamIds { get; }
+    string? RecordingSubscriberAlias { get; }
+    string? RecordingRouteText { get; }
+}
+
 /// <summary>
 /// Bindable filter surface used by the shared History page. A desktop host may
 /// adapt its existing collection while a future mobile host projects directly

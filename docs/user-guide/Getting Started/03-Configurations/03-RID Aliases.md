@@ -1,8 +1,7 @@
 # RID aliases
 
-RID aliases show names alongside radio IDs in the console.
-
-Aliases can appear in places such as:
+Add recognizable names alongside radio IDs with RID aliases. You'll see those
+names in:
 
 - source alias on channel cards
 - call history

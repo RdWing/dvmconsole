@@ -40,9 +40,4 @@ internal static class DesktopPatchForwardingAdapter
         uint streamId)
         => coordinator.StopSource(new ChannelId(source.SessionId), streamId);
 
-    public static int StopUnavailableTargets(
-        this PatchForwardingCoordinator coordinator,
-        IReadOnlyCollection<ChannelViewModel> channels)
-        => coordinator.StopUnavailableTargets(
-            channels.Select(channel => new ChannelId(channel.SessionId)).ToArray());
 }

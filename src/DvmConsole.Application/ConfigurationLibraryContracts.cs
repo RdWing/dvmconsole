@@ -26,7 +26,8 @@ public sealed record ConfigurationDraft(
     string Yaml,
     bool IsDirty,
     bool IsReadOnly,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    ConfigurationDraftEditorState? EditorState = null);
 
 public sealed record ConfigurationCommit(
     ConfigurationReference Reference,
@@ -59,6 +60,12 @@ public sealed class ConfigurationDraftConflictException(ConfigurationDraft exist
     : InvalidOperationException("A dirty Configuration Studio draft is already open.")
 {
     public ConfigurationDraft ExistingDraft { get; } = existingDraft;
+}
+
+public sealed class ConfigurationRevisionConflictException(ConfigurationReference current)
+    : InvalidOperationException("This configuration has a newer saved revision. Save a copy to preserve these edits, or reopen the current revision.")
+{
+    public ConfigurationReference Current { get; } = current;
 }
 
 public sealed class ConfigurationImportConflictException(
@@ -120,6 +127,21 @@ public interface IConfigurationLibrary
     IAsyncEnumerable<ConfigurationSummary> ListAsync(
         CancellationToken cancellationToken = default);
     IAsyncEnumerable<ConfigurationSummary> ListTrashAsync(
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>Exports the current managed draft without committing or changing the active revision.</summary>
+public interface IConfigurationDraftExporter
+{
+    ValueTask<ConfigurationDraft> ExportDraftAsync(ConfigurationId id, IExportDocumentSet destination,
+        ConfigurationExportOptions options, CancellationToken cancellationToken = default);
+}
+
+/// <summary>Commits a copy before retiring its source draft, preserving recoverability on failure.</summary>
+public interface IConfigurationDraftCopyService
+{
+    ValueTask<ConfigurationCommit> CommitDraftCopyAsync(ConfigurationDraft draft,
+        IReadOnlyDictionary<string, ReadOnlyMemory<byte>> companions, string copyName,
         CancellationToken cancellationToken = default);
 }
 

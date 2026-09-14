@@ -122,6 +122,12 @@ if [[ -n "$EXPECTED_MACOS_ARCHITECTURE" ]]; then
     # wrapper that execs an apphost from Resources works in Terminal but exits
     # or aborts when Finder owns the application lifecycle.
     cp -R "$PUBLISH_DIR"/. "$APP_PATH/Contents/MacOS/"
+    # Resource directories cannot live in a code-signing executable directory.
+    for resource in Documentation Demo; do
+        if [[ -d "$APP_PATH/Contents/MacOS/$resource" ]]; then
+            mv "$APP_PATH/Contents/MacOS/$resource" "$APP_PATH/Contents/Resources/$resource"
+        fi
+    done
     mv "$APP_PATH/Contents/MacOS/DvmConsole" "$APP_PATH/Contents/MacOS/DVM Console"
     chmod 755 "$APP_PATH/Contents/MacOS/DVM Console"
     bundle_executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Contents/Info.plist")

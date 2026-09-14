@@ -11,7 +11,8 @@
     "Getting Started/04-Operations/01-Console Operation.md",
     "Getting Started/04-Operations/02-Settings Reference.md",
     "Getting Started/04-Operations/03-Audio Settings.md",
-    "Getting Started/04-Operations/04-Alert Tones.md"
+    "Getting Started/04-Operations/04-Alert Tones.md",
+    "Getting Started/04-Operations/05-iOS and iPadOS.md"
   ],
   "assets": [
     "Assets/configuration-studio-encryption.png",

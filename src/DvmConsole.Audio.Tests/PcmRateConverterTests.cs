@@ -8,6 +8,57 @@ namespace DvmConsole.Audio.Tests;
 
 public sealed class PcmRateConverterTests
 {
+    [Theory]
+    [InlineData(8_000, 8_000)]
+    [InlineData(44_100, 8_000)]
+    [InlineData(48_000, 8_000)]
+    [InlineData(8_000, 48_000)]
+    public void BorrowedConversionMatchesOwnedAcrossChangingChunks(int inputRate, int outputRate)
+    {
+        var borrowed = new PcmRateConverter(inputRate, outputRate);
+        var owned = new PcmRateConverter(inputRate, outputRate);
+        var random = new Random(42);
+        foreach (int size in new[] { 1, 0, 7, 4096, 1, 960, 4096, 480, 0, 37 })
+        {
+            short[] input = Enumerable.Range(0, size)
+                .Select(_ => (short)random.Next(short.MinValue, short.MaxValue)).ToArray();
+            Assert.Equal(owned.Convert(input), borrowed.ConvertBorrowed(input).ToArray());
+        }
+    }
+
+    [Theory]
+    [InlineData(8_000)]
+    [InlineData(44_100)]
+    [InlineData(48_000)]
+    public void BorrowedCaptureConversionDoesNotAllocateAfterWarmup(int inputRate)
+    {
+        var converter = new PcmRateConverter(inputRate, 8_000);
+        short[] input = Enumerable.Repeat((short)321, 960).ToArray();
+        for (int i = 0; i < 100; i++)
+            converter.ConvertBorrowed(input);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        int count = 0;
+        for (int i = 0; i < 100; i++)
+            count += converter.ConvertBorrowed(input).Length;
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.True(count > 0);
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void OwnedSnapshotSurvivesBorrowedBufferReuse()
+    {
+        var converter = new PcmRateConverter(48_000, 8_000);
+        short[] input = Enumerable.Repeat((short)321, 960).ToArray();
+        short[] snapshot = converter.ConvertBorrowed(input).ToArray();
+        Array.Fill(input, (short)-700);
+        for (int i = 0; i < 3; i++)
+            converter.ConvertBorrowed(input);
+        Assert.All(snapshot, sample => Assert.Equal((short)321, sample));
+    }
+
     [Fact]
     public void SameRatePreservesSamplesExactly()
     {

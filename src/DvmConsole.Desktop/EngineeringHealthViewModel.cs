@@ -3,6 +3,7 @@
 
 using Avalonia.Threading;
 using DvmConsole.Operations;
+using DvmConsole.Presentation;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 

@@ -43,42 +43,60 @@ public sealed partial class MainWindowViewModel :
         [DvmConsoleProcessingDisplay, WindowsCommunicationsProcessingDisplay];
     private static readonly string[] DvmConsoleAudioProcessingModeOptions =
         [DvmConsoleProcessingDisplay];
-    private readonly ChannelReceiveAudioCoordinator audioCoordinator;
+    private readonly ConsoleOperationalRuntime operationalRuntime;
+    private ConsoleReceiveRuntime receiveRuntime => operationalRuntime.Receive;
+    private ChannelAudioSettingsController channelAudioSettings => operationalRuntime.AudioSettings;
+    private ChannelReceiveAudioCoordinator audioCoordinator => receiveRuntime.Audio;
     private readonly ApplicationAudioBackendProvider audioBackendProvider;
-    private readonly ChannelReceiveWorkQueue receiveAudioWork;
-    private readonly ReceiveSessionController receiveSessions;
+    private ChannelReceiveWorkQueue receiveAudioWork => receiveRuntime.Work;
+    private ReceiveSessionController receiveSessions => receiveRuntime.Sessions;
     private readonly SingleFlightAsyncAction receiveSessionReconciler;
-    private readonly ReceiveEpisodeCompletionCoordinator receiveEpisodeCompletion;
-    private readonly ReceiveEpisodeRetirement receiveEpisodeRetirement;
-    private readonly ChannelReceiveWorkQueue patchSourceReceiveWork;
+    private ReceiveEpisodeRetirement receiveEpisodeRetirement => operationalRuntime.EpisodeRetirement;
+    private ConsolePatchRuntime patchRuntime => operationalRuntime.Patches;
+    private ChannelReceiveWorkQueue patchSourceReceiveWork => patchRuntime.Work;
     private readonly UserSettingsStore userSettingsStore;
     private readonly IAssetStore assetStore;
     private readonly IAudioBackendFactory audioBackendFactory;
     private readonly IVocoderFactory vocoderFactory;
     private readonly IDesktopPrivacyPermissionService privacyPermissionService;
     private readonly IReadOnlyDictionary<ChannelId, ChannelViewModel> channelsById;
-    private readonly ReceiveRecordingTargetIndex receiveRecordingTargets;
+    private ConsoleChannelMediaDirectory channelMedia => operationalRuntime.Media;
+    private ConsoleTransmitChannelDirectory transmitChannels => operationalRuntime.TransmitChannels;
+    private ChannelTransmitControlCommands transmitControls => operationalRuntime.TransmitControls;
+    private TalkgroupAuthorityController talkgroupAuthority => operationalRuntime.Authority;
+    private TransmitTargetResolver transmitTargets => operationalRuntime.TransmitTargets;
+    private readonly ChannelId[] systemChannelIds;
+    private ConsoleRecordingRuntime recordingRuntime => operationalRuntime.Recording;
+    private ChannelRecordingCommands recordingControls => operationalRuntime.RecordingControls;
+    private ReceiveRecordingTargetIndex receiveRecordingTargets => recordingRuntime.Targets;
+
     private readonly UserSettings userSettings;
+    private readonly ConsoleChannelSettingsPersistence channelPreferences;
+    private readonly PreparedLiveSession? preparedSession;
     private readonly ShellSettingsController shellSettings;
     private readonly string loadedCodeplugPath;
     private readonly ConfigurationReference? configurationReference;
+    private readonly CodeplugGroupState transientGroupState = new();
     private CodeplugGroupState codeplugGroupState
-        => CodeplugGroupStateStore.GetOrMigrate(userSettings, loadedCodeplugPath);
+        => string.IsNullOrWhiteSpace(loadedCodeplugPath)
+            ? transientGroupState
+            : CodeplugGroupStateStore.GetOrMigrate(userSettings, loadedCodeplugPath);
     private readonly string codeplugDiagnosticsText;
-    private readonly ChannelTransmitCoordinator transmitCoordinator;
+    private ConsoleTransmitRuntime transmitRuntime => operationalRuntime.Transmit;
+    private ConsoleTransmitState transmitState => operationalRuntime.TransmitState;
+    private ChannelTransmitCoordinator transmitCoordinator => transmitRuntime.Microphone;
     private readonly DefaultAudioDeviceMonitor defaultAudioDeviceMonitor;
     private readonly LatestBooleanStateReconciler warmMicrophoneReconciler;
-    private readonly ToneTransmitCoordinator toneTransmitCoordinator;
-    private readonly LocalTonePlayer localTonePlayer;
-    private readonly TransmitAudioTransitionController transmitAudioTransition;
-    private readonly TransmitLifecycleCoordinator transmitLifecycle;
-    private readonly GeneratedAudioMonitor generatedAudioMonitor;
-    private readonly GeneratedAudioOperation generatedAudioOperation;
+    private ToneTransmitCoordinator toneTransmitCoordinator => transmitRuntime.Tones;
+    private LocalTonePlayer localTonePlayer => transmitRuntime.LocalTones;
+    private TransmitAudioTransitionController transmitAudioTransition => transmitRuntime.AudioTransition;
+    private TransmitLifecycleCoordinator transmitLifecycle => transmitRuntime.Lifecycle;
+    private GeneratedAudioOperation generatedAudioOperation => transmitRuntime.GeneratedOperation;
+    internal IGeneratedAudioOperationPort GeneratedAudioPort => transmitRuntime;
     private readonly CoalescedUiAction toneTargetRefresh;
     private readonly PatchRoutingController patchRouting;
-    private PatchForwardingCoordinator patchForwarding => patchRouting.Forwarding;
-    private readonly PatchSourceDecodeCoordinator patchSourceDecode;
-    private readonly PatchSourceReceivePipeline patchSourceReceivePipeline;
+    private PatchForwardingCoordinator patchForwarding => patchRuntime.Forwarding;
+    private PatchSourceDecodeCoordinator patchSourceDecode => patchRuntime.Decoder;
     private readonly P25KeyRing? p25KeyRing;
     private readonly DmrKeyRing? dmrKeyRing;
     private readonly NxdnKeyRing? nxdnKeyRing;
@@ -92,8 +110,9 @@ public sealed partial class MainWindowViewModel :
     private readonly HistoryDiagnosticsController historyDiagnostics;
     private CallHistoryStore callHistory => historyRecording.History;
     internal IReadOnlyList<ConsoleCallHistoryRecord> ApplicationHistory => callHistory.ApplicationHistory;
-    internal bool IsChannelRecordingPlaybackActive(ChannelViewModel channel)
-        => recordingPlaybackChannelId == new ChannelId(channel.SessionId);
+    internal ConsoleSnapshotContextSource CreateSnapshotContextSource()
+        => new(callRecordings, receiveOutput.GetEffectiveMuteReason, () => ReceiveMute.GloballyMuted,
+            () => RecordingPlaybackState.Snapshot.Channel, () => patchRouting.MembershipIndex);
     private ObservableCollection<CallRecordingMetadata> recordingEntries
         => historyRecording.RecordingEntries;
     private readonly ToneWorkspaceViewModel toneWorkspace;
@@ -118,46 +137,40 @@ public sealed partial class MainWindowViewModel :
     private readonly IUiDispatcher uiDispatcher;
     private readonly OperatorUndoController operatorUndo;
     private readonly SessionUiCallbackGate sessionUiCallbacks;
-    private readonly SessionTerminalFence terminalFence = new();
-    private readonly ReceivePresentationController receivePresentation;
-    private readonly object audioLevelLogSync = new();
-    private readonly Dictionary<(ChannelViewModel Channel, ChannelAudioDirection Direction), PcmLevelLogState> audioLevelLogs = [];
-    private readonly ChannelAudioMeterPipeline audioMeterPipeline = new();
-    private readonly ChannelAudioMeterUpdateCoalescer audioMeterCoalescer = new();
-    private readonly ReceiveDiagnosticsReporter receiveDiagnosticsReporter = new(TimeSpan.FromSeconds(5));
-    private readonly ReceivePipelineTimingReporter receivePipelineTimingReporter = new(TimeSpan.FromSeconds(5));
-    private readonly ReceiveJitterEventReporter receiveJitterEventReporter = new(TimeSpan.FromSeconds(5));
-    private readonly AdaptiveReceiveJitterBufferController adaptiveReceiveJitter = new();
-    private readonly ReceiveJitterBufferEffectivenessTracker receiveJitterEffectiveness = new();
-    private readonly ReceiveCallEpisodeTracker receiveCallEpisodes = new();
-    private readonly ReceiveOutputMutePolicy receiveOutputMutePolicy = new();
+    private readonly SessionTerminalFence terminalFence;
+    private readonly ChannelPcmLevelTracker audioLevelLogs = new(VocoderAudioLevelWindowSamples);
+    private ChannelAudioMeterRuntime audioMeterPipeline => operationalRuntime.Meters;
+    private readonly object audioMeterSync = new();
+    private ConsoleReceiveDiagnostics receiveDiagnostics => operationalRuntime.ReceiveDiagnostics;
+    private ReceiveBufferingRuntime receiveBufferingRuntime => operationalRuntime.Buffering;
+    private ReceiveJitterBufferEffectivenessTracker receiveJitterEffectiveness => operationalRuntime.JitterEffectiveness;
+    private readonly ReceiveCallEpisodeTracker receiveCallEpisodes;
+    private readonly ReceiveOutputMutePolicy receiveOutputMutePolicy;
     private readonly SemaphoreSlim audioReconfigurationLock = new(1, 1);
-    private readonly ReceiveOutputController receiveOutput;
-    private IReadOnlyDictionary<string, RxJitterBufferSetting> receiveJitterBufferSettingsBySystem =
-        new Dictionary<string, RxJitterBufferSetting>(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, FneConnectionState> lastConnectionStates = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ReceiveTrafficCoordinator receiveTraffic;
-    private readonly ReceiveMediaDispatchCoordinator receiveMediaDispatch;
-    private readonly RadioSessionIngressCoordinator radioIngress;
+    private ReceiveOutputController receiveOutput => receiveRuntime.Output;
+
+    private ReceiveIngressCoordinator receiveTraffic => operationalRuntime.Traffic?.Ingress!;
+    private readonly IReadOnlyDictionary<SystemId, (SystemViewModel View, ReceiveIngressSystem Runtime)> receiveSystems;
+    private ReceiveChannelTrafficCoordinator receiveChannelTraffic => operationalRuntime.Traffic?.Channels!;
+    private RadioSessionIngressCoordinator radioIngress => operationalRuntime.RadioIngress;
     private readonly ConnectionChimeTracker connectionChimeTracker = new();
-    private readonly ConnectionSessionController connectionSession;
-    private readonly P25KeyRequestCoordinator p25KeyRequestCoordinator = new();
-    private bool outputMuted;
+    private ConnectionSessionController connectionSession => operationalRuntime.Connections;
+    private readonly P25KeyRetrievalCoordinator? p25KeyRetrieval;
+    internal ReceiveMuteState ReceiveMute => receiveOutputMutePolicy.State;
     private PatchGroupEditorViewModel? activeMultiSelectGroup;
     private readonly CallRecordingManager callRecordings;
+    internal ConsoleOperationalRuntime OperationalRuntime => operationalRuntime;
     private readonly RecordingPlaybackCoordinator recordingPlayback;
     private readonly RecordingCommandController recordingCommands;
-    private ChannelId? recordingPlaybackChannelId;
+    internal RecordingPlaybackChannelState RecordingPlaybackState => operationalRuntime.RecordingPlaybackState;
     private readonly ConsoleSessionRuntime sessionRuntime;
-    private readonly ConsoleSessionRuntime.ConsoleSessionTimer audioMeterTimer;
+    private readonly ConsoleSessionRuntime.ConsoleSessionTimer? audioMeterTimer;
     private readonly AudioRuntimeSettingsTransaction audioRuntimeSettings;
     private readonly BackgroundAppearanceController backgroundAppearance;
     private int disposeStarted;
-    private int sessionInputSuppressed;
-    private string statusText;
-    private string audioStatusText = "RX audio disabled.";
-    private string transmitStatusText = "PTT idle.";
-    private string compactStatusText;
+    internal ConsoleSessionStatus SessionStatus { get; }
+    private readonly CoalescedUiAction statusRefresh;
+    private ConsoleSessionStatusSnapshot presentedStatus;
     private IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions> receiveAudioProcessingOptions =
         new Dictionary<VocoderMode, ReceiveAudioProcessingOptions>();
     private string clockText = string.Empty;
@@ -171,524 +184,360 @@ public sealed partial class MainWindowViewModel :
         IEnumerable<SystemViewModel> systems,
         IEnumerable<ZoneViewModel> zones,
         MainWindowViewModelOptions? options = null)
+        : this(PrepareShell(statusText, systems, zones, options))
     {
-        options ??= new MainWindowViewModelOptions();
-        MainWindowSessionComposition composition = options.SessionComposition ??
-            MainWindowSessionComposition.Default;
-        IP25KeyResolver? p25KeyResolver = options.P25KeyResolver;
-        UserSettingsStore? userSettingsStore = options.UserSettingsStore;
-        IEnumerable<GroupConfiguration>? groupDefinitions = options.GroupDefinitions;
-        bool patchSourceIdPassthrough = options.PatchSourceIdPassthrough;
-        Func<IReadOnlyList<string>>? serialPortProvider = options.SerialPortProvider;
-        Func<string, int, IPttSource>? serialPttFactory = options.SerialPttFactory;
-        IDmrKeyResolver? dmrKeyResolver = options.DmrKeyResolver;
-        INxdnKeyResolver? nxdnKeyResolver = options.NxdnKeyResolver;
-        string? codeplugPath = options.CodeplugPath;
-        configurationReference = options.ConfigurationReference;
-        IUiDispatcher? uiDispatcher = options.UiDispatcher;
-        ConsoleSessionServices? sessionServices = options.SessionServices;
-        bool networkDisabledDemo = options.NetworkDisabledDemo;
-        bool migrateLegacyConfigurationOperatorState = options.MigrateLegacyConfigurationOperatorState;
-        Func<ApplicationAudioConfiguration, Task>? reconfigureApplicationAudio = options.ReconfigureApplicationAudio;
-        ConsoleSessionServices services = sessionServices ?? new ConsoleSessionServices();
-        sessionRuntime = new ConsoleSessionRuntime(
-            services,
-            faultHandler: ReportScheduledWorkFailure);
-        Systems = systems.ToArray();
-        Zones = zones.ToArray();
-        channelsById = Systems
-            .SelectMany(system => system.Channels)
-            .Concat(Zones.SelectMany(zone => zone.Channels))
-            .GroupBy(channel => new ChannelId(channel.SessionId))
-            .ToDictionary(group => group.Key, group => group.First());
-        receiveRecordingTargets = new ReceiveRecordingTargetIndex(channelsById.Values);
-        services.Connection.Register("systems", () => new ValueTask(DisposeSystemsAsync()));
-        radioIngress = new RadioSessionIngressCoordinator(
-            Systems.Select(system => system.RadioSession));
-        services.Connection.Own("radio-session-ingress", radioIngress);
-        this.uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
-        toneTargetRefresh = new CoalescedUiAction(this.uiDispatcher, () =>
-        {
-            if (!terminalFence.IsClosed)
-                RefreshToneTargets();
-        });
-        sessionUiCallbacks = new SessionUiCallbackGate(this.uiDispatcher);
-        this.statusText = statusText;
-        compactStatusText = statusText;
-        codeplugDiagnosticsText = statusText;
-        this.networkDisabledDemo = networkDisabledDemo;
-        this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
-        assetStore = options.AssetStore ?? new ManagedAssetStore(Path.Combine(
-            Path.GetDirectoryName(this.userSettingsStore.Path) ?? AppContext.BaseDirectory,
-            "Assets"));
-        audioBackendFactory = options.AudioBackendFactory ?? new DesktopAudioBackendFactory(
-            Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"));
-        vocoderFactory = options.VocoderFactory ?? new NativeVocoderFactory();
-        privacyPermissionService = options.PrivacyPermissionService ??
-            DesktopPrivacyPermissionService.Instance;
-        userSettings = this.userSettingsStore.Load();
-        channelSelection = new ChannelSelectionController(Systems, userSettings);
-        loadedCodeplugPath = string.IsNullOrWhiteSpace(codeplugPath)
-            ? string.Empty
-            : Path.GetFullPath(codeplugPath);
-        if (configurationReference is not null && loadedCodeplugPath.Length > 0)
-        {
-            ConfigurationOperatorStateStore.Activate(
-                userSettings,
-                configurationReference.Id.ToString(),
-                loadedCodeplugPath,
-                migrateLegacyConfigurationOperatorState);
-        }
-        verboseDiagnosticLogging = userSettings.VerboseLoggingEnabled ||
-            VerboseDiagnosticLogging.IsEnabled;
-        shellSettings = composition.CreateShellSettings(
-            this.userSettingsStore,
-            userSettings,
-            new ShellSettingsSessionPort(
-                () => terminalFence.IsClosed || Volatile.Read(ref disposeStarted) != 0,
-                CaptureConfigurationOperatorState,
-                () => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NamedSettingsProfiles))),
-                text => StatusText = text,
-                exception =>
-                {
-                    DesktopCrashLog.Write("User settings persistence", exception);
-                    PostToUi(() => ReportUserSettingsPersistenceFailure(exception));
-                }), this.uiDispatcher);
-        if (NormalizeHiddenAudioProcessingMode(userSettings))
-            PersistUserSettings();
-        audioBackendProvider = new ApplicationAudioBackendProvider(
-            CreateApplicationAudioConfiguration(),
-            CreateNativeAudioBackend);
-        Func<ApplicationAudioConfiguration, Task> reconfigureAudio =
-            reconfigureApplicationAudio ?? ReconfigureApplicationAudioAsync;
-        debugLogs = new DebugLogWorkspace(
-            this.uiDispatcher.CheckAccess,
-            action => PostToUi(action, background: true),
-            () => Volatile.Read(ref disposeStarted) != 0);
-        debugLogs.PropertyChanged += HandleDebugLogWorkspacePropertyChanged;
-        operatorUndo = composition.CreateOperatorUndo(
-            action => PostToUi(action),
-            exception => DesktopCrashLog.Write("Operator undo", exception));
-        operatorUndo.Changed += HandleOperatorUndoChanged;
-        backgroundAppearance = new BackgroundAppearanceController(
-            assetStore,
-            userSettings,
-            this.uiDispatcher,
-            PersistUserSettings);
-        backgroundAppearance.Changed += HandleBackgroundAppearanceChanged;
-        backgroundAppearance.StatusChanged += HandleBackgroundAppearanceStatusChanged;
-        backgroundAppearance.Warning += HandleBackgroundAppearanceWarning;
-        backgroundAppearance.BeginInitialLoad();
-        foreach (SystemViewModel system in Systems)
-            system.SetVerboseLogging(this.verboseDiagnosticLogging);
-        RegisterSessionOwnership(services);
-        this.serialPortProvider = serialPortProvider ?? SerialPttSource.GetAvailablePortNames;
-        historyRecording = composition.CreateHistoryRecording(
-            userSettings.RecordingRetentionDays.ToString(CultureInfo.InvariantCulture),
-            GetDefaultRecordingRoot(userSettings.RecordingRootPath));
-        historyRecording.PropertyChanged += HandleHistoryRecordingPropertyChanged;
-        historyDiagnostics = composition.CreateHistoryDiagnostics(
-            historyRecording,
-            debugLogs,
-            new HistoryDiagnosticsSessionPort(
-                () => SelectedSystem,
-                this.uiDispatcher.CheckAccess,
-                action => PostToUi(action),
-                text => StatusText = text,
-                propertyName => PropertyChanged?.Invoke(
-                    this,
-                    new PropertyChangedEventArgs(propertyName))));
-        audioSettings = new AudioSettingsViewModel(
-            userSettings,
-            ToAudioProcessingModeDisplay(userSettings.AudioProcessingMode));
-        audioSettings.PropertyChanged += HandleAudioSettingsPropertyChanged;
-        toneWorkspace = new ToneWorkspaceViewModel(userSettings);
-        toneWorkspace.PropertyChanged += HandleToneWorkspacePropertyChanged;
-        tonePresentation = composition.CreateTonePresentation(
-            toneWorkspace,
-            userSettings,
-            this);
-        shellLayout = composition.CreateShellLayout(
-            userSettings,
-            Zones,
-            new ShellLayoutSessionPort(
-                PersistUserSettings,
-                propertyName => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName)),
-                text => StatusText = text));
-        foreach (string path in userSettings.RecentCodeplugPaths.Take(UserSettings.MaximumRecentCodeplugs))
-            recentCodeplugPaths.Add(path);
-        ApplyTheme(userSettings.DarkMode);
-        bool initialSerialPttEnabled = userSettings.SerialPttEnabled;
-        string initialSerialPttPortName = userSettings.SerialPttPortName;
-        int initialSerialPttBaudRate = userSettings.SerialPttBaudRate;
-        string? environmentSerialPort = Environment.GetEnvironmentVariable("DVM_PTT_SERIAL_PORT");
-        if (initialSerialPttPortName.Length == 0 && !string.IsNullOrWhiteSpace(environmentSerialPort))
-        {
-            initialSerialPttEnabled = true;
-            initialSerialPttPortName = environmentSerialPort.Trim();
-            initialSerialPttBaudRate = ReadSerialPttBaudRate();
-        }
-        pttSettings = new PttSettingsViewModel(
-            ParseGlobalPttKey(userSettings.GlobalPttKey),
-            ParseGlobalPttKey(userSettings.ActiveSystemPttKey),
-            userSettings.TogglePttMode,
-            initialSerialPttEnabled,
-            userSettings.SerialPttActiveSystemOnly,
-            initialSerialPttPortName,
-            initialSerialPttBaudRate);
-        pttSettings.PropertyChanged += HandlePttSettingsPropertyChanged;
-        pttSession = composition.CreatePttSession(
-            pttSettings,
-            (portName, baudRate) => serialPttFactory is null
-                ? new SerialPttInputSourceFactory(portName, baudRate)
-                : new DelegateSerialPttInputSourceFactory(
-                    () => serialPttFactory(portName, baudRate)),
-            GetSerialPttTargetScope);
-        hardwarePttSequencer = new HardwarePttSequencer(pttStateChangeLock, this, pttSession, pttActivationArbiter);
-        RefreshSerialPttDevices();
-        if (SerialPttEnabled && SerialPttPortName.Length > 0)
-        {
-            SerialPttStatusText = $"Configured for {SerialPttPortName} at {SerialPttBaudRate:N0} baud.";
-        }
-        clockText = FormatClock(DateTime.Now, userSettings.ClockUse24HourTime, userSettings.ClockShowSeconds);
-        sessionRuntime.StartTimer(TimeSpan.FromSeconds(1), HandleClockTick);
-        audioMeterTimer = sessionRuntime.CreateTimer(
-            TimeSpan.FromMilliseconds(ChannelAudioMeterPipeline.RefreshIntervalMilliseconds),
-            HandleAudioMeterTick,
-            startImmediately: false);
-        sessionRuntime.StartTimer(TimeSpan.FromSeconds(1), HandleConnectionDiagnosticsTick);
-        receiveJitterBufferSettingsBySystem = BuildReceiveJitterBufferSettingsBySystem();
-        receiveAudioProcessingOptions = BuildReceiveAudioProcessingOptions();
-        WebStreamPlaybackCoordinator webStreamPlayback = composition.CreateWebStreamPlayback(
-            audioBackendProvider.CreateBackend,
-            () => userSettings.AudioOutputDeviceId,
-            openStream: null,
-            createDecoder: null,
-            getStreamOutputDeviceId: stream =>
-                userSettings.WebStreamOutputDeviceIds.TryGetValue(stream.Name, out string? deviceId)
-                    ? deviceId
-                    : null,
-            uiDispatcher: this.uiDispatcher);
-        webStreamOperator = composition.CreateWebStreamOperator(
-            userSettings,
-            loadedCodeplugPath,
-            webStreamPlayback,
-            new WebStreamOperatorSessionPort(
-                () => networkDisabledDemo,
-                action => this.uiDispatcher.InvokeAsync(action),
-                PersistUserSettings,
-                text => AudioStatusText = text));
-        RestoreToolbarClocks();
-        p25KeyRing = p25KeyResolver as P25KeyRing;
-        dmrKeyRing = dmrKeyResolver as DmrKeyRing;
-        nxdnKeyRing = nxdnKeyResolver as NxdnKeyRing;
-        callRecordings = new CallRecordingManager(
-            RecordingRootPathText,
-            (channelId, exception) => HandleRecordingFaulted(ResolveChannel(channelId), exception),
-            userSettings.RecordingRetentionDays,
-            (channelId, sourceId) => ShouldRecordSource(ResolveChannel(channelId), sourceId),
-            (channelId, sourceId) => ResolveChannel(channelId).ResolveSubscriberAlias(sourceId));
-        runtimeHealth = composition.CreateRuntimeHealth(callRecordings);
-        callRecordings.RecordingFinalized += HandleRecordingFinalized;
-        recordingPlayback = new RecordingPlaybackCoordinator(
-            callRecordings.Store,
-            audioBackendProvider.CreateBackend,
-            () => userSettings.AudioOutputDeviceId,
-            HandleRecordingPlaybackFaulted,
-            HandleRecordingPlaybackStarted);
-        recordingPlayback.PlaybackStateChanged += HandleRecordingPlaybackStateChanged;
-        recordingCommands = composition.CreateRecordingCommands(this);
-        audioCoordinator = new ChannelReceiveAudioCoordinator(
-            new ReceiveAudioBackendPort(
-                CreateReceiveAudioBackend,
-                CreateReceiveVocoderBackend),
-            new ReceiveAudioRoutePolicy(
-                channelId => GetChannelVolume(ResolveChannel(channelId)),
-                channelId => GetChannelStereoBalance(ResolveChannel(channelId)),
-                channelId => GetChannelOutputDeviceId(ResolveChannel(channelId))),
-            new ReceiveAudioKeyPort(
-                p25KeyResolver,
-                dmrKeyResolver,
-                nxdnKeyResolver,
-                GetDmrReceiveKeyPolicy),
-            new ReceiveAudioPresentationPort(
-                (channelId, streamId, sourceId, samples) =>
-                    HandleDecodedSamples(ResolveChannel(channelId), streamId, sourceId, samples),
-                HandlePresentedReceiveSamples));
-        audioCoordinator.SetReceivePlaybackEpisodeResolver(ResolveReceivePlaybackEpisode);
-        receiveAudioWork = ChannelReceiveWorkQueue.CreateWithIngressTiming(
-            (channelId, ingress, cancellationToken) => ProcessAudioAsync(
-                ResolveChannel(channelId),
-                (FneTrafficFrame)ingress.Traffic,
-                ingress.Encryption,
-                cancellationToken),
-            timingObserver: (channelId, timing) =>
-            {
-                ObserveRuntimeReceiveTiming(timing);
-                HandleReceiveWorkItemTiming(ResolveChannel(channelId), timing);
-            },
-            getJitterBufferProfile: (channelId, protocol) =>
-                GetReceiveJitterBufferProfile(
-                    ResolveChannel(channelId),
-                    FneReceiveWorkQueueAdapter.ToFneProtocol(protocol)),
-            shutdownDelayObserver: diagnostics =>
-                ReportReceiveWorkShutdownDelay("Receive audio", diagnostics));
-        receiveSessions = composition.CreateReceiveSession(
-            new ReceiveSessionPort(
-                audioCoordinator,
-                receiveAudioWork,
-                receiveOutputMutePolicy,
-                audioReconfigurationLock,
-                () => Systems.SelectMany(system => system.Channels),
-                () => terminalFence.IsClosed || Volatile.Read(ref disposeStarted) != 0,
-                channel =>
-                {
-                    receivePipelineTimingReporter.Reset(channel);
-                    receiveJitterEventReporter.Reset(channel);
-                },
-                status => PostToUi(() => AudioStatusText = status)));
-        receiveOutput = composition.CreateReceiveOutput(
-            new ReceiveOutputRoutePort(
-                audioCoordinator,
-                receiveAudioWork,
-                receiveSessions,
-                audioReconfigurationLock,
-                receivePipelineTimingReporter,
-                receiveJitterEventReporter,
-                ResolveChannel),
-            new ReceiveOutputMutePort(receiveOutputMutePolicy),
-            new ReceiveOutputPresentationPort(
-                userSettings,
-                callRecordings,
-                ResolveChannel,
-                ResolveChannels,
-                RunOnUiThreadAsync,
-                PersistUserSettings,
-                NotifySelectedOutputMutePresentationChanged,
-                text => AudioStatusText = text),
-            new ReceiveOutputLifetimePort(
-                () => terminalFence.IsClosed || Volatile.Read(ref disposeStarted) != 0,
-                ObserveRouteRecovery));
-        audioCoordinator.OutputFailed += receiveOutput.HandleOutputFailed;
-        receiveSessionReconciler = new SingleFlightAsyncAction(
-            ReconcileReceiveSessionsAsync,
-            ReportScheduledWorkFailure);
-        receiveEpisodeCompletion = new ReceiveEpisodeCompletionCoordinator(
-            new DesktopReceiveEpisodeCompletionPort(
-                receiveAudioWork,
-                audioCoordinator,
-                callRecordings,
-                channelsById,
-                ResolveReceiveRecordingTarget));
-        receiveEpisodeRetirement = new ReceiveEpisodeRetirement(receiveCallEpisodes, callHistory, receiveEpisodeCompletion, this);
-        uiLatencyReporter = new UiLatencyReporter(PublishUiLatency);
-        receivePresentation = composition.CreateReceivePresentation(
-            new ReceivePresentationPort(
-                () => terminalFence.IsClosed || Volatile.Read(ref disposeStarted) != 0,
-                this.uiDispatcher.CheckAccess,
-                action => PostToUi(action),
-                PresentSystemTraffic,
-                observeTiming: (systemName, queue, apply) => uiLatencyReporter.Observe(
-                    UiLatencyCategory.ReceiveActivity, queue, apply, systemName)));
-        foreach (SystemViewModel system in Systems)
-            RefreshJitterBufferTelemetry(system);
-        transmitCoordinator = new ChannelTransmitCoordinator(
-            new TransmitKeyPort(p25KeyResolver, dmrKeyResolver, nxdnKeyResolver),
-            CreateAudioInputProcessingOptions(
-                userSettings.AudioInputDeviceId,
-                GetConfiguredAudioProcessingMode(),
-                userSettings.AudioInputAgcEnabled,
-                userSettings.AudioInputAgcTargetDbfs,
-                userSettings.AudioInputGain,
-                userSettings.AudioInputEqLowGainDb,
-                userSettings.AudioInputEqMidGainDb,
-                userSettings.AudioInputEqHighGainDb),
-            new TransmitAudioBackendPort(
-                CreateTransmitAudioBackend,
-                CreateReceiveVocoderBackend),
-            new TransmitSampleObservationPort(
-                borrowed: (channelId, streamId, sourceId, samples) =>
-                    HandleTransmitSamples(ResolveChannel(channelId), streamId, sourceId, samples),
-                fault: exception =>
-                {
-                    ObserveTransmitHealthError(exception);
-                    DesktopCrashLog.Write("Transmit sample observation", exception);
-                }));
-        audioRuntimeSettings = new AudioRuntimeSettingsTransaction(
-            transmitCoordinator.SetKeepMicrophoneWarmAsync,
-            reconfigureAudio);
-        audioInputSettingsController = composition.CreateAudioInputSettings(
-            audioSettings,
-            userSettings,
-            this);
-        warmMicrophoneReconciler = new LatestBooleanStateReconciler(
-            transmitCoordinator.SetKeepMicrophoneWarmAsync);
-        warmMicrophoneReconciler.Reconciled += HandleWarmMicrophoneReconciled;
-        if (userSettings.KeepTransmitMicrophoneWarm)
-            _ = warmMicrophoneReconciler.SetDesired(true);
-        toneTransmitCoordinator = new ToneTransmitCoordinator(
-            p25KeyResolver,
-            createVocoderBackend: CreateReceiveVocoderBackend,
-            dmrKeyResolver: dmrKeyResolver,
-            nxdnKeyResolver: nxdnKeyResolver,
-            stateObserver: (channelId, enabled, streamId) => new ValueTask(
-                RunOnUiThreadAsync(() =>
-                    ResolveChannel(channelId).SetTransmitEnabled(enabled, streamId))));
-        localTonePlayer = new LocalTonePlayer(
-            CreateTransmitAudioBackend,
-            () => userSettings.AudioOutputDeviceId);
-        transmitAudioTransition = composition.CreateTransmitAudioTransition(
-            new TransmitReceiveRoutePort(audioCoordinator, receiveOutput),
-            new TransmitReceiveMutePort(receiveOutputMutePolicy),
-            new TransmitPermitTonePort(localTonePlayer),
-            new TransmitAudioPresentationPort(
-                ResolveChannels,
-                GetChannelVolume,
-                RunOnUiThreadAsync,
-                AddDebugLog,
-                text => AudioStatusText = text),
-            new TransmitAudioGate(audioReconfigurationLock));
-        transmitLifecycle = new TransmitLifecycleCoordinator(
-            new TransmitLifecycleTransport(transmitCoordinator),
-            new TransmitLifecycleAudio(audioCoordinator, localTonePlayer, transmitAudioTransition),
-            this);
-        generatedAudioMonitor = new GeneratedAudioMonitor(
-            CreateTransmitAudioBackend,
-            () => userSettings.AudioOutputDeviceId);
-        generatedAudioOperation = new GeneratedAudioOperation(this);
-        RestoreChannelPresentation();
-        GroupConfiguration[] configuredGroups = (groupDefinitions ?? []).ToArray();
-        var patchForwarding = new PatchForwardingCoordinator(
-            Systems,
-            p25KeyResolver,
-            createVocoderBackend: CreateReceiveVocoderBackend,
-            dmrKeyResolver: dmrKeyResolver,
-            nxdnKeyResolver: nxdnKeyResolver,
-            diagnosticObserver: HandlePatchForwardingDiagnostic,
-            resolveCurrentChannel: channelId =>
-                channelsById.TryGetValue(channelId, out ChannelViewModel? channel)
-                    ? channel.ToTransmitDescriptor()
-                    : null)
-        {
-            SourceIdPassthrough = patchSourceIdPassthrough
-        };
-        patchSourceDecode = new PatchSourceDecodeCoordinator(
-            p25KeyResolver,
-            (channelId, streamId, sourceId, samples) =>
-                ObservePatchDecodedSamples(ResolveChannel(channelId), streamId, sourceId, samples),
-            createVocoderBackend: CreatePatchSourceVocoderBackend,
-            dmrKeyResolver: dmrKeyResolver,
-            nxdnKeyResolver: nxdnKeyResolver,
-            getDmrReceiveKeyPolicy: GetDmrReceiveKeyPolicy);
-        patchSourceReceivePipeline = new PatchSourceReceivePipeline(
-            patchSourceDecode,
-            patchForwarding);
-        patchSourceReceiveWork = new ChannelReceiveWorkQueue(
-            (channelId, traffic, cancellationToken) => ProcessPatchSourceAsync(
-                ResolveChannel(channelId),
-                (FneTrafficFrame)traffic,
-                cancellationToken),
-            getJitterBufferProfile: (channelId, protocol) =>
-                GetReceiveJitterBufferProfile(
-                    ResolveChannel(channelId),
-                    FneReceiveWorkQueueAdapter.ToFneProtocol(protocol)),
-            shutdownDelayObserver: diagnostics =>
-                ReportReceiveWorkShutdownDelay("Patch receive audio", diagnostics));
-        var receiveMedia = new DesktopReceiveMediaPort(
-            audioCoordinator, receiveAudioWork, patchSourceDecode, patchSourceReceiveWork, patchForwarding,
-            () => Volatile.Read(ref disposeStarted) != 0);
-        receiveMediaDispatch = new ReceiveMediaDispatchCoordinator(receiveMedia, this);
-        receiveTraffic = new ReceiveTrafficCoordinator(
-            Systems, channelsById, receiveCallEpisodes, receiveMedia, receiveMediaDispatch, this);
-        patchRouting = composition.CreatePatchRouting(
-            patchForwarding,
-            Systems.SelectMany(system => system.Channels),
-            configuredGroups,
-            userSettings.RetainPatchStateOnStartup,
-            new PatchRoutingSessionPort(
-                () => codeplugGroupState,
-                PersistUserSettings,
-                () => TaskObservation.Observe(SyncPatchSourceDecodeAsync()),
-                text => StatusText = text));
-        ToolbarClocks = new ReadOnlyObservableCollection<ToolbarClockViewModel>(toolbarClocks);
-        RecentCodeplugPaths = new ReadOnlyObservableCollection<string>(recentCodeplugPaths);
-        ConfigureWebStreams();
-        RefreshRecordings(pruneExpired: userSettings.RecordingRetentionPolicyAccepted);
-        ConfigureChannels();
-        RefreshToneTargets();
-        receiveRecordingTargets.Refresh();
-        SubscribeToSystems();
-        RestoreInitialSelection();
-        RefreshActivityCallHistory();
+    }
 
-        connectionSession = composition.CreateConnectionSession(
-            Systems,
-            new ConnectionPatchLifecyclePort(
-                SyncPatchSourceDecodeAsync,
-                cancellationToken => patchSourceDecode.StopAllAsync(cancellationToken),
-                patchForwarding.StopAll),
-            new ConnectionPresentationPort(
-                SetBusy,
-                text => StatusText = text,
-                system => SelectedSystem = system,
-                HandleSystemStatus));
-        ConnectCommand = new AsyncRelayCommand(
-            connectionSession.ConnectAsync,
-            () => !this.networkDisabledDemo && !busy && Systems.Count > 0);
-        DisconnectCommand = new AsyncRelayCommand(connectionSession.DisconnectAsync, () => !busy && Systems.Count > 0);
-        ToggleSelectedSystemOutputMuteCommand = new AsyncRelayCommand(
-            ToggleSelectedSystemOutputMuteAsync,
-            () => SelectedSystem is not null);
-        ToggleSelectedZoneOutputMuteCommand = new AsyncRelayCommand(
-            ToggleSelectedZoneOutputMuteAsync,
-            () => SelectedSystem?.SelectedZone is not null);
-        SendDtmfCommand = new AsyncRelayCommand(SendDtmfAsync, CanSendGeneratedAudio);
-        SendToneCommand = new AsyncRelayCommand(SendToneAsync, CanSendGeneratedAudio);
-        SaveDtmfPresetCommand = new RelayCommand(SaveDtmfPreset);
-        SaveTonePresetCommand = new RelayCommand(SaveTonePreset);
-        ApplyAudioInputSettingsCommand = new AsyncRelayCommand(
-            () => ApplyAudioInputSettingsAsync(restartActiveAudio: true),
-            () => !busy && transmitCoordinator.ActiveChannel is null,
-            HandleAudioCommandFault);
-        ApplyRxAudioProcessingOptionsCommand = new AsyncRelayCommand(
-            ApplyRxAudioProcessingOptionsAsync,
-            () => !busy,
-            HandleAudioCommandFault);
-        ApplyRecordingRetentionCommand = new RelayCommand(() =>
-            AudioStatusText = "Confirm recording retention from the Recorder page before pruning.");
-        RefreshAudioDevicesCommand = new RelayCommand(RefreshAudioDevices);
-        defaultAudioDeviceMonitor = new DefaultAudioDeviceMonitor(
-            new AudioBackendDeviceTopologyProvider(CreateReceiveAudioBackend),
-            HandleAudioDeviceTopologyChangedAsync,
-            (audioBackendFactory as IAudioDeviceChangeSourceFactory)?.CreateDeviceChangeSource());
-        if (networkDisabledDemo)
+    private MainWindowViewModel(ShellPreparation preparation)
+    {
+        ConsoleSessionServices ownership = preparation.Options.SessionServices!;
+        SessionTerminalFence terminal = preparation.Options.PreparedState!.Terminal;
+        try
         {
-            InstallDemoAudioDevices();
+            string statusText = preparation.StatusText;
+            SystemViewModel[] systems = preparation.Systems;
+            ZoneViewModel[] zones = preparation.Zones;
+            MainWindowViewModelOptions options = preparation.Options;
+            PreparedLiveSession preparedLive = options.PreparedLiveSession
+                ?? throw new InvalidOperationException("Prepare the operational runtime before constructing its shell.");
+            preparedSession = preparedLive;
+            pttStateChangeLock = preparedLive.PttStateChangeLock;
+            transmitAdmissionGate = preparedLive.TransmitAdmissionGate;
+            audioReconfigurationLock = preparedLive.AudioReconfigurationLock;
+            receiveLifecycleSync = preparedLive.ReceiveSync;
+            preparedLive.Attach(this);
+            MainWindowSessionComposition composition = options.SessionComposition ??
+                MainWindowSessionComposition.Default;
+            IP25KeyResolver? p25KeyResolver = options.P25KeyResolver;
+            UserSettingsStore? userSettingsStore = options.UserSettingsStore;
+            IEnumerable<GroupConfiguration>? groupDefinitions = options.GroupDefinitions;
+            Func<IReadOnlyList<string>>? serialPortProvider = options.SerialPortProvider;
+            Func<string, int, IPttSource>? serialPttFactory = options.SerialPttFactory;
+            IDmrKeyResolver? dmrKeyResolver = options.DmrKeyResolver;
+            INxdnKeyResolver? nxdnKeyResolver = options.NxdnKeyResolver;
+            string? codeplugPath = options.CodeplugPath;
+            configurationReference = options.ConfigurationReference;
+            PreparedTopology = options.PreparedTopology;
+            PreparedState = options.PreparedState;
+            receiveCallEpisodes = options.PreparedState?.ReceiveEpisodes ?? new();
+            terminalFence = options.PreparedState?.Terminal ?? new();
+            pttActivationArbiter = options.PreparedState?.ManualTransmitOwnership ?? new();
+            receiveOutputMutePolicy = new ReceiveOutputMutePolicy(options.PreparedState?.ReceiveMute);
+            IUiDispatcher? uiDispatcher = options.UiDispatcher;
+            ConsoleSessionServices? sessionServices = options.SessionServices;
+            bool networkDisabledDemo = options.NetworkDisabledDemo;
+            bool migrateLegacyConfigurationOperatorState = options.MigrateLegacyConfigurationOperatorState;
+            Func<ApplicationAudioConfiguration, Task>? reconfigureApplicationAudio = options.ReconfigureApplicationAudio;
+            ConsoleSessionServices services = sessionServices ?? new ConsoleSessionServices();
+            sessionRuntime = new ConsoleSessionRuntime(
+                services,
+                AvaloniaApplicationScheduler.Instance,
+                faultHandler: ReportScheduledWorkFailure);
+            var constructedSystems = new List<SystemViewModel>();
+            foreach (SystemViewModel system in systems)
+                constructedSystems.Add(system);
+            Systems = constructedSystems.ToArray();
+            Zones = zones.ToArray();
+            channelsById = Systems
+                .SelectMany(system => system.Channels)
+                .Concat(Zones.SelectMany(zone => zone.Channels))
+                .GroupBy(channel => new ChannelId(channel.SessionId))
+                .ToDictionary(group => group.Key, group => group.First());
+            operationalRuntime = preparedLive.Runtime;
+            systemChannelIds = Systems.SelectMany(system => system.Channels).Select(channel => channel.Id).Distinct().ToArray();
+            this.uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
+            toneTargetRefresh = new CoalescedUiAction(this.uiDispatcher, () =>
+            {
+                if (!terminalFence.IsClosed)
+                    RefreshToneTargets();
+            });
+            sessionUiCallbacks = new SessionUiCallbackGate(this.uiDispatcher);
+            SessionStatus = PreparedState?.Status ?? new ConsoleSessionStatus();
+            SessionStatus.SetConsole(statusText);
+            presentedStatus = SessionStatus.Snapshot;
+            statusRefresh = new CoalescedUiAction(this.uiDispatcher, PublishSessionStatus);
+            SessionStatus.Changed += HandleSessionStatusChanged;
+            services.Presentation.Register("session-status-presentation", () =>
+            {
+                SessionStatus.Changed -= HandleSessionStatusChanged;
+                statusRefresh.Dispose();
+                return ValueTask.CompletedTask;
+            });
+            codeplugDiagnosticsText = statusText;
+            this.networkDisabledDemo = networkDisabledDemo;
+            this.userSettingsStore = userSettingsStore ?? new UserSettingsStore(UserSettingsStore.DefaultPath);
+            assetStore = options.AssetStore ?? new ManagedAssetStore(Path.Combine(
+                Path.GetDirectoryName(this.userSettingsStore.Path) ?? AppContext.BaseDirectory,
+                "Assets"));
+            audioBackendFactory = options.AudioBackendFactory ?? new DesktopAudioBackendFactory(
+                Environment.GetEnvironmentVariable("DVM_AUDIO_LIBRARY"));
+            vocoderFactory = options.VocoderFactory ?? new NativeVocoderFactory();
+            privacyPermissionService = options.PrivacyPermissionService ??
+                DesktopPrivacyPermissionService.Instance;
+            userSettings = preparedLive.Settings;
+            channelPreferences = new ConsoleChannelSettingsPersistence(
+                systemChannelIds.Select(id => channelMedia.State(id)).ToArray(), userSettings, PersistUserSettings);
+            channelSelection = new ChannelSelectionController(Systems, userSettings);
+            loadedCodeplugPath = string.IsNullOrWhiteSpace(codeplugPath)
+                ? string.Empty
+                : Path.GetFullPath(codeplugPath);
+            if (configurationReference is not null && loadedCodeplugPath.Length > 0)
+            {
+                ConfigurationOperatorStateStore.Activate(
+                    userSettings,
+                    configurationReference.Id.ToString(),
+                    loadedCodeplugPath,
+                    migrateLegacyConfigurationOperatorState);
+            }
+            verboseDiagnosticLogging = userSettings.VerboseLoggingEnabled ||
+                VerboseDiagnosticLogging.IsEnabled;
+            shellSettings = composition.CreateShellSettings(
+                this.userSettingsStore,
+                userSettings,
+                new ShellSettingsSessionPort(
+                    () => terminalFence.IsClosed || Volatile.Read(ref disposeStarted) != 0,
+                    CaptureConfigurationOperatorState,
+                    () => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(NamedSettingsProfiles))),
+                    text => StatusText = text,
+                    exception =>
+                    {
+                        DesktopCrashLog.Write("User settings persistence", exception);
+                        PostToUi(() => ReportUserSettingsPersistenceFailure(exception));
+                    }), this.uiDispatcher);
+            if (NormalizeHiddenAudioProcessingMode(userSettings))
+                PersistUserSettings();
+            audioBackendProvider = preparedLive.AudioBackendProvider;
+            Func<ApplicationAudioConfiguration, Task> reconfigureAudio =
+                reconfigureApplicationAudio ?? ReconfigureApplicationAudioAsync;
+            debugLogs = new DebugLogWorkspace(
+                this.uiDispatcher.CheckAccess,
+                action => PostToUi(action, background: true),
+                () => Volatile.Read(ref disposeStarted) != 0);
+            debugLogs.PropertyChanged += HandleDebugLogWorkspacePropertyChanged;
+            operatorUndo = composition.CreateOperatorUndo(
+                action => PostToUi(action),
+                exception => DesktopCrashLog.Write("Operator undo", exception));
+            operatorUndo.Changed += HandleOperatorUndoChanged;
+            backgroundAppearance = new BackgroundAppearanceController(
+                assetStore,
+                userSettings,
+                this.uiDispatcher,
+                PersistUserSettings);
+            backgroundAppearance.Changed += HandleBackgroundAppearanceChanged;
+            backgroundAppearance.StatusChanged += HandleBackgroundAppearanceStatusChanged;
+            backgroundAppearance.Warning += HandleBackgroundAppearanceWarning;
+            backgroundAppearance.BeginInitialLoad();
+            foreach (SystemViewModel system in Systems)
+                system.SetVerboseLogging(this.verboseDiagnosticLogging);
+            this.serialPortProvider = serialPortProvider ?? SerialPttSource.GetAvailablePortNames;
+            historyRecording = composition.CreateHistoryRecording(
+                userSettings.RecordingRetentionDays.ToString(CultureInfo.InvariantCulture),
+                GetDefaultRecordingRoot(userSettings.RecordingRootPath), PreparedState?.History);
+            historyRecording.PropertyChanged += HandleHistoryRecordingPropertyChanged;
+            historyDiagnostics = composition.CreateHistoryDiagnostics(
+                historyRecording,
+                debugLogs,
+                new HistoryDiagnosticsSessionPort(
+                    () => SelectedSystem,
+                    this.uiDispatcher.CheckAccess,
+                    action => PostToUi(action),
+                    text => StatusText = text,
+                    propertyName => PropertyChanged?.Invoke(
+                        this,
+                        new PropertyChangedEventArgs(propertyName))), preparedLive.SubscriberCommands);
+            audioSettings = new AudioSettingsViewModel(
+                userSettings,
+                ToAudioProcessingModeDisplay(userSettings.AudioProcessingMode));
+            audioSettings.PropertyChanged += HandleAudioSettingsPropertyChanged;
+            toneWorkspace = new ToneWorkspaceViewModel(userSettings, DesktopAlertToneFiles.Instance);
+            toneWorkspace.PropertyChanged += HandleToneWorkspacePropertyChanged;
+            tonePresentation = composition.CreateTonePresentation(
+                toneWorkspace,
+                userSettings,
+                this);
+            shellLayout = composition.CreateShellLayout(
+                userSettings,
+                Zones,
+                new ShellLayoutSessionPort(
+                    PersistUserSettings,
+                    propertyName => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName)),
+                    text => StatusText = text));
+            foreach (string path in userSettings.RecentCodeplugPaths.Take(UserSettings.MaximumRecentCodeplugs))
+                recentCodeplugPaths.Add(path);
+            ApplyTheme(userSettings.DarkMode);
+            bool initialSerialPttEnabled = userSettings.SerialPttEnabled;
+            string initialSerialPttPortName = userSettings.SerialPttPortName;
+            int initialSerialPttBaudRate = userSettings.SerialPttBaudRate;
+            string? environmentSerialPort = Environment.GetEnvironmentVariable("DVM_PTT_SERIAL_PORT");
+            if (initialSerialPttPortName.Length == 0 && !string.IsNullOrWhiteSpace(environmentSerialPort))
+            {
+                initialSerialPttEnabled = true;
+                initialSerialPttPortName = environmentSerialPort.Trim();
+                initialSerialPttBaudRate = ReadSerialPttBaudRate();
+            }
+            pttSettings = new PttSettingsViewModel(
+                ParseGlobalPttKey(userSettings.GlobalPttKey),
+                ParseGlobalPttKey(userSettings.ActiveSystemPttKey),
+                userSettings.TogglePttMode,
+                initialSerialPttEnabled,
+                userSettings.SerialPttActiveSystemOnly,
+                initialSerialPttPortName,
+                initialSerialPttBaudRate);
+            pttSettings.PropertyChanged += HandlePttSettingsPropertyChanged;
+            pttSession = composition.CreatePttSession(
+                pttSettings,
+                (portName, baudRate) => serialPttFactory is null
+                    ? new SerialPttInputSourceFactory(portName, baudRate)
+                    : new DelegateSerialPttInputSourceFactory(
+                        () => serialPttFactory(portName, baudRate)),
+                GetSerialPttTargetScope);
+            hardwarePttSequencer = new HardwarePttSequencer(pttStateChangeLock, this, pttSession, pttActivationArbiter);
+            RefreshSerialPttDevices();
+            if (SerialPttEnabled && SerialPttPortName.Length > 0)
+            {
+                SerialPttStatusText = $"Configured for {SerialPttPortName} at {SerialPttBaudRate:N0} baud.";
+            }
+            clockText = FormatClock(DateTime.Now, userSettings.ClockUse24HourTime, userSettings.ClockShowSeconds);
+            sessionRuntime.StartTimer(TimeSpan.FromSeconds(1), HandleClockTick);
+            audioMeterTimer = null;
+            sessionRuntime.StartTimer(TimeSpan.FromSeconds(1), HandleConnectionDiagnosticsTick);
+            receiveBufferingRuntime.Apply(BuildReceiveJitterBufferSettingsBySystem());
+            receiveAudioProcessingOptions = BuildReceiveAudioProcessingOptions();
+            WebStreamPlaybackCoordinator webStreamPlayback = preparedLive.WebPlayback!;
+            webStreamOperator = composition.CreateWebStreamOperator(
+                userSettings,
+                loadedCodeplugPath,
+                webStreamPlayback,
+                new WebStreamOperatorSessionPort(
+                    () => networkDisabledDemo,
+                    action => this.uiDispatcher.InvokeAsync(action),
+                    PersistUserSettings,
+                    text => AudioStatusText = text));
+            RestoreToolbarClocks();
+            p25KeyRing = p25KeyResolver as P25KeyRing;
+            p25KeyRetrieval = preparedLive.KeyRetrieval;
+            dmrKeyRing = dmrKeyResolver as DmrKeyRing;
+            nxdnKeyRing = nxdnKeyResolver as NxdnKeyRing;
+            callRecordings = preparedLive.Recordings;
+            runtimeHealth = composition.CreateRuntimeHealth(callRecordings);
+            callRecordings.RecordingFinalized += HandleRecordingFinalized;
+            recordingPlayback = preparedLive.RecordingPlayback!;
+            recordingCommands = composition.CreateRecordingCommands(this);
+            receiveSystems = Systems.ToDictionary(system => system.Id, system => (system,
+                preparedLive.IngressSystems[system.Id]));
+            GroupConfiguration[] configuredGroups = (groupDefinitions ?? []).ToArray();
+            transmitRuntime.ChannelInput = new ChannelTransmitInputPort(
+                id => SelectChannel(ResolveChannel(id)),
+                () => ObservePttActivationSource(PttActivationSource.LocalChannelControl),
+                () => pttActivationArbiter.RecordStarted(PttActivationSource.LocalChannelControl),
+                pttActivationArbiter.Clear);
+            receiveSessionReconciler = preparedLive.ReceiveReconciler!;
+            uiLatencyReporter = new UiLatencyReporter(PublishUiLatency);
+            foreach (SystemViewModel system in Systems)
+                RefreshJitterBufferTelemetry(system);
+            RestoreChannelPresentation();
+            audioRuntimeSettings = new AudioRuntimeSettingsTransaction(
+                transmitCoordinator.SetKeepMicrophoneWarmAsync,
+                reconfigureAudio);
+            audioInputSettingsController = composition.CreateAudioInputSettings(
+                audioSettings,
+                userSettings,
+                this);
+            warmMicrophoneReconciler = new LatestBooleanStateReconciler(
+                transmitCoordinator.SetKeepMicrophoneWarmAsync);
+            warmMicrophoneReconciler.Reconciled += HandleWarmMicrophoneReconciled;
+            if (userSettings.KeepTransmitMicrophoneWarm)
+                _ = warmMicrophoneReconciler.SetDesired(true);
+            patchRouting = composition.CreatePatchRouting(
+                patchForwarding,
+                Systems.SelectMany(system => system.Channels),
+                configuredGroups,
+                userSettings.RetainPatchStateOnStartup,
+                new PatchRoutingSessionPort(
+                    () => codeplugGroupState,
+                    PersistUserSettings,
+                    () => TaskObservation.Observe(SyncPatchSourceDecodeAsync()),
+                    text => StatusText = text), preparedLive.PatchConfiguration);
+            ToolbarClocks = new ReadOnlyObservableCollection<ToolbarClockViewModel>(toolbarClocks);
+            RecentCodeplugPaths = new ReadOnlyObservableCollection<string>(recentCodeplugPaths);
+            ConfigureWebStreams();
+            RefreshRecordings(pruneExpired: userSettings.RecordingRetentionPolicyAccepted);
+            ConfigureChannels();
+            RefreshToneTargets();
+            receiveRecordingTargets.Refresh();
+            SubscribeToSystems();
+            RestoreInitialSelection();
+            RefreshActivityCallHistory();
+
+            ConnectCommand = new AsyncRelayCommand(
+                connectionSession.ConnectAsync,
+                () => !this.networkDisabledDemo && !busy && Systems.Count > 0);
+            DisconnectCommand = new AsyncRelayCommand(connectionSession.DisconnectAsync, () => !busy && Systems.Count > 0);
+            ToggleSelectedSystemOutputMuteCommand = new AsyncRelayCommand(
+                ToggleSelectedSystemOutputMuteAsync,
+                () => SelectedSystem is not null);
+            ToggleSelectedZoneOutputMuteCommand = new AsyncRelayCommand(
+                ToggleSelectedZoneOutputMuteAsync,
+                () => SelectedSystem?.SelectedZone is not null);
+            SendDtmfCommand = new AsyncRelayCommand(SendDtmfAsync, CanSendGeneratedAudio);
+            SendToneCommand = new AsyncRelayCommand(SendToneAsync, CanSendGeneratedAudio);
+            SaveDtmfPresetCommand = new RelayCommand(SaveDtmfPreset);
+            SaveTonePresetCommand = new RelayCommand(SaveTonePreset);
+            ApplyAudioInputSettingsCommand = new AsyncRelayCommand(
+                () => ApplyAudioInputSettingsAsync(restartActiveAudio: true),
+                () => !busy && transmitCoordinator.ActiveChannel is null,
+                HandleAudioCommandFault);
+            ApplyRxAudioProcessingOptionsCommand = new AsyncRelayCommand(
+                ApplyRxAudioProcessingOptionsAsync,
+                () => !busy,
+                HandleAudioCommandFault);
+            ApplyRecordingRetentionCommand = new RelayCommand(() =>
+                AudioStatusText = "Confirm recording retention from the Recorder page before pruning.");
+            RefreshAudioDevicesCommand = new RelayCommand(RefreshAudioDevices);
+            defaultAudioDeviceMonitor = new DefaultAudioDeviceMonitor(
+                new AudioBackendDeviceTopologyProvider(CreateReceiveAudioBackend),
+                HandleAudioDeviceTopologyChangedAsync,
+                (audioBackendFactory as IAudioDeviceChangeSourceFactory)?.CreateDeviceChangeSource());
+            if (networkDisabledDemo)
+            {
+                InstallDemoAudioDevices();
+            }
+            else
+            {
+                RefreshAudioDevices();
+                defaultAudioDeviceMonitor.Start();
+            }
+            transmitCoordinator.Faulted += HandleTransmitFaulted;
+            transmitCoordinator.ActiveChannelsChanged += HandleTransmitAvailabilityChanged;
+            toneTransmitCoordinator.SendingChanged += HandleGeneratedAudioAvailabilityChanged;
+            pttSession.StateChanged += HandlePttSourceStateChanged;
+            pttSession.CaptureFailed += HandleGlobalPttCaptureFailed;
+            pttSession.AttachEvents();
+            if (this.userSettingsStore.LastLoadDiagnostics.Warning is { Length: > 0 } warning)
+                StatusText = warning;
+            var snapshots = operationalRuntime.GetOrCreateSnapshots(
+                DesktopConsoleSnapshotProjector.BuildTopology(this), CreateSnapshotContextSource(), SessionStatus);
+            operationalRuntime.ObserveSnapshotContext(ReceiveMute, RecordingPlaybackState, callRecordings, p25KeyRetrieval);
+            preparedLive.CompleteAttachment();
         }
-        else
+        catch (Exception failure)
         {
-            RefreshAudioDevices();
-            defaultAudioDeviceMonitor.Start();
+            terminal.TryClose();
+            ConsoleSessionConstruction.RollbackAsync(failure, ownership.DisposeAsync)
+                .AsTask().GetAwaiter().GetResult();
+            throw;
         }
-        transmitCoordinator.Faulted += HandleTransmitFaulted;
-        transmitCoordinator.ActiveChannelsChanged += HandleTransmitAvailabilityChanged;
-        toneTransmitCoordinator.SendingChanged += HandleGeneratedAudioAvailabilityChanged;
-        pttSession.StateChanged += HandlePttSourceStateChanged;
-        pttSession.CaptureFailed += HandleGlobalPttCaptureFailed;
-        pttSession.AttachEvents();
-        if (this.userSettingsStore.LastLoadDiagnostics.Warning is { Length: > 0 } warning)
-            StatusText = warning;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public string StatusText
     {
-        get => statusText;
-        private set => SetStatusField(ref statusText, value);
+        get => SessionStatus.Snapshot.Console;
+        private set => SessionStatus.SetConsole(value);
     }
 
-    public string CompactStatusText => compactStatusText;
+    public string CompactStatusText => SessionStatus.Snapshot.Latest;
 
     public string StatusDetailsText =>
         $"Console: {StatusText}{Environment.NewLine}" +
@@ -700,6 +549,9 @@ public sealed partial class MainWindowViewModel :
     public string? CurrentCodeplugPath => loadedCodeplugPath.Length == 0 ? null : loadedCodeplugPath;
 
     public ConfigurationReference? ConfigurationReference => configurationReference;
+    internal ConsoleTopologySnapshot? PreparedTopology { get; }
+    internal ConsoleSessionState? PreparedState { get; }
+    internal P25KeyRetrievalCoordinator? KeyRetrieval => p25KeyRetrieval;
 
     public string SettingsVersionText => userSettings.SchemaVersion == UserSettings.CurrentSchemaVersion
         ? $"Profile format v{userSettings.SchemaVersion}"
@@ -920,14 +772,14 @@ public sealed partial class MainWindowViewModel :
 
     public string AudioStatusText
     {
-        get => audioStatusText;
-        private set => SetStatusField(ref audioStatusText, value);
+        get => SessionStatus.Snapshot.Audio;
+        private set => SessionStatus.SetAudio(value);
     }
 
     public string TransmitStatusText
     {
-        get => transmitStatusText;
-        private set => SetStatusField(ref transmitStatusText, value);
+        get => SessionStatus.Snapshot.Transmit;
+        private set => SessionStatus.SetTransmit(value);
     }
 
     public string DtmfDigits
@@ -1047,14 +899,14 @@ public sealed partial class MainWindowViewModel :
 
     public bool OutputMuted
     {
-        get => outputMuted;
+        get => ReceiveMute.GloballyMuted;
         set
         {
-            if (outputMuted == value)
+            if (ReceiveMute.GloballyMuted == value)
                 return;
 
             audioCoordinator.SetOutputMuted(value);
-            outputMuted = value;
+            ReceiveMute.SetGlobalMuted(value);
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OutputMuted)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OutputMuteGlyph)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OutputMuteToolTip)));
@@ -1241,8 +1093,7 @@ public sealed partial class MainWindowViewModel :
                 return;
             verboseDiagnosticLogging = value;
             userSettings.VerboseLoggingEnabled = value;
-            lock (audioLevelLogSync)
-                audioLevelLogs.Clear();
+            audioLevelLogs.Clear();
             foreach (SystemViewModel system in Systems)
                 system.SetVerboseLogging(value);
             PersistUserSettings();
@@ -1571,12 +1422,13 @@ public sealed partial class MainWindowViewModel :
             .ToArray();
     public bool HasNoKeyStatusItems => KeyStatusItems.Count == 0;
     public IReadOnlyList<ZoneViewModel> Zones { get; }
+    internal event EventHandler? PatchStateChanged
+    {
+        add => patchRouting.ConfigurationStateChanged += value;
+        remove => patchRouting.ConfigurationStateChanged -= value;
+    }
     public IReadOnlyList<string> PatchGroupNames => patchRouting.GroupNames;
     public IReadOnlyList<PatchGroupEditorViewModel> PatchGroups => patchRouting.Groups;
-    internal IReadOnlyDictionary<ChannelId, ChannelRecordingState> CaptureChannelRecordingState(
-        IEnumerable<ChannelViewModel> channels)
-        => callRecordings.CaptureState(channels.Select(
-            channel => (ChannelRecordingDescriptor)channel));
     internal event Action<ChannelId> RecordingStateChanged
     {
         add => callRecordings.RecordingStateChanged += value;
@@ -1834,10 +1686,11 @@ public sealed partial class MainWindowViewModel :
 
     Task IRecordingCommandSession.StartPlaybackAsync(
         RecordingId? recordingId,
-        string recordingPath)
+        string recordingPath,
+        RecordingCallIdentity identity)
         => recordingId is RecordingId id
-            ? recordingPlayback.StartAsync(id, recordingPath)
-            : recordingPlayback.StartAsync(recordingPath);
+            ? recordingPlayback.StartAsync(id, recordingPath, identity: identity)
+            : recordingPlayback.StartAsync(recordingPath, identity: identity);
 
     Task IRecordingCommandSession.StopPlaybackAsync()
         => recordingPlayback.StopAsync();
@@ -2044,48 +1897,22 @@ public sealed partial class MainWindowViewModel :
     internal void SetChannelTransmitSelection(ChannelViewModel channel, bool selected)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        if (!channel.CanTransmit)
-        {
-            TransmitStatusText = $"{channel.Name} cannot be selected for TX.";
-            return;
-        }
-
-        channel.SetTransmitSelected(selected);
-        userSettings.TransmitSelectedChannelKeys = Systems
-            .SelectMany(system => system.Channels)
-            .Where(candidate => candidate.IsTransmitSelected)
-            .Select(candidate => candidate.SettingsKey)
-            .ToList();
-        PersistUserSettings();
-        TransmitStatusText = channel.IsTransmitSelected
-            ? $"{channel.Name} selected for global TX."
-            : $"{channel.Name} removed from global TX.";
+        // Desktop queues the preference write synchronously for binding commands.
+        transmitControls.SetSelectedAsync(channel.Id, selected).AsTask().GetAwaiter().GetResult();
     }
 
     public void ToggleAllTransmitSelection()
     {
-        ChannelViewModel[] candidates = (SelectedSystem?.Channels ?? Systems.SelectMany(system => system.Channels))
-            .Where(channel => channel.CanTransmit)
-            .ToArray();
-        if (candidates.Length == 0)
-        {
-            TransmitStatusText = "No transmit-capable channels are available in the selected system.";
-            return;
-        }
-
-        bool select = candidates.Any(channel => !channel.IsTransmitSelected);
-        foreach (ChannelViewModel channel in candidates)
-            channel.SetTransmitSelected(select);
-
-        userSettings.TransmitSelectedChannelKeys = Systems
-            .SelectMany(system => system.Channels)
-            .Where(channel => channel.IsTransmitSelected)
-            .Select(channel => channel.SettingsKey)
-            .ToList();
-        PersistUserSettings();
-        TransmitStatusText = select
-            ? $"Selected {candidates.Length} transmit-capable channel(s) for global TX."
-            : "Cleared global TX selection.";
+        var scope = (SelectedSystem?.Channels ?? Systems.SelectMany(system => system.Channels))
+            .Select(channel => channel.Id);
+        // The desktop adapter schedules one settings write and completes synchronously.
+        var result = transmitControls.SetSelectionAsync(scope, selected: null,
+            SaveTransmitSelectionPreferencesAsync).AsTask().GetAwaiter().GetResult();
+        TransmitStatusText = result.Count == 0
+            ? "No transmit-capable channels are available in the selected system."
+            : result.Selected
+                ? $"Selected {result.Count} transmit-capable channel(s) for global TX."
+                : "Cleared global TX selection.";
     }
 
     public void ToggleChannelPageSelection(ChannelViewModel channel)
@@ -2094,16 +1921,7 @@ public sealed partial class MainWindowViewModel :
     internal void SetChannelPageSelection(ChannelViewModel channel, bool selected)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        if (!channel.CanTransmit)
-        {
-            TransmitStatusText = $"{channel.Name} cannot be selected for paging.";
-            return;
-        }
-
-        channel.SetPageSelected(selected);
-        TransmitStatusText = channel.IsPageSelected
-            ? $"{channel.Name} armed for QCII paging."
-            : $"{channel.Name} removed from QCII paging.";
+        transmitControls.SetToneSelected(channel.Id, selected, ConsoleToneTargets.Page);
     }
 
     public void ToggleChannelAlertSelection(ChannelViewModel channel)
@@ -2112,17 +1930,26 @@ public sealed partial class MainWindowViewModel :
     internal void SetChannelAlertSelection(ChannelViewModel channel, bool selected)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        if (!channel.CanTransmit)
-        {
-            TransmitStatusText = $"{channel.Name} cannot be selected for alerts.";
-            return;
-        }
+        transmitControls.SetToneSelected(channel.Id, selected, ConsoleToneTargets.Alert);
+    }
 
-        channel.SetAlertSelected(selected);
-        RaiseGeneratedAudioCanExecuteChanged();
-        TransmitStatusText = channel.IsAlertSelected
-            ? $"{channel.Name} armed for DTMF and alert tones."
-            : $"{channel.Name} removed from alert-tone targeting.";
+    private void PresentChannelSelection(ChannelSelectionResult result)
+    {
+        string name = channelMedia.State(result.Channel).Runtime.Definition.Name;
+        if (result.Kind == TransmitSelectionKind.Alert && result.Applied)
+            RaiseGeneratedAudioCanExecuteChanged();
+        TransmitStatusText = (result.Kind, result.Applied, result.Selected) switch
+        {
+            (TransmitSelectionKind.Transmit, false, _) => $"{name} cannot be selected for TX.",
+            (TransmitSelectionKind.Transmit, true, true) => $"{name} selected for global TX.",
+            (TransmitSelectionKind.Transmit, true, false) => $"{name} removed from global TX.",
+            (TransmitSelectionKind.Page, false, _) => $"{name} cannot be selected for paging.",
+            (TransmitSelectionKind.Page, true, true) => $"{name} armed for QCII paging.",
+            (TransmitSelectionKind.Page, true, false) => $"{name} removed from QCII paging.",
+            (TransmitSelectionKind.Alert, false, _) => $"{name} cannot be selected for alerts.",
+            (TransmitSelectionKind.Alert, true, true) => $"{name} armed for DTMF and alert tones.",
+            _ => $"{name} removed from alert-tone targeting."
+        };
     }
 
     public async Task SetGlobalPttKeyAsync(KeyboardPttKey key)
@@ -2240,71 +2067,13 @@ public sealed partial class MainWindowViewModel :
             _ => throw new ArgumentOutOfRangeException(nameof(scope))
         };
 
-    private async Task SetReceiveAsync(ReceiveSelectionScope scope, bool enabled)
-    {
-        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            foreach (ChannelViewModel channel in GetReceiveScopeChannels(scope))
-            {
-                try
-                {
-                    await ApplyChannelReceiveSelectionAsync(channel, enabled).ConfigureAwait(false);
-                }
-                catch (Exception exception)
-                {
-                    await ReportReceiveSelectionFailureAsync(channel, exception).ConfigureAwait(false);
-                }
-            }
-        }
-        finally
-        {
-            audioReconfigurationLock.Release();
-        }
-    }
+    private Task SetReceiveAsync(ReceiveSelectionScope scope, bool enabled)
+        => receiveOutput.SetSelectionAsync(GetReceiveScopeChannels(scope).Select(channel => channel.Id).ToArray(),
+            enabled, reportFailure: (id, failure) => ReportReceiveSelectionFailureAsync(ResolveChannel(id), failure));
 
-    private async Task ChangeChannelReceiveSelectionAsync(
-        ChannelViewModel channel,
-        bool? enabled)
-    {
-        await audioReconfigurationLock.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            bool targetEnabled = enabled ?? !channel.IsAudioEnabled;
-            await ApplyChannelReceiveSelectionAsync(channel, targetEnabled).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            await ReportReceiveSelectionFailureAsync(channel, exception).ConfigureAwait(false);
-        }
-        finally
-        {
-            audioReconfigurationLock.Release();
-        }
-    }
-
-    private async Task ApplyChannelReceiveSelectionAsync(
-        ChannelViewModel channel,
-        bool enabled)
-    {
-        if (enabled)
-        {
-            bool liveSessionMissing = receiveOutputMutePolicy.ShouldEnableLivePlayback(
-                channel,
-                isTemporarilySuspended: channel.IsAudioSuspended) &&
-                !audioCoordinator.LivePlaybackChannels.Contains(channel);
-            if (!channel.IsAudioEnabled ||
-                !audioCoordinator.IsActive(channel) ||
-                liveSessionMissing)
-            {
-                await StartAudioAsync(channel, persistSelection: true).ConfigureAwait(false);
-            }
-            return;
-        }
-
-        if (channel.IsAudioEnabled)
-            await StopAudioAsync(channel, persistSelection: true).ConfigureAwait(false);
-    }
+    private Task ChangeChannelReceiveSelectionAsync(ChannelViewModel channel, bool? enabled)
+        => receiveOutput.SetSelectionAsync([channel.Id], enabled,
+            reportFailure: (id, failure) => ReportReceiveSelectionFailureAsync(ResolveChannel(id), failure));
 
     private async Task ReportReceiveSelectionFailureAsync(
         ChannelViewModel channel,
@@ -2321,41 +2090,17 @@ public sealed partial class MainWindowViewModel :
         }).ConfigureAwait(false);
     }
 
-    public async Task<bool> StartChannelTransmitAsync(ChannelViewModel channel)
+    public async Task<bool> StartChannelTransmitAsync(ChannelViewModel channel, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        if (Volatile.Read(ref sessionInputSuppressed) != 0 ||
-            Volatile.Read(ref disposeStarted) != 0)
-        {
-            return false;
-        }
-        SelectChannel(channel);
-        if (channel.IsTransmitting)
-            return true;
-        if (!channel.IsPttControlEnabled)
-        {
-            TransmitStatusText = channel.IsReceivePresentationActive
-                ? $"PTT unavailable: {channel.Name} is currently receiving."
-                : $"PTT unavailable for {channel.Name}: {channel.TransmitUnavailableReason}.";
-            return false;
-        }
-        ObservePttActivationSource(PttActivationSource.LocalChannelControl);
-        await StartTransmitAsync(channel).ConfigureAwait(false);
-        if (channel.IsTransmitting)
-            pttActivationArbiter.RecordStarted(PttActivationSource.LocalChannelControl);
-        else if (transmitCoordinator.ActiveChannel is null)
-            pttActivationArbiter.Clear();
-        return channel.IsTransmitting;
+        return await transmitRuntime.BeginChannelAsync(channel.Id,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task StopChannelTransmitAsync(ChannelViewModel channel)
+    public Task StopChannelTransmitAsync(ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        if (!channel.IsTransmitting)
-            return;
-        await StopTransmitAsync(
-            [channel],
-            propagateUnconfirmedStop: true).ConfigureAwait(false);
+        return transmitRuntime.EndChannelAsync(channel.Id);
     }
 
     public bool HandleKeyboardPttDown(KeyboardPttKey key)
@@ -2374,10 +2119,9 @@ public sealed partial class MainWindowViewModel :
                 ? []
                 : [SelectedSystem]
             : Systems;
-        return systems
-            .SelectMany(system => system.Channels)
-            .Where(channel => channel.IsTransmitSelected)
-            .ToArray();
+        return transmitChannels.SelectManualChannels(
+                systems.SelectMany(system => system.Channels).Select(channel => channel.Id))
+            .Select(ResolveChannel).ToArray();
     }
 
     internal IReadOnlyList<ChannelViewModel> GetSerialPttTargets()
@@ -2404,8 +2148,25 @@ public sealed partial class MainWindowViewModel :
         bool useLegacyPathFallback = true,
         bool migrateLegacyConfigurationOperatorState = false,
         Action<ConsoleSessionServiceDisposalTiming>? serviceDisposalObserved = null)
+        => LoadAsync(configurationPath, userSettingsStore, serialPortProvider, serialPttFactory,
+            uiDispatcher, networkDisabledDemo, configurationReference, useLegacyPathFallback,
+            migrateLegacyConfigurationOperatorState, serviceDisposalObserved).GetAwaiter().GetResult();
+
+    internal static async Task<MainWindowViewModel> LoadAsync(
+        string? configurationPath,
+        UserSettingsStore userSettingsStore,
+        Func<IReadOnlyList<string>>? serialPortProvider = null,
+        Func<string, int, IPttSource>? serialPttFactory = null,
+        IUiDispatcher? uiDispatcher = null,
+        bool networkDisabledDemo = false,
+        ConfigurationReference? configurationReference = null,
+        bool useLegacyPathFallback = true,
+        bool migrateLegacyConfigurationOperatorState = false,
+        Action<ConsoleSessionServiceDisposalTiming>? serviceDisposalObserved = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(userSettingsStore);
+        cancellationToken.ThrowIfCancellationRequested();
         var dependencies = new DesktopRuntimeDependencies(
             userSettingsStore,
             serialPortProvider ?? SerialPttSource.GetAvailablePortNames,
@@ -2418,17 +2179,17 @@ public sealed partial class MainWindowViewModel :
             new NativeVocoderFactory(),
             networkDisabledDemo,
             serviceDisposalObserved);
-        return new ConsoleSessionFactory(dependencies).Create(
+        return await new ConsoleSessionFactory(dependencies).CreateAsync(
             new ConsoleSessionLoader(userSettingsStore).Load(
                 configurationPath,
                 configurationReference,
                 useLegacyPathFallback,
-                migrateLegacyConfigurationOperatorState));
+                migrateLegacyConfigurationOperatorState), cancellationToken).ConfigureAwait(false);
     }
 
     public ValueTask DisposeAsync()
     {
-        terminalFence.TryClose();
+        operationalRuntime.Admission.Close();
         sessionUiCallbacks.Close();
         Interlocked.Exchange(ref disposeStarted, 1);
         return sessionRuntime.DisposeAsync();
@@ -2437,8 +2198,10 @@ public sealed partial class MainWindowViewModel :
     public Task ToggleSystemConnectionAsync(SystemViewModel system)
     {
         ArgumentNullException.ThrowIfNull(system);
+        if (!Systems.Contains(system))
+            throw new ArgumentException("The FNE is not part of this console.", nameof(system));
         if (!networkDisabledDemo)
-            return connectionSession.ToggleAsync(system);
+            return connectionSession.ToggleAsync(SystemId.FromName(system.Name));
 
         StatusText = "NEO deterministic demo · network connection requests are disabled.";
         TransmitStatusText = "Demo safety boundary: no FNE connection or outbound traffic was attempted.";
@@ -2446,6 +2209,11 @@ public sealed partial class MainWindowViewModel :
     }
 
     internal void HandleSystemStatus(SystemViewModel system, FneConnectionStatus status)
+        => preparedSession!.ApplyConnection(new(system.Id, system.Name,
+            FneConnectionStateMapper.ToApplicationState(status.State), status.Message, status.ChangedAt));
+
+    private void PresentSystemStatus(SystemViewModel system, FneConnectionStatus status, ConsoleConnectionChange transition,
+        ConsoleCallHistoryRecord? preparedHistory = null)
     {
         void Apply()
         {
@@ -2453,51 +2221,28 @@ public sealed partial class MainWindowViewModel :
                 return;
 
             system.ApplyStatus(status);
-            StatusText = $"{system.Name}: {status.State} — {status.Message}";
             NotifyConnectionPresentationChanged();
-            if (status.State == FneConnectionState.Connected)
-            {
-                ScheduleConfiguredP25Keys(system);
-                TaskObservation.Observe(ReconcileReceiveSessionsAsync());
-            }
-            else
-            {
-                p25KeyRequestCoordinator.Cancel(system.Name);
-                if (SystemOwnsActiveTransmit(system))
-                {
-                    TaskObservation.Observe(
-                        StopTransmitForDisconnectedSystemAsync(system, status));
-                }
-            }
-            bool stateChanged = !lastConnectionStates.TryGetValue(system.Name, out FneConnectionState previousState) ||
-                previousState != status.State;
-            lastConnectionStates[system.Name] = status.State;
-            if (stateChanged &&
-                previousState == FneConnectionState.Connected &&
-                status.State != FneConnectionState.Connected)
-            {
-                adaptiveReceiveJitter.Reset(system.Name);
-                receiveJitterEffectiveness.Reset(system.Name);
-            }
-            if (stateChanged &&
-                previousState == FneConnectionState.Connected &&
-                status.State != FneConnectionState.Connected &&
-                p25KeyRing is not null)
-            {
-                p25KeyRing.ClearFneKeys(system.Name);
+            bool stateChanged = transition.Changed;
+            if (transition.LostConnection && p25KeyRing is not null)
                 RefreshP25KeyState();
-                TaskObservation.Observe(SyncPatchSourceDecodeAsync());
-            }
             if (stateChanged && status.State is FneConnectionState.Connected or FneConnectionState.Disconnected or FneConnectionState.Faulted)
             {
-                string stateText = status.State.ToString().ToLowerInvariant();
-                AddEventHistory(
-                    "FNE",
-                    $"{system.Name} {stateText}",
-                    system.SourceId?.ToString(CultureInfo.InvariantCulture),
-                    system.Endpoint);
+                if (preparedHistory is not null)
+                {
+                    callHistory.ProjectRuntimeRecord(preparedHistory);
+                    NotifyCallHistoryChanged();
+                }
+                else
+                {
+                    string stateText = status.State.ToString().ToLowerInvariant();
+                    AddEventHistory(
+                        "FNE",
+                        $"{system.Name} {stateText}",
+                        system.SourceId?.ToString(CultureInfo.InvariantCulture),
+                        system.Endpoint);
+                }
             }
-            bool shouldPlayChime = connectionChimeTracker.ShouldPlay(system.Name, status.State);
+            bool shouldPlayChime = connectionChimeTracker.ShouldPlay(system.Name, FneConnectionStateMapper.ToApplicationState(status.State));
             if (stateChanged && shouldPlayChime)
                 TaskObservation.Observe(PlayConnectionChimeAsync(system.Name, status.State));
             RaiseGeneratedAudioCanExecuteChanged();
@@ -2532,55 +2277,22 @@ public sealed partial class MainWindowViewModel :
     }
 
     private bool SystemOwnsActiveTransmit(SystemViewModel system)
+        => transmitChannels.OwnsActiveTransmit(system.Channels.Select(channel => channel.Id),
+            transmitCoordinator.ActiveChannels);
+
+    private Task StopTransmitForDisconnectedSystemAsync(SystemViewModel system, FneConnectionStatus status)
+        => transmitRuntime.StopForDisconnectedSystemAsync(
+            system.Channels.Select(channel => channel.Id).ToArray(), transmitChannels,
+            pttStateChangeLock, transmitAdmissionGate, ClearDisconnectedTransmitLatches,
+            pttActivationArbiter.Clear,
+            $"Transmission stopped because {system.Name} is {status.State.ToString().ToLowerInvariant()}.");
+
+    private void ClearDisconnectedTransmitLatches()
     {
-        HashSet<ChannelId> activeIds = transmitCoordinator.ActiveChannels.ToHashSet();
-        return system.Channels.Any(channel =>
-            channel.IsTransmitting || activeIds.Contains(new ChannelId(channel.SessionId)));
-    }
-
-    private async Task StopTransmitForDisconnectedSystemAsync(
-        SystemViewModel system,
-        FneConnectionStatus status)
-    {
-        await pttStateChangeLock.WaitAsync().ConfigureAwait(false);
-        await transmitAdmissionGate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            if (!SystemOwnsActiveTransmit(system))
-                return;
-
-            if (TogglePttMode &&
-                pttActivationArbiter.TryGetKeyboardOwner(
-                    out PttTargetScope scope,
-                    out PttActivationSource source))
-            {
-                pttSession.ReleaseKeyboardToggleLatch(scope, source);
-            }
-
-            pttSession.ReleaseAllKeyboardToggleLatches();
-
-            ChannelViewModel[] channels = ResolveChannels(transmitCoordinator.ActiveChannels)
-                .Concat(Systems
-                    .SelectMany(candidate => candidate.Channels)
-                    .Where(channel => channel.IsTransmitting))
-                .Distinct()
-                .ToArray();
-            if (channels.Length == 0)
-            {
-                pttActivationArbiter.Clear();
-                return;
-            }
-
-            await StopTransmitCoreAsync(
-                channels,
-                $"Transmission stopped because {system.Name} is " +
-                $"{status.State.ToString().ToLowerInvariant()}.").ConfigureAwait(false);
-        }
-        finally
-        {
-            transmitAdmissionGate.Release();
-            pttStateChangeLock.Release();
-        }
+        if (TogglePttMode && pttActivationArbiter.TryGetKeyboardOwner(
+                out PttTargetScope scope, out PttActivationSource source))
+            pttSession.ReleaseKeyboardToggleLatch(scope, source);
+        pttSession.ReleaseAllKeyboardToggleLatches();
     }
 
     private void HandleSystemLog(object? sender, FneLogEntry entry)
@@ -2613,33 +2325,6 @@ public sealed partial class MainWindowViewModel :
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 
-    private void ScheduleConfiguredP25Keys(SystemViewModel system)
-    {
-        // Request every configured key even when a local fallback is available.
-        // Match the legacy console's post-connect settling delay and per-request
-        // pacing so an FNE/KMM has time to service every configured key.
-        if (p25KeyRing is null || terminalFence.IsClosed || Volatile.Read(ref disposeStarted) != 0)
-            return;
-
-        _ = p25KeyRequestCoordinator.Schedule(
-            system.Name,
-            ResolveConfiguredP25KeyRequests(system.Channels),
-            () => system.IsConnected,
-            system.RequestP25Key,
-            system.HasReceivedP25Key,
-            system.RetryP25Key,
-            exception =>
-            {
-                if (terminalFence.IsClosed || Volatile.Read(ref disposeStarted) != 0)
-                    return;
-                PostToUi(() =>
-                {
-                    if (!terminalFence.IsClosed && Volatile.Read(ref disposeStarted) == 0)
-                        StatusText = $"{system.Name}: P25 key request unavailable — {exception.Message}";
-                });
-            });
-    }
-
     private void HandleSystemJitterBufferChanged(object? sender, EventArgs e)
     {
         if (sender is SystemViewModel system)
@@ -2650,56 +2335,14 @@ public sealed partial class MainWindowViewModel :
         IEnumerable<ChannelViewModel> channels)
     {
         ArgumentNullException.ThrowIfNull(channels);
-        return channels
-            .Where(channel => channel.Definition.Protocol == ChannelProtocol.P25 && channel.Definition.IsEncrypted)
-            .Select(channel =>
-            {
-                byte algorithmId = 0;
-                ushort keyId = 0;
-                bool valid = P25KeyRing.TryParseAlgorithmId(
-                        channel.Definition.EncryptionAlgorithm,
-                        out algorithmId) &&
-                    P25KeyRing.TryParseKeyId(channel.Definition.EncryptionKeyId, out keyId);
-                return (Valid: valid, AlgorithmId: algorithmId, KeyId: keyId);
-            })
-            .Where(request => request.Valid)
-            .Select(request => (request.AlgorithmId, request.KeyId))
-            .Distinct()
-            .ToArray();
+        return P25ConfiguredKeyRequests.Resolve(channels.Select(channel => channel.Definition));
     }
 
     private void HandleSystemKeyResponse(object? sender, FneKeyResponse response)
     {
-        if (sender is not SystemViewModel system ||
-            p25KeyRing is null ||
-            !response.SystemName.Equals(system.Name, StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        void Apply()
-        {
-            try
-            {
-                p25KeyRing.AddOrReplaceFromFne(
-                    system.Name,
-                    response.AlgorithmId,
-                    response.KeyId,
-                    response.KeyMaterial.Span);
-                RefreshP25KeyState();
-                StatusText = $"{system.Name}: P25 key 0x{response.KeyId:X4} received through FNE/KMM.";
-                TaskObservation.Observe(SyncPatchSourceDecodeAsync());
-            }
-            catch (ArgumentException exception)
-            {
-                StatusText = $"{system.Name}: rejected P25 KMM key 0x{response.KeyId:X4} — {exception.Message}";
-            }
-        }
-
-        if (uiDispatcher.CheckAccess())
-            Apply();
-        else
-            PostToUi(Apply);
+        if (sender is SystemViewModel system &&
+            response.SystemName.Equals(system.Name, StringComparison.OrdinalIgnoreCase))
+            preparedSession!.ApplyKey(new(system.Id, response.AlgorithmId, response.KeyId, response.KeyMaterial));
     }
 
     private void RefreshP25KeyState()
@@ -2710,6 +2353,28 @@ public sealed partial class MainWindowViewModel :
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasNoKeyStatusItems)));
     }
 
+    private ValueTask SaveTransmitControlPreferenceAsync(ChannelId id,
+        ChannelTransmitPreferenceChange change, CancellationToken token)
+        => channelPreferences.SaveTransmitAsync(id, change, token);
+
+    private ValueTask SaveTransmitSelectionPreferencesAsync(IReadOnlyList<ChannelId> channels,
+        bool selected, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var changed = channels.ToHashSet();
+        userSettings.TransmitSelectedChannelKeys = systemChannelIds
+            .Where(id => changed.Contains(id) ? selected : channelMedia.State(id).Operator.Snapshot.TransmitSelected)
+            .Select(id => ResolveChannel(id).SettingsKey).ToList();
+        PersistUserSettings();
+        return ValueTask.CompletedTask;
+    }
+
+    internal async ValueTask SetChannelTransmitEncryptedAsync(ChannelId id, bool encrypted, CancellationToken token = default)
+    {
+        if (IsSessionInputSuppressed) return;
+        await transmitControls.SetEncryptedAsync(id, encrypted, token).ConfigureAwait(false);
+    }
+
     private void HandleChannelEncryptionChanged(object? sender, bool encrypted)
     {
         if (sender is not ChannelViewModel channel)
@@ -2717,6 +2382,28 @@ public sealed partial class MainWindowViewModel :
 
         userSettings.TransmitEncryptionStates[channel.SettingsKey] = encrypted;
         PersistUserSettings();
+    }
+
+    private ValueTask SaveRecordingControlPreferenceAsync(ChannelId id, bool enabled, CancellationToken token)
+        => channelPreferences.SaveRecordingAsync(id, enabled, token);
+
+    internal bool CanRecordChannel(ChannelId id) => recordingControls.CanRecord(id);
+
+    internal async ValueTask SetChannelRecordingEnabledAsync(ChannelId id, bool enabled, CancellationToken token = default)
+    {
+        if (IsSessionInputSuppressed) return;
+        await recordingControls.SetEnabledAsync(id, enabled, token).ConfigureAwait(false);
+    }
+
+    private Task ReconcileRecordingControlAsync(ChannelId id, bool enabled, CancellationToken token)
+    {
+        if (!enabled)
+        {
+            callRecordings.StopChannel(channelMedia.DescribeRecording(id));
+            return StopRecordingDecodeIfUnusedAsync(ResolveChannel(id));
+        }
+        receiveAudioWork.Start(id);
+        return receiveRuntime.EnsureRecordingAudioAsync(id, token);
     }
 
     private void HandleChannelRecordingChanged(object? sender, bool enabled)
@@ -2745,25 +2432,33 @@ public sealed partial class MainWindowViewModel :
         TaskObservation.Observe(EnsureRecordingAudioAsync(channel));
     }
 
+    internal Task SetChannelGainAsync(ChannelId id, double gain, CancellationToken cancellationToken)
+        => channelAudioSettings.SetGainAsync(id, gain, cancellationToken);
+
+    internal Task SetChannelBalanceAsync(ChannelId id, double balance, CancellationToken cancellationToken)
+        => channelAudioSettings.SetBalanceAsync(id, balance, cancellationToken);
+
     private void HandleChannelVolumeChanged(object? sender, double volume)
     {
-        if (sender is not ChannelViewModel channel)
+        if (terminalFence.IsClosed || Volatile.Read(ref disposeStarted) != 0 ||
+            sender is not ChannelViewModel channel)
             return;
 
-        userSettings.ChannelVolumes[channel.SettingsKey] = volume;
-        PersistUserSettings();
-        TaskObservation.Observe(audioCoordinator.SetGainAsync(channel, volume));
+        TaskObservation.Observe(channelAudioSettings.SetGainAsync(channel.Id, volume));
     }
 
     private void HandleChannelStereoBalanceChanged(object? sender, double balance)
     {
-        if (sender is not ChannelViewModel channel)
+        if (terminalFence.IsClosed || Volatile.Read(ref disposeStarted) != 0 ||
+            sender is not ChannelViewModel channel)
             return;
 
-        userSettings.ChannelStereoBalances[channel.SettingsKey] = balance;
-        PersistUserSettings();
-        TaskObservation.Observe(audioCoordinator.SetBalanceAsync(channel, balance));
+        TaskObservation.Observe(channelAudioSettings.SetBalanceAsync(channel.Id, balance));
     }
+
+    private ValueTask SaveChannelAudioPreferenceAsync(ChannelId id,
+        ChannelReceivePreferenceChange change, CancellationToken cancellationToken)
+        => channelPreferences.SaveAudioAsync(id, change, cancellationToken);
 
     internal Task RestoreSelectedWebStreamsForSessionAsync()
         => webStreamOperator.RestoreSelectedForSessionAsync();
@@ -2794,34 +2489,8 @@ public sealed partial class MainWindowViewModel :
         return true;
     }
 
-    private double GetChannelVolume(ChannelViewModel channel)
-    {
-        return userSettings.ChannelVolumes.TryGetValue(channel.SettingsKey, out double volume)
-            ? volume
-            : 1.0;
-    }
-
-    private double GetChannelStereoBalance(ChannelViewModel channel)
-    {
-        return userSettings.ChannelStereoBalances.TryGetValue(channel.SettingsKey, out double balance)
-            ? balance
-            : 0.0;
-    }
-
     private IAudioBackend CreateReceiveAudioBackend()
         => audioBackendProvider.CreateBackend();
-
-    // Patch audio bypasses operator RX filters; decoder defaults enable some filters,
-    // so every mode needs an explicit bypass configuration.
-    private IVocoderBackend CreatePatchSourceVocoderBackend()
-        => vocoderFactory.Create(Enum.GetValues<VocoderMode>().ToDictionary(
-            mode => mode,
-            _ => new ReceiveAudioProcessingOptions
-            {
-                HighPassFilterEnabled = false,
-                PeakingFilterEnabled = false,
-                CompressorEnabled = false
-            }));
 
     private IVocoderBackend CreateReceiveVocoderBackend()
         => vocoderFactory.Create(Volatile.Read(ref receiveAudioProcessingOptions));
@@ -2864,12 +2533,7 @@ public sealed partial class MainWindowViewModel :
     }
 
     private AudioProcessingMode GetConfiguredAudioProcessingMode()
-        => userSettings.AudioProcessingMode switch
-        {
-            UserSettings.WindowsCommunicationsProcessingMode when OperatingSystem.IsWindows() =>
-                AudioProcessingMode.WindowsCommunications,
-            _ => AudioProcessingMode.DvmConsole
-        };
+        => DesktopSessionAudioPolicy.ResolveProcessingMode(userSettings.AudioProcessingMode, OperatingSystem.IsWindows());
 
     private AudioProcessingMode GetSelectedAudioProcessingMode()
         => SelectedAudioProcessingMode switch
@@ -2900,50 +2564,26 @@ public sealed partial class MainWindowViewModel :
         return true;
     }
 
-    private string? GetChannelOutputDeviceId(ChannelViewModel channel)
+    private string? GetChannelOutputDeviceId(ChannelId channel)
     {
-        if (userSettings.ChannelOutputDeviceIds.TryGetValue(channel.SettingsKey, out string? channelDeviceId))
+        var definition = channelMedia.State(channel).Runtime.Definition;
+        string settingsKey = $"{definition.SystemName}\u001F{definition.Name}";
+        if (userSettings.ChannelOutputDeviceIds.TryGetValue(settingsKey, out string? channelDeviceId))
             return channelDeviceId;
         return userSettings.AudioOutputDeviceId;
     }
 
-    private async Task EnsureRecordingAudioAsync(
-        ChannelViewModel channel,
-        CancellationToken cancellationToken = default)
-    {
-        if (audioCoordinator.IsActive(channel) || receiveSessions.IsRetryPending(channel.Id))
-            return;
+    private Task EnsureRecordingAudioAsync(ChannelViewModel channel, CancellationToken cancellationToken = default)
+        => receiveRuntime.EnsureRecordingAudioAsync(channel.Id, cancellationToken);
 
-        try
+    private Task ReportRecordingDecodeFailureAsync(ChannelId channelId, Exception exception)
+        => RunOnUiThreadAsync(() =>
         {
-            await audioCoordinator.EnsureDecodeAsync(
-                channel,
-                // TAR always needs decoded PCM, even under an operator mute.
-                // The mute policy controls only whether this decoder also owns
-                // a live speaker lane.
-                livePlaybackEnabledWhenCreated: receiveOutputMutePolicy.ShouldEnableLivePlayback(
-                    channel,
-                    isTemporarilySuspended: channel.IsAudioSuspended),
-                cancellationToken).ConfigureAwait(false);
-            receiveAudioWork.Start(channel);
-            receivePipelineTimingReporter.Reset(channel);
-            receiveJitterEventReporter.Reset(channel);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            receiveSessions.RecordFailure(channel.Id);
-            await RunOnUiThreadAsync(() =>
-            {
-                AddDebugLog(DateTimeOffset.Now, "TAR", DebugLogSeverity.Error,
-                    $"TAR decode unavailable on {channel.Name}; selection retained, retrying. {exception}");
-                AudioStatusText = $"TAR decode unavailable for {channel.Name}; retrying: {exception.Message}";
-            }).ConfigureAwait(false);
-        }
-    }
+            string name = ResolveChannel(channelId).Name;
+            AddDebugLog(DateTimeOffset.Now, "TAR", DebugLogSeverity.Error,
+                $"TAR decode unavailable on {name}; selection retained, retrying. {exception}");
+            AudioStatusText = $"TAR decode unavailable for {name}; retrying: {exception.Message}";
+        });
 
     private async Task StopRecordingDecodeIfUnusedAsync(ChannelViewModel channel)
     {
@@ -2953,7 +2593,7 @@ public sealed partial class MainWindowViewModel :
         try
         {
             await receiveAudioWork.StopAsync(channel).ConfigureAwait(false);
-            receiveJitterEventReporter.Reset(channel);
+            receiveDiagnostics.ResetJitter(channel);
             await audioCoordinator.StopAsync(channel).ConfigureAwait(false);
         }
         catch (ObjectDisposedException) when (Volatile.Read(ref disposeStarted) != 0)
@@ -2971,7 +2611,7 @@ public sealed partial class MainWindowViewModel :
     }
 
     private void HandleDecodedSamples(
-        ChannelViewModel channel,
+        ChannelId channel,
         uint streamId,
         uint sourceId,
         ReadOnlyMemory<short> samples)
@@ -2980,58 +2620,8 @@ public sealed partial class MainWindowViewModel :
         // source. Do not feed the same PCM a second time from Listen or TAR.
         if (!patchSourceDecode.IsActive(channel))
             patchForwarding.ObserveDecodedSamples(channel, streamId, sourceId, samples);
-        ChannelViewModel? recordingTarget = ResolveReceiveRecordingTarget(channel);
-        if (recordingTarget is not null)
-        {
-            ReceiveCallEpisodeSnapshot? episode = ResolveReceiveEpisode(channel, streamId);
-            callRecordings.WriteEpisodeSamples(
-                recordingTarget,
-                episode?.PrimaryStreamId ?? streamId,
-                streamId,
-                sourceId,
-                samples,
-                episode?.EpisodeId);
-        }
+        recordingRuntime.ObserveDecoded(channel, streamId, sourceId, samples);
         LogVocoderAudioLevel(channel, samples.Span, ChannelAudioDirection.Receive, streamId);
-    }
-
-    private ChannelViewModel? ResolveReceiveRecordingTarget(ChannelViewModel decodedChannel)
-        => receiveRecordingTargets.Resolve(decodedChannel);
-
-    private uint ResolveReceiveEpisodeStreamId(ChannelViewModel channel, uint physicalStreamId)
-        => ResolveReceiveEpisode(channel, physicalStreamId)?.PrimaryStreamId ?? physicalStreamId;
-
-    private ReceiveCallEpisodeSnapshot? ResolveReceiveEpisode(
-        ChannelViewModel channel,
-        uint physicalStreamId)
-        => receiveCallEpisodes.TryGet(
-            channel.Definition.SystemName,
-            ProtocolFor(channel),
-            physicalStreamId,
-            out ReceiveCallEpisodeSnapshot? episode)
-            ? episode
-            : null;
-
-    private ReceivePlaybackEpisode ResolveReceivePlaybackEpisode(
-        ChannelId channelId,
-        IRadioMediaFrame traffic)
-    {
-        ChannelViewModel channel = ResolveChannel(channelId);
-        return receiveCallEpisodes.TryGet(
-            channel.Definition.SystemName,
-            ProtocolFor(channel),
-            traffic.StreamId,
-            out ReceiveCallEpisodeSnapshot? episode) && episode is not null
-            ? new ReceivePlaybackEpisode(
-                episode.EpisodeId,
-                episode.PrimaryStreamId,
-                traffic.StreamId,
-                RetainUntilEpisodeCompletion: true)
-            : new ReceivePlaybackEpisode(
-                -checked((long)traffic.StreamId),
-                traffic.StreamId,
-                traffic.StreamId,
-                RetainUntilEpisodeCompletion: false);
     }
 
     private void HandlePresentedReceiveSamples(
@@ -3040,14 +2630,7 @@ public sealed partial class MainWindowViewModel :
         ReadOnlyMemory<short> samples,
         TimeSpan presentationDelay)
     {
-        bool meterWasIdle = audioMeterPipeline.Observe(
-            channelId,
-            streamId,
-            samples.Span,
-            ChannelAudioDirection.Receive,
-            presentationDelay);
-        if (meterWasIdle)
-            StartAudioMeterTimer();
+        ObserveAudioMeter(channelId, streamId, samples.Span, ChannelAudioDirection.Receive, presentationDelay);
     }
 
     private ChannelViewModel ResolveChannel(ChannelId channelId)
@@ -3065,26 +2648,18 @@ public sealed partial class MainWindowViewModel :
     }
 
     private void HandleTransmitSamples(
-        ChannelViewModel channel,
+        ChannelId channel,
         uint streamId,
         uint sourceId,
         ReadOnlySpan<short> samples)
     {
-        if (channel.IsRecordingEnabled)
-            callRecordings.WriteTransmitSamples(channel, streamId, sourceId, samples);
-        if (audioMeterPipeline.Observe(
-                channel,
-                streamId,
-                samples,
-                ChannelAudioDirection.Transmit))
-        {
-            StartAudioMeterTimer();
-        }
+        transmitState.ObserveSamples(channel, streamId, sourceId, samples);
+        ObserveAudioMeter(channel, streamId, samples, ChannelAudioDirection.Transmit);
         LogVocoderAudioLevel(channel, samples, ChannelAudioDirection.Transmit, streamId);
     }
 
     private void LogVocoderAudioLevel(
-        ChannelViewModel channel,
+        ChannelId channel,
         ReadOnlySpan<short> samples,
         ChannelAudioDirection direction,
         uint streamId = 0)
@@ -3092,91 +2667,68 @@ public sealed partial class MainWindowViewModel :
         if (!verboseDiagnosticLogging || samples.IsEmpty)
             return;
 
-        IReadOnlyList<PcmLevelMeasurement> measurements;
-        lock (audioLevelLogSync)
-        {
-            var key = (channel, direction);
-            if (!audioLevelLogs.TryGetValue(key, out PcmLevelLogState? state))
-            {
-                state = new PcmLevelLogState(streamId);
-                audioLevelLogs.Add(key, state);
-            }
-            else if (streamId != 0 && state.StreamId != streamId)
-            {
-                state.Reset(streamId);
-            }
-
-            measurements = state.Levels.Observe(samples);
-            if (measurements.Count == 0)
-                return;
-        }
-
+        IReadOnlyList<PcmLevelMeasurement> measurements = audioLevelLogs.Observe(channel, direction, streamId, samples);
+        if (measurements.Count == 0) return;
+        var definition = channelMedia.State(channel).Runtime.Definition;
         DateTimeOffset now = DateTimeOffset.Now;
         string streamText = streamId == 0 ? string.Empty : $", stream {streamId}";
         foreach (PcmLevelMeasurement measurement in measurements)
         {
             AddDebugLog(
                 now,
-                channel.Definition.SystemName,
+                definition.SystemName,
                 DebugLogSeverity.Debug,
-                $"Vocoder {direction.ToString().ToUpperInvariant()} {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
-                $"on {channel.Name}: PCM RMS {measurement.RmsDbfs:0.0} dBFS, " +
+                $"Vocoder {direction.ToString().ToUpperInvariant()} {ChannelProtocolMediaMapper.ToTrafficProtocol(definition.Protocol).ToString().ToUpperInvariant()} " +
+                $"on {definition.Name}: PCM RMS {measurement.RmsDbfs:0.0} dBFS, " +
                 $"peak {measurement.PeakDbfs:0.0} dBFS over " +
                 $"{FormatAudioLevelDuration(measurement.SampleCount)}{streamText}.");
         }
     }
 
     internal static string FormatAudioLevelDuration(long sampleCount)
-    {
-        if (sampleCount < 0)
-            throw new ArgumentOutOfRangeException(nameof(sampleCount));
-        return $"{sampleCount / (double)VoiceSampleRate:0.0##} s";
-    }
+        => TransmitAudioTransitionController.FormatAudioLevelDuration(sampleCount);
 
     private void HandleAudioMeterTick(object? sender, EventArgs e)
     {
-        IReadOnlyList<ChannelAudioMeterUpdate> updates = audioMeterPipeline.Advance();
-        foreach (ChannelAudioMeterUpdate update in audioMeterCoalescer.CoalesceReceive(updates))
+        if (preparedSession is { } prepared) { prepared.AdvanceMeters(); return; }
+        lock (audioMeterSync)
         {
-            ResolveChannel(update.ChannelId).SetPresentedReceiveAudioLevel(
-                update.Level,
-                update.PeakLevel);
+            if (terminalFence.IsClosed || Volatile.Read(ref disposeStarted) != 0) return;
+            audioMeterPipeline.Advance();
+            if (!audioMeterPipeline.HasActivity) audioMeterTimer?.Stop();
         }
-
-        foreach (ChannelAudioMeterUpdate update in updates.Where(candidate =>
-                     candidate.Direction == ChannelAudioDirection.Transmit))
-        {
-            ResolveChannel(update.ChannelId).SetAudioLevel(
-                update.Level,
-                update.Direction,
-                update.StreamId,
-                update.PeakLevel);
-        }
-
-        if (!audioMeterPipeline.HasActivity)
-            audioMeterTimer.Stop();
     }
 
-    private void StartAudioMeterTimer()
-        => TaskObservation.Observe(RunOnUiThreadAsync(audioMeterTimer.Start));
-
-    private void ObservePatchDecodedSamples(
-        ChannelViewModel channel,
-        uint streamId,
-        uint sourceId,
-        ReadOnlyMemory<short> samples)
+    private void ObserveAudioMeter(ChannelId channel, uint stream, ReadOnlySpan<short> samples,
+        ChannelAudioDirection direction, TimeSpan presentationDelay = default)
     {
-        patchForwarding.ObserveDecodedSamples(channel, streamId, sourceId, samples);
+        if (preparedSession is { } prepared)
+        {
+            prepared.ObserveMeter(channel, stream, samples, direction, presentationDelay);
+            return;
+        }
+        // Observe/start and the final tick/stop share admission, so a new PCM
+        // window cannot be stranded by a simultaneous transition to idle.
+        lock (audioMeterSync)
+        {
+            if (terminalFence.IsClosed || Volatile.Read(ref disposeStarted) != 0) return;
+            if (audioMeterPipeline.Observe(channel, stream, samples, direction, presentationDelay))
+                audioMeterTimer?.Start();
+        }
     }
 
     private async Task SyncPatchSourceDecodeAsync(CancellationToken cancellationToken = default)
     {
+        if (preparedSession is { } prepared)
+        {
+            await prepared.SynchronizePatchSourcesAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
         try
         {
             await patchSourceDecode
                 .ApplyChannelsAsync(
-                    GetActivePatchSourceChannels()
-                        .Select(channel => (ReceiveChannelDescriptor)channel),
+                    GetActivePatchSourceChannels(),
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -3191,51 +2743,9 @@ public sealed partial class MainWindowViewModel :
         }
     }
 
-    private ChannelViewModel[] GetActivePatchSourceChannels()
-        => PatchSourceSelectionPolicy.SelectEnabledSources(PatchGroups);
-
-    private sealed class PcmLevelLogState(uint streamId)
-    {
-        public uint StreamId { get; private set; } = streamId;
-        public PcmLevelWindowAccumulator Levels { get; } =
-            new(VocoderAudioLevelWindowSamples);
-
-        public void Reset(uint nextStreamId)
-        {
-            StreamId = nextStreamId;
-            Levels.Reset();
-        }
-    }
-
-    private async Task ProcessPatchSourceAsync(
-        ChannelViewModel channel,
-        FneTrafficFrame traffic,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            await patchSourceReceivePipeline
-                .ProcessAsync(channel, traffic, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            PostToUi(() =>
-                AudioStatusText = $"Patch source decode stopped: {exception.Message}");
-        }
-    }
-
-    private bool ShouldRecordSource(ChannelViewModel channel, uint sourceId)
-    {
-        return !userSettings.RecordingIgnoredSubscriberIds.TryGetValue(
-                channel.SettingsKey,
-                out List<uint>? ignoredSubscriberIds) ||
-            !ignoredSubscriberIds.Contains(sourceId);
-    }
+    internal ReceiveChannelDescriptor[] GetActivePatchSourceChannels()
+        => PatchSourceSelectionPolicy.SelectEnabledSources(patchRouting.SavedGroups)
+            .Select(channelMedia.DescribeReceive).ToArray();
 
     private void HandleRecordingFaulted(ChannelViewModel channel, Exception exception)
     {
@@ -3304,19 +2814,30 @@ public sealed partial class MainWindowViewModel :
         object? sender,
         RecordingPlaybackStateChangedEventArgs e)
     {
+        ChannelId? channel = e.IsPlaying && e.Identity is { } identity
+            ? RecordingChannelResolver.Find(systemChannelIds.Select(id => channelMedia.State(id).Runtime.Definition), identity)
+            : null;
+        var playback = RecordingPlaybackState.Apply(e.RecordingId, e.IsPlaying, channel);
+        PresentRecordingPlaybackStateChanged(e, playback);
+    }
+
+    private void PresentRecordingPlaybackStateChanged(
+        RecordingPlaybackStateChangedEventArgs e, RecordingPlaybackChannelSnapshot playback)
+    {
+        if (!e.IsPlaying && playback.Recording is not null) return;
         long queuedAt = Stopwatch.GetTimestamp();
         sessionUiCallbacks.Post(() =>
         {
+            // A queued start/stop must not overwrite a newer playback transition.
+            if (RecordingPlaybackState.Snapshot.Revision != playback.Revision) return;
             long applyingAt = Stopwatch.GetTimestamp();
-            recordingPlaybackChannelId = e.IsPlaying
-                ? ResolveRecordingPlaybackChannel(e)
-                : null;
+            if (e.IsPlaying && e.Identity is null)
+                RecordingPlaybackState.ResolveChannel(playback.Revision, ResolveRecordingPlaybackChannel(e));
             foreach (CallHistoryEntry entry in callHistory.Entries)
             {
                 entry.SetRecordingPlaying(e.IsPlaying &&
                     RecordingDisplayIdentity.Matches(entry.Recording, e.RecordingId, e.Path));
             }
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(recordingPlaybackChannelId)));
             uiLatencyReporter.Observe(
                 e.IsPlaying ? UiLatencyCategory.RecordingPlay : UiLatencyCategory.RecordingStop,
                 Stopwatch.GetElapsedTime(queuedAt, applyingAt),
@@ -3327,6 +2848,9 @@ public sealed partial class MainWindowViewModel :
 
     private ChannelId? ResolveRecordingPlaybackChannel(RecordingPlaybackStateChangedEventArgs playback)
     {
+        IEnumerable<DvmConsole.Core.Runtime.ChannelRuntimeDefinition> channels = Systems.SelectMany(system => system.Channels)
+            .Select(channel => channel.Definition);
+        if (playback.Identity is { } identity) return RecordingChannelResolver.Find(channels, identity);
         CallRecordingMetadata? recording = recordingEntries.FirstOrDefault(candidate =>
             RecordingDisplayIdentity.Matches(candidate, playback.RecordingId, playback.Path));
         recording ??= callHistory.Entries
@@ -3336,19 +2860,7 @@ public sealed partial class MainWindowViewModel :
         if (recording is null)
             return null;
 
-        ChannelViewModel? channel = Systems
-            .Where(system => system.Name.Equals(recording.SystemName, StringComparison.OrdinalIgnoreCase))
-            .SelectMany(system => system.Channels)
-            .FirstOrDefault(candidate =>
-                (string.IsNullOrWhiteSpace(recording.Protocol) ||
-                 candidate.Definition.Protocol.ToString().Equals(
-                     recording.Protocol,
-                     StringComparison.OrdinalIgnoreCase)) &&
-                (recording.TalkgroupId is not uint destinationId ||
-                 candidate.Definition.DestinationId == destinationId) &&
-                (string.IsNullOrWhiteSpace(recording.ChannelName) ||
-                 candidate.Name.Equals(recording.ChannelName, StringComparison.OrdinalIgnoreCase)));
-        return channel is null ? null : new ChannelId(channel.SessionId);
+        return RecordingChannelResolver.Find(channels, recording.ToCallIdentity());
     }
 
     private void RefreshRecordings(bool pruneExpired = false)
@@ -3731,16 +3243,25 @@ public sealed partial class MainWindowViewModel :
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
     }
 
-    private void SetStatusField(
-        ref string field,
-        string value,
-        [CallerMemberName] string? propertyName = null)
+    private void HandleSessionStatusChanged(object? sender, EventArgs args)
     {
-        if (string.Equals(field, value, StringComparison.Ordinal))
-            return;
-        field = value;
-        compactStatusText = value;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        if (uiDispatcher.CheckAccess()) PublishSessionStatus();
+        else statusRefresh.Schedule();
+    }
+
+    private void PublishSessionStatus()
+    {
+        if (terminalFence.IsClosed || Volatile.Read(ref disposeStarted) != 0) return;
+        ConsoleSessionStatusSnapshot current = SessionStatus.Snapshot;
+        ConsoleSessionStatusSnapshot previous = presentedStatus;
+        if (ReferenceEquals(current, previous)) return;
+        presentedStatus = current;
+        if (current.Console != previous.Console)
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusText)));
+        if (current.Audio != previous.Audio)
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioStatusText)));
+        if (current.Transmit != previous.Transmit)
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitStatusText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CompactStatusText)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusDetailsText)));
     }
@@ -3776,12 +3297,8 @@ public sealed partial class MainWindowViewModel :
 
     private void HandleClockTick(object? sender, EventArgs e)
     {
+        if (preparedSession is null) historyDiagnostics.ExpireSubscriberCommands();
         RefreshClock();
-        if (networkDisabledDemo)
-            return;
-
-        ExpireStaleReceiveStates(DateTimeOffset.UtcNow);
-        receiveSessionReconciler.Request();
     }
 
     private void HandleConnectionDiagnosticsTick(object? sender, EventArgs e)
@@ -3795,11 +3312,12 @@ public sealed partial class MainWindowViewModel :
 
     internal void ExpireStaleReceiveStates(DateTimeOffset now)
     {
-        bool callHistoryChanged = false;
-        callHistoryChanged = ExpireStaleReceiveRoutes(now) || callHistoryChanged;
-        callHistoryChanged = receiveEpisodeRetirement.Advance(now) || callHistoryChanged;
-        if (callHistoryChanged)
-            NotifyCallHistoryChanged();
+        if (preparedSession is { } prepared) { prepared.AdvanceMaintenance(now); return; }
+        lock (receiveLifecycleSync)
+        {
+            ExpireStaleReceiveRoutes(now);
+            if (receiveEpisodeRetirement.Advance(now)) PostToUi(NotifyCallHistoryChanged);
+        }
     }
 
     private void ReportReceiveEpisodeCompletionFailure(

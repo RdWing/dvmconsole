@@ -1,9 +1,21 @@
 # Alert tones
 
-The console supports three built-in alert tones, custom alert audio,
-generated tones, DTMF, and QCII paging.
+Send a built-in alert, create your own tone pattern, or use a saved audio file.
+Console NEO includes three built-in alert tones, generated tones, DTMF, and QCII
+paging.
 
-Use them for pages, alerts, and channel-hold tone behavior.
+On iPhone and iPad, open **Settings → Tones and Paging**. The console bell
+shortcut sends its assigned alert to ALERT-enabled channels. Desktop has three
+assignable toolbar shortcuts; the sections below describe those desktop controls.
+
+## Transfer saved patterns
+
+Use the tone editor's **Export tone patterns** control to save
+`console-tone-patterns.json`. On the receiving desktop, iPhone or iPad, use
+**Import tone patterns**, review the imported presets, then save your edits. On
+mobile, use the import and export icons in the toolbar. These files transfer
+tone patterns; import custom audio assets separately and check shortcut
+assignments on the receiving device before sending.
 
 ---
 
@@ -115,3 +127,6 @@ Use the confirmation prompt to avoid accidental removal.
 - QCII page audio is transmitted to all `PAGE`-armed resources.
 - Alert tone sends do not bypass talkgroup validation.
 - A custom asset is copied into application settings storage; the original source file is not required after import.
+
+Saved tone-pattern import/export preserves patterns longer than 30 seconds. The
+30-second imported-audio limit applies to audio files, not pattern exchange.

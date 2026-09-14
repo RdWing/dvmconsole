@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+  <ItemGroup>
+    <AvaloniaResource Include="../../repo/brand/dvm-console-neo-mark-1024.png" Link="Assets/NeoMark.png" />
+    <PackageReference Include="Markdown.Avalonia.Tight" Version="11.0.3" />
+    <InternalsVisibleTo Include="DvmConsole.Desktop.RenderTests" />
+    <ProjectReference Include="../DvmConsole.Presentation/DvmConsole.Presentation.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../SharedHost/TonePatternFilePicker.cs" Link="Host/TonePatternFilePicker.cs" />
+  </ItemGroup>
+</Project>

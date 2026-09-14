@@ -48,6 +48,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertTrue(uses_lines)
         for line in uses_lines:
             with self.subTest(line=line):
+                if line.startswith("uses: ./"):
+                    # Local workflows resolve from the caller's commit.
+                    self.assertEqual("uses: ./.github/workflows/ios.yml", line)
+                    self.assertTrue((REPOSITORY / ".github/workflows/ios.yml").is_file())
+                    continue
                 match = re.fullmatch(r"uses: ([^@\s]+)@([0-9a-f]{40}) # (\S+)", line)
                 self.assertIsNotNone(match)
                 action, commit, reviewed_ref = match.groups()

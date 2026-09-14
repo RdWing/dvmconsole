@@ -11,6 +11,33 @@ namespace DvmConsole.Application.Tests;
 public sealed class RecordingPlaybackCoordinatorTests
 {
     [Fact]
+    public async Task PlaybackPublishesStoreIdentityAndClearsAtCompletion()
+    {
+        var id = RecordingId.New();
+        var identity = new RecordingCallIdentity(DateTimeOffset.UnixEpoch, "System", "Dispatch", "RX", "P25", 42, 100, 9, null);
+        var store = new FakeRecordingStore(id, CreateWave([1200, 1200])) { Identity = identity };
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = new List<RecordingPlaybackStateChangedEventArgs>();
+        await using var services = new ConsoleSessionServices();
+        var graph = new ConsoleOperationalRuntime(services, []);
+        graph.RegisterRecordingPlaybackOwnership("history-playback");
+        graph.InitializeRecordingPlayback(store, () => new FakeAudioBackend(), () => "default");
+        var coordinator = graph.RecordingPlayback!;
+        coordinator.PlaybackStateChanged += (_, state) =>
+        {
+            events.Add(state);
+            if (!state.IsPlaying) finished.TrySetResult();
+        };
+        await coordinator.StartAsync(id);
+        await finished.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(identity, events[0].Identity);
+        Assert.True(events[0].IsPlaying);
+        Assert.False(events[^1].IsPlaying);
+        Assert.Null(events[^1].Identity);
+        Assert.False(coordinator.IsPlaying(id));
+    }
+
+    [Fact]
     public async Task StartupTimingSeparatesSlowNotificationsFromTheAudioWrite()
     {
         var id = RecordingId.New();
@@ -168,6 +195,9 @@ public sealed class RecordingPlaybackCoordinatorTests
 
     private sealed class FakeRecordingStore(RecordingId id, byte[] content) : IRecordingStore
     {
+        public RecordingCallIdentity? Identity { get; init; }
+        public async ValueTask<RecordingPlaybackSource> OpenPlaybackAsync(RecordingId recordingId, CancellationToken cancellationToken = default)
+            => new(await OpenReadAsync(recordingId, cancellationToken), Identity);
         public RecordingId? OpenedId { get; private set; }
 
         public ValueTask<IRecordingWriteHandle> CreateAsync(

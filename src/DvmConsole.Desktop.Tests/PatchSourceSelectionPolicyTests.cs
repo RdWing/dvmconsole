@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 using DvmConsole.Core.Configuration;
+using DvmConsole.Application;
 using DvmConsole.Desktop;
 using DvmConsole.Presentation;
 using Xunit;
@@ -22,10 +23,10 @@ public sealed class PatchSourceSelectionPolicyTests
             [alpha, beta]);
         group.SelectedSource = beta;
 
-        ChannelViewModel selected = Assert.Single(
-            PatchSourceSelectionPolicy.SelectEnabledSources([group]));
+        ChannelId selected = Assert.Single(
+            PatchSourceSelectionPolicy.SelectEnabledSources([Snapshot(group)]));
 
-        Assert.Same(beta.Channel, selected);
+        Assert.Equal(((ChannelViewModel)beta.Channel).Id, selected);
     }
 
     [Fact]
@@ -45,10 +46,10 @@ public sealed class PatchSourceSelectionPolicyTests
             [Member("Gamma", 300, selected: true)],
             isMultiSelect: true);
 
-        ChannelViewModel[] selected = PatchSourceSelectionPolicy.SelectEnabledSources(
-            [patch, multiSelect]);
+        ChannelId[] selected = PatchSourceSelectionPolicy.SelectEnabledSources(
+            [Snapshot(patch), Snapshot(multiSelect)]);
 
-        Assert.Equal([alpha.Channel, beta.Channel], selected);
+        Assert.Equal([((ChannelViewModel)alpha.Channel).Id, ((ChannelViewModel)beta.Channel).Id], selected);
     }
 
     [Fact]
@@ -82,6 +83,11 @@ public sealed class PatchSourceSelectionPolicyTests
         Assert.False(receiveOnly.IsSelectionEnabled);
         Assert.Contains("members cannot transmit", group.GetMembershipValidationError());
     }
+
+    private static ConsoleGroupDefinitionSnapshot Snapshot(PatchGroupEditorViewModel group)
+        => new(group.Name, group.IsMultiSelect,
+            [.. group.GetMembersInRoutingOrder().Select(member => ((ChannelViewModel)member.Channel).Id)],
+            group.IsEnabled, group.IsOneWay, 0);
 
     private static PatchMemberEditorViewModel Member(
         string systemName,

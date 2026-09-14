@@ -4,6 +4,7 @@
 #include "dvmaudio.h"
 #include "dvm_capture_signal.h"
 #include "dvm_pcm_ring.h"
+#include "dvm_playback_continuity.h"
 
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreAudio/CoreAudio.h>
@@ -30,45 +31,6 @@ struct DvmAudioStream {
     _Atomic uint64_t starved_samples;
     _Atomic uint64_t output_callback_count;
 };
-
-static void observe_playback_starvation(
-    _Atomic int32_t *continuity_expected,
-    _Atomic uint64_t *pending_starved_samples,
-    uint32_t missing_samples)
-{
-    if (missing_samples == 0 ||
-        !atomic_load_explicit(continuity_expected, memory_order_acquire))
-        return;
-    atomic_fetch_add_explicit(
-        pending_starved_samples,
-        missing_samples,
-        memory_order_relaxed);
-}
-
-static void resume_playback_continuity(
-    _Atomic int32_t *continuity_expected,
-    _Atomic uint64_t *pending_starved_samples,
-    _Atomic uint64_t *starved_samples)
-{
-    int32_t was_expected = atomic_exchange_explicit(
-        continuity_expected,
-        1,
-        memory_order_acq_rel);
-    uint64_t pending = atomic_exchange_explicit(
-        pending_starved_samples,
-        0,
-        memory_order_acq_rel);
-    if (was_expected && pending > 0)
-        atomic_fetch_add_explicit(starved_samples, pending, memory_order_relaxed);
-}
-
-static void end_playback_continuity(
-    _Atomic int32_t *continuity_expected,
-    _Atomic uint64_t *pending_starved_samples)
-{
-    atomic_store_explicit(continuity_expected, 0, memory_order_release);
-    atomic_store_explicit(pending_starved_samples, 0, memory_order_release);
-}
 
 static int32_t stream_channels(AudioDeviceID device, AudioObjectPropertyScope scope)
 {

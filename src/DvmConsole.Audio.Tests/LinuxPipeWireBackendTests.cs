@@ -79,6 +79,7 @@ public sealed class LinuxPipeWireBackendTests
 
         await playback.WriteAsync(new short[] { 1, 2, 3, 4, 5 });
 
+        await playback.FlushAsync();
         Assert.Equal([1, 2, 3, 4, 5], api.WrittenSamples);
         Assert.Equal(80, playback.QueuedSamples);
         var continuity = Assert.IsAssignableFrom<IAudioPlaybackContinuityDiagnostics>(playback);

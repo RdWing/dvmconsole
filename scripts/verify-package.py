@@ -20,14 +20,17 @@ def expected_files(publish_root: pathlib.Path, rid: str) -> set[str]:
     }
     if rid.startswith("osx-"):
         root = "DVMConsole.app"
-        mapped = {
-            "DVM Console" if relative == "DvmConsole" else relative
-            for relative in published
-        }
+        mapped = set()
+        for relative in published:
+            if relative.startswith(("Documentation/", "Demo/")):
+                mapped.add(f"{root}/Contents/Resources/{relative}")
+            else:
+                name = "DVM Console" if relative == "DvmConsole" else relative
+                mapped.add(f"{root}/Contents/MacOS/{name}")
         return {
             f"{root}/Contents/Info.plist",
             f"{root}/Contents/Resources/DVMConsole.icns",
-            *(f"{root}/Contents/MacOS/{relative}" for relative in mapped),
+            *mapped,
         }
     return {f"DVMConsole-{rid}/{relative}" for relative in published}
 

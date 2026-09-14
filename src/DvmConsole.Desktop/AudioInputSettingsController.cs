@@ -76,35 +76,31 @@ internal sealed class AudioInputSettingsController
 
     public void SavePreset()
     {
-        if (!TryParseBounded(workspace.AudioInputGainText, 0.25, 3.0, out double gain) ||
+        if (!TryParseBounded(workspace.AudioInputGainText, 0.25, 4.0, out double gain) ||
             !TryParseBounded(workspace.AudioInputLowGainText, -12, 12, out double lowGainDb) ||
             !TryParseBounded(workspace.AudioInputMidGainText, -12, 12, out double midGainDb) ||
             !TryParseBounded(workspace.AudioInputHighGainText, -12, 12, out double highGainDb))
         {
-            session.SetAudioStatus("Microphone presets require gain 0.25–3.0 and EQ values from -12 to 12 dB.");
+            session.SetAudioStatus("Microphone presets require gain 0.25–4.0 and EQ values from -12 to 12 dB.");
             return;
         }
 
-        string name = string.IsNullOrWhiteSpace(workspace.AudioInputPresetNameText)
-            ? $"Mic preset {workspace.MutableAudioInputPresets.Count + 1}"
-            : workspace.AudioInputPresetNameText.Trim();
-        if (name.Length > 80)
+        AudioInputPreset definition;
+        try
         {
-            session.SetAudioStatus("Microphone preset names must be 80 characters or fewer.");
+            definition = AudioInputPreset.Create(workspace.AudioInputPresetNameText,
+                workspace.MutableAudioInputPresets.Count, gain, lowGainDb, midGainDb, highGainDb);
+        }
+        catch (ArgumentException exception)
+        {
+            session.SetAudioStatus(exception.Message);
             return;
         }
-
-        var next = new AudioInputPresetViewModel(new AudioInputPresetSetting
-        {
-            Name = name,
-            Gain = gain,
-            LowGainDb = lowGainDb,
-            MidGainDb = midGainDb,
-            HighGainDb = highGainDb
-        });
+        string name = definition.Name;
+        var next = new AudioInputPresetViewModel(definition.ToSetting());
         int existingIndex = workspace.MutableAudioInputPresets
             .Select((preset, index) => (preset, index))
-            .Where(item => item.preset.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            .Where(item => AudioInputPreset.NamesEqual(item.preset.Name, name))
             .Select(item => item.index)
             .DefaultIfEmpty(-1)
             .First();
@@ -167,7 +163,7 @@ internal sealed class AudioInputSettingsController
 
         if (!TryCaptureDraft(out Draft? draft) || draft is null)
         {
-            session.SetAudioStatus("Microphone settings require a device ID, gain 0.25–3.0, AGC target -40 to -12 dBFS, and EQ values from -12 to 12 dB.");
+            session.SetAudioStatus("Microphone settings require a device ID, gain 0.25–4.0, AGC target -40 to -12 dBFS, and EQ values from -12 to 12 dB.");
             return;
         }
 
@@ -244,7 +240,7 @@ internal sealed class AudioInputSettingsController
         string outputDeviceId = workspace.AudioOutputDeviceIdText.Trim();
         if (inputDeviceId.Length is 0 or > 256 ||
             outputDeviceId.Length is 0 or > 256 ||
-            !TryParseBounded(workspace.AudioInputGainText, 0.25, 3.0, out double gain) ||
+            !TryParseBounded(workspace.AudioInputGainText, 0.25, 4.0, out double gain) ||
             !TryParseBounded(workspace.AudioInputAgcTargetDbfsText, -40, -12, out double agcTargetDbfs) ||
             !TryParseBounded(workspace.AudioInputLowGainText, -12, 12, out double lowGainDb) ||
             !TryParseBounded(workspace.AudioInputMidGainText, -12, 12, out double midGainDb) ||

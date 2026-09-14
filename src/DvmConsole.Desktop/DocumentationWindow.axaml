@@ -3,6 +3,7 @@
 
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ctxt="clr-namespace:ColorTextBlock.Avalonia;assembly=ColorTextBlock.Avalonia"
         xmlns:md="clr-namespace:Markdown.Avalonia;assembly=Markdown.Avalonia"
         x:Class="DvmConsole.Desktop.DocumentationWindow"
         Title="DVM Console Documentation" Width="1080" Height="720" MinWidth="760" MinHeight="480"
@@ -19,7 +20,15 @@
       <TreeView x:Name="documentTree" SelectionChanged="HandleDocumentSelectionChanged" />
     </Border>
     <Border Grid.Row="1" Grid.Column="2" Background="{DynamicResource CardBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" BorderThickness="1" CornerRadius="6" Padding="10">
-      <md:MarkdownScrollViewer x:Name="markdownViewer" MarkdownStyleName="FluentTheme" />
+      <md:MarkdownScrollViewer x:Name="markdownViewer" Classes="help-reader" MarkdownStyleName="FluentTheme">
+        <md:MarkdownScrollViewer.Styles>
+          <Style Selector="md|MarkdownScrollViewer.help-reader ctxt|CTextBlock"><Setter Property="Margin" Value="0,8"/><Setter Property="LineSpacing" Value="3"/></Style>
+          <Style Selector="md|MarkdownScrollViewer.help-reader ctxt|CTextBlock.Heading1, md|MarkdownScrollViewer.help-reader ctxt|CTextBlock.Heading2, md|MarkdownScrollViewer.help-reader ctxt|CTextBlock.Heading3, md|MarkdownScrollViewer.help-reader ctxt|CTextBlock.Heading4">
+            <Setter Property="Margin" Value="0,20,0,10"/>
+          </Style>
+          <Style Selector="md|MarkdownScrollViewer.help-reader ctxt|CTextBlock.ListMarker"><Setter Property="Margin" Value="0,8,5,8"/></Style>
+        </md:MarkdownScrollViewer.Styles>
+      </md:MarkdownScrollViewer>
     </Border>
   </Grid>
 </Window>

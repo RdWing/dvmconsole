@@ -107,6 +107,14 @@ public sealed class PcmWavFileWriter : IDisposable, IAsyncDisposable
         }
     }
 
+    /// <summary>Publishes current lengths without closing the active recording.</summary>
+    public void Checkpoint()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        WriteHeader((uint)dataBytes);
+        stream.Flush();
+    }
+
     public ValueTask DisposeAsync()
     {
         Dispose();

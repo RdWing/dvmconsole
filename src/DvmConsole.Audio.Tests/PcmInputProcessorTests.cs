@@ -32,6 +32,19 @@ public sealed class PcmInputProcessorTests
         Assert.Equal([short.MinValue, -2_000, 2_000, short.MaxValue], output);
     }
 
+    [Theory]
+    [InlineData(-12)]
+    [InlineData(12)]
+    public void MicGainSupportsBothTwelveDecibelEndpoints(double db)
+    {
+        double gain = Math.Pow(10, db / 20);
+        var processor = new PcmInputProcessor(new AudioInputProcessingOptions { Gain = gain });
+        short[] output = new short[2];
+        processor.Process(new short[] { -1000, 1000 }, output);
+        Assert.Equal((short)Math.Round(-1000 * gain), output[0]);
+        Assert.Equal((short)Math.Round(1000 * gain), output[1]);
+    }
+
     [Fact]
     public async Task DefaultCaptureProcessingForwardsTheOwnedSourceBuffer()
     {
@@ -131,7 +144,7 @@ public sealed class PcmInputProcessorTests
 
         Assert.Equal("microphone-1", normalized.DeviceId);
         Assert.Equal(-40, normalized.AgcTargetDbfs);
-        Assert.Equal(3, normalized.Gain);
+        Assert.Equal(4, normalized.Gain);
         Assert.Equal(-12, normalized.LowGainDb);
         Assert.Equal(0, normalized.MidGainDb);
         Assert.Equal(12, normalized.HighGainDb);

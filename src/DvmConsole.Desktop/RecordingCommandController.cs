@@ -10,7 +10,7 @@ namespace DvmConsole.Desktop;
 internal interface IRecordingCommandSession
 {
     bool TryGetRecordingPath(CallRecordingMetadata metadata, out string recordingPath);
-    Task StartPlaybackAsync(RecordingId? recordingId, string recordingPath);
+    Task StartPlaybackAsync(RecordingId? recordingId, string recordingPath, RecordingCallIdentity identity);
     Task StopPlaybackAsync();
     Task StopPlaybackIfActiveAsync(RecordingId? recordingId, string recordingPath);
     bool DeleteRecording(CallRecordingMetadata metadata);
@@ -77,7 +77,7 @@ internal sealed class RecordingCommandController
         try
         {
             await session
-                .StartPlaybackAsync(RecordingIdentity.Parse(metadata), recordingPath)
+                .StartPlaybackAsync(RecordingIdentity.Parse(metadata), recordingPath, metadata.ToCallIdentity())
                 .ConfigureAwait(false);
             await PublishStatusAsync(
                 $"Playing: {RecordingPlaybackText.Describe(metadata.ChannelName, metadata.UtcStartTime)}")

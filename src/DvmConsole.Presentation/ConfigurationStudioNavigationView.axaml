@@ -37,7 +37,7 @@
                     SelectedItem="{Binding SelectedHierarchyNode, Mode=TwoWay}">
             <TreeView.ItemTemplate>
               <TreeDataTemplate x:DataType="presentation:IConfigurationHierarchyNode" ItemsSource="{Binding Children}">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="7" MinHeight="25">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="7" MinHeight="25" Background="Transparent" Tapped="HandleHierarchyTapped">
                   <TextBlock VerticalAlignment="Center" Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
                   <TextBlock Grid.Column="1" Classes="caption" VerticalAlignment="Center" Text="{Binding CountText}" />
                 </Grid>

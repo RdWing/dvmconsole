@@ -18,7 +18,15 @@ internal sealed class ConfigurationStudioPreviewState
     private readonly Dictionary<ChannelConfiguration, WidgetPositionSetting> draftPositions = [];
     private readonly Dictionary<
         ChannelConfiguration,
-        (string Signature, IConfigurationChannelPreviewViewModel Preview)> previewCache = [];
+        (string Signature, bool DarkMode, IConfigurationChannelPreviewViewModel Preview)> previewCache = [];
+    private bool? hostDarkMode;
+
+    public bool SetHostAppearance(bool darkMode)
+    {
+        bool changed = (hostDarkMode ?? runtimeContext.DarkMode) != darkMode;
+        hostDarkMode = darkMode;
+        return changed;
+    }
 
     public ConfigurationStudioPreviewState(
         IConfigurationStudioRuntimeContext runtimeContext,
@@ -74,19 +82,21 @@ internal sealed class ConfigurationStudioPreviewState
         }
 
         var previews = new List<IConfigurationChannelPreviewViewModel>(zone.Channels.Count);
+        bool darkMode = hostDarkMode ?? runtimeContext.DarkMode;
         foreach (ChannelConfiguration channel in zone.Channels)
         {
             WidgetPositionSetting position = draftPositions[channel];
             string signature = GetPreviewSignature(channel);
             if (!previewCache.TryGetValue(channel, out var cached) ||
+                cached.DarkMode != darkMode ||
                 !string.Equals(cached.Signature, signature, StringComparison.Ordinal))
             {
-                cached = (signature, previewFactory.Create(
+                cached = (signature, darkMode, previewFactory.Create(
                     channel,
                     position.X,
                     position.Y,
                     runtimeContext.CardHeight,
-                    runtimeContext.DarkMode));
+                    darkMode));
                 previewCache[channel] = cached;
             }
             cached.Preview.X = position.X;

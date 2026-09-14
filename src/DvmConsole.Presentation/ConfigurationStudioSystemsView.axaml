@@ -16,7 +16,7 @@
   <ScrollViewer x:Name="SystemsScroller" Margin="18" IsVisible="{Binding IsSystems}">
     <StackPanel Spacing="10">
       <WrapPanel ItemSpacing="8" LineSpacing="8">
-        <StackPanel Width="320">
+        <StackPanel x:Name="SystemsHeading" Width="320">
           <TextBlock Classes="heading" Text="FNE Systems"/>
           <TextBlock Classes="caption"
                      Text="Connection identity, transport, credentials, and call priority"

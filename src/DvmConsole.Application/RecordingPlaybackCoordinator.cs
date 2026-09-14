@@ -11,6 +11,7 @@ public sealed class RecordingPlaybackStateChangedEventArgs(
 {
     public RecordingId RecordingId { get; } = recordingId;
     public bool IsPlaying { get; } = isPlaying;
+    public RecordingCallIdentity? Identity { get; init; }
 }
 
 public sealed record RecordingPlaybackStartupMetrics(
@@ -36,6 +37,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
     private readonly IRecordingStore recordingStore;
     private readonly Func<IAudioBackend> createAudioBackend;
     private readonly Func<string?> getOutputDeviceId;
+    private readonly Func<CancellationToken, ValueTask<IAudioPlayback>>? openSharedOutput;
     private readonly Action<Exception>? faultHandler;
     private readonly Action<RecordingPlaybackStartupMetrics>? startupObserver;
     private readonly TimeProvider timeProvider;
@@ -51,7 +53,8 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         Func<string?> getOutputDeviceId,
         Action<Exception>? faultHandler = null,
         Action<RecordingPlaybackStartupMetrics>? startupObserver = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        Func<CancellationToken, ValueTask<IAudioPlayback>>? openSharedOutput = null)
     {
         this.recordingStore = recordingStore ?? throw new ArgumentNullException(nameof(recordingStore));
         this.createAudioBackend = createAudioBackend ?? throw new ArgumentNullException(nameof(createAudioBackend));
@@ -59,6 +62,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         this.faultHandler = faultHandler;
         this.startupObserver = startupObserver;
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.openSharedOutput = openSharedOutput;
     }
 
     public event EventHandler<RecordingPlaybackStateChangedEventArgs>? PlaybackStateChanged;
@@ -94,11 +98,12 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
             try
             {
                 long startedAt = timeProvider.GetTimestamp();
-                IAudioBackend backend = audioBackend ??= CreateBackend(out createdBackend);
-                AudioDeviceInfo output = ResolveOutputDevice(backend, getOutputDeviceId());
-                source = await recordingStore
-                    .OpenReadAsync(recordingId, cancellationToken)
+                IAudioBackend? backend = openSharedOutput is null ? audioBackend ??= CreateBackend(out createdBackend) : null;
+                AudioDeviceInfo? output = backend is null ? null : ResolveOutputDevice(backend, getOutputDeviceId());
+                var opened = await recordingStore
+                    .OpenPlaybackAsync(recordingId, cancellationToken)
                     .ConfigureAwait(false);
+                source = opened.Stream;
                 TimeSpan sourceOpen = timeProvider.GetElapsedTime(startedAt);
                 reader = await PcmStreamDecoder.OpenAsync(source, cancellationToken).ConfigureAwait(false);
                 source = null;
@@ -110,7 +115,9 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
                 if (prefetchedCount == 0)
                     throw new InvalidDataException("The recording contains no playable audio samples.");
                 TimeSpan firstDecode = timeProvider.GetElapsedTime(startedAt);
-                playback = backend.OpenPlayback(output, PcmAudioFormat.Voice8KhzMono16Bit);
+                playback = openSharedOutput is not null
+                    ? await openSharedOutput(cancellationToken).ConfigureAwait(false)
+                    : backend!.OpenPlayback(output!, PcmAudioFormat.Voice8KhzMono16Bit);
                 TimeSpan outputOpen = timeProvider.GetElapsedTime(startedAt);
 
                 var session = new PlaybackSession(
@@ -138,7 +145,7 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
                 }
 
                 long notificationStarted = timeProvider.GetTimestamp();
-                NotifyPlaybackStateChanged(recordingId, isPlaying: true);
+                NotifyPlaybackStateChanged(recordingId, isPlaying: true, opened.Identity);
                 session.NotificationDuration = timeProvider.GetElapsedTime(notificationStarted);
                 session.NotificationCompleted = timeProvider.GetElapsedTime(startedAt);
                 session.RunTask = RunAsync(session);
@@ -159,6 +166,14 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         {
             gate.Release();
         }
+    }
+
+    /// <summary>Closes active playback intent synchronously; StopAsync joins cleanup.</summary>
+    public void RequestStop()
+    {
+        PlaybackSession? current;
+        lock (sync) current = activeSession;
+        current?.RequestStop();
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
@@ -293,8 +308,8 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
             {
                 if (completedNaturally && failure is null)
                     await session.Playback.DrainAsync().ConfigureAwait(false);
-                else
-                    await session.Playback.FlushAsync().ConfigureAwait(false);
+                // Canceled/faulted playback is discarded by resource disposal below.
+                // Flush means complete input, not discard.
             }
             catch (Exception exception)
             {
@@ -336,13 +351,13 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         }
     }
 
-    private void NotifyPlaybackStateChanged(RecordingId recordingId, bool isPlaying)
+    private void NotifyPlaybackStateChanged(RecordingId recordingId, bool isPlaying, RecordingCallIdentity? identity = null)
     {
         EventHandler<RecordingPlaybackStateChangedEventArgs>? handlers = PlaybackStateChanged;
         if (handlers is null)
             return;
 
-        var eventArgs = new RecordingPlaybackStateChangedEventArgs(recordingId, isPlaying);
+        var eventArgs = new RecordingPlaybackStateChangedEventArgs(recordingId, isPlaying) { Identity = identity };
         foreach (EventHandler<RecordingPlaybackStateChangedEventArgs> handler in handlers.GetInvocationList())
         {
             try
@@ -454,6 +469,11 @@ public sealed class RecordingPlaybackCoordinator : IAsyncDisposable
         public CancellationTokenSource Cancellation { get; } = new();
         public Task? RunTask { get; set; }
         public bool PlaybackAnnounced { get; set; }
+
+        public void RequestStop()
+        {
+            lock (sync) if (!cancellationDisposed) Cancellation.Cancel();
+        }
 
         public async Task StopAsync(CancellationToken cancellationToken)
         {

@@ -14,7 +14,6 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
 
     private readonly Stream source;
     private readonly IOpusOggPacketReader packetReader;
-    private readonly object sync = new();
     private readonly object lifetimeSync = new();
     private readonly ExclusiveReaderOperationTracker operations = new();
     private short[] pending = [];
@@ -157,13 +156,12 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
 
     private void DisposePacketReader()
     {
-        lock (sync)
-        {
-            if (packetReaderDisposed)
-                return;
-            packetReaderDisposed = true;
-            packetReader.Dispose();
-        }
+        // DisposeCoreAsync has closed admission and joined the exclusive decode
+        // operation. No decoder monitor is needed during cancellation cleanup.
+        if (packetReaderDisposed)
+            return;
+        packetReaderDisposed = true;
+        packetReader.Dispose();
     }
 
     private int Decode(
@@ -172,34 +170,31 @@ public sealed class OpusOggPcmStreamReader : IAudioPcmStreamReader
     {
         try
         {
-            lock (sync)
+            int written = 0;
+            while (written < destination.Length)
             {
-                int written = 0;
-                while (written < destination.Length)
+                cancellationToken.ThrowIfCancellationRequested();
+                if (pendingOffset < pending.Length)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (pendingOffset < pending.Length)
-                    {
-                        int count = Math.Min(
-                            destination.Length - written,
-                            pending.Length - pendingOffset);
-                        pending.AsSpan(pendingOffset, count).CopyTo(destination.Span[written..]);
-                        pendingOffset += count;
-                        written += count;
-                        continue;
-                    }
-
-                    pending = [];
-                    pendingOffset = 0;
-                    if (!packetReader.HasNextPacket)
-                        break;
-
-                    cancellationToken.ThrowIfCancellationRequested();
-                    pending = packetReader.DecodeNextPacket() ?? [];
+                    int count = Math.Min(
+                        destination.Length - written,
+                        pending.Length - pendingOffset);
+                    pending.AsSpan(pendingOffset, count).CopyTo(destination.Span[written..]);
+                    pendingOffset += count;
+                    written += count;
+                    continue;
                 }
 
-                return written;
+                pending = [];
+                pendingOffset = 0;
+                if (!packetReader.HasNextPacket)
+                    break;
+
+                cancellationToken.ThrowIfCancellationRequested();
+                pending = packetReader.DecodeNextPacket() ?? [];
             }
+
+            return written;
         }
         catch (Exception exception) when (
             cancellationToken.IsCancellationRequested &&

@@ -90,7 +90,7 @@ internal sealed class WindowsWasapiPlayback :
         ObjectDisposedException.ThrowIf(disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfPlaybackFailed();
-        buffer.ClearBuffer();
+        // WriteAsync already makes every sample available to the output callback.
         return ValueTask.CompletedTask;
     }
 

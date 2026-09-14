@@ -139,6 +139,70 @@ public sealed class P25KeyRequestCoordinatorTests
         Assert.True(schedule.IsCompletedSuccessfully);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DisposalJoinsRetiredWorkersAndEveryDisposalCaller(bool replace)
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var coordinator = new P25KeyRequestCoordinator((_, _) => release.Task);
+        int sent = 0;
+        Task Schedule() => coordinator.Schedule(
+            "SKYNET", [(0x84, 0x019B)], () => true,
+            (_, _) => sent++, (_, _) => false, (_, _) => sent++);
+        Task first = Schedule();
+        Task? second = null;
+        if (replace)
+            second = Schedule();
+        else
+            coordinator.Cancel("SKYNET");
+
+        Task dispose = coordinator.DisposeAsync().AsTask();
+        Task repeatedDispose = coordinator.DisposeAsync().AsTask();
+        try
+        {
+            Assert.False(dispose.IsCompleted);
+            Assert.False(repeatedDispose.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        await Task.WhenAll(dispose, repeatedDispose, first, second ?? Task.CompletedTask)
+            .WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(0, sent);
+    }
+
+    [Fact]
+    public async Task DisposalWaitsForAWorkerWhoseDelayHasNotReturnedYet()
+    {
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var coordinator = new P25KeyRequestCoordinator((_, _) =>
+        {
+            entered.TrySetResult();
+            release.Wait(CancellationToken.None);
+            return Task.CompletedTask;
+        });
+        int sent = 0;
+        Task worker = Task.Run(() => coordinator.Schedule(
+            "SKYNET", [(0x84, 0x019B)], () => true,
+            (_, _) => sent++, (_, _) => false, (_, _) => sent++));
+        Task disposal;
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            disposal = coordinator.DisposeAsync().AsTask();
+            Assert.False(disposal.IsCompleted);
+        }
+        finally
+        {
+            release.Set();
+        }
+        await Task.WhenAll(worker, disposal).WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(0, sent);
+    }
+
     [Fact]
     public async Task RetriesOnlyTheFirstUnansweredKeyAfterTheInitialBatch()
     {

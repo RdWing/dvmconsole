@@ -13,6 +13,40 @@ public sealed partial class ConfigurationStudioFilesView : UserControl
     public ConfigurationStudioFilesView()
     {
         InitializeComponent();
+        SizeChanged += (_, _) => ApplyTouchLayout();
+    }
+
+    private bool touchLayout;
+    private bool compactLayout;
+
+    internal void SetTouchLayout(bool enabled)
+    {
+        touchLayout = enabled;
+        ApplyTouchLayout();
+    }
+
+    private void ApplyTouchLayout()
+    {
+        bool compact = touchLayout && Bounds.Width < 800;
+        if (compact == compactLayout) return;
+        compactLayout = compact;
+        var header = this.FindControl<Grid>("AliasHeader")!;
+        header.ColumnDefinitions = new(compact ? "*" : "*,220,Auto");
+        header.RowDefinitions = new(compact ? "Auto,Auto,Auto" : "*");
+        header.RowSpacing = compact ? 8 : 0;
+        var owner = this.FindControl<ComboBox>("AliasOwner")!;
+        var actions = this.FindControl<WrapPanel>("AliasActions")!;
+        Grid.SetColumn(owner, compact ? 0 : 1);
+        Grid.SetRow(owner, compact ? 1 : 0);
+        Grid.SetColumn(actions, compact ? 0 : 2);
+        Grid.SetRow(actions, compact ? 2 : 0);
+        var fields = this.FindControl<Grid>("AliasFields")!;
+        fields.ColumnDefinitions = new(compact ? "*" : "*,2*");
+        fields.RowDefinitions = new(compact ? "Auto,Auto" : "*");
+        fields.RowSpacing = compact ? 8 : 0;
+        Control name = fields.Children[1];
+        Grid.SetColumn(name, compact ? 0 : 1);
+        Grid.SetRow(name, compact ? 1 : 0);
     }
 
     public event EventHandler? DeleteAliasRequested;

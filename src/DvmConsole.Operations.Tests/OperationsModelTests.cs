@@ -140,9 +140,11 @@ public sealed class OperationsModelTests
                 now.AddTicks(index + 101)));
         }
 
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
         Assert.Equal(ReceiveStreamTransition.Continued, decision.StreamDecision.Transition);
         Assert.InRange(
-            GC.GetAllocatedBytesForCurrentThread() - before,
+            allocated,
             0,
             1_024);
     }

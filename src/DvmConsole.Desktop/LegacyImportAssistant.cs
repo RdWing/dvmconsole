@@ -378,7 +378,7 @@ internal sealed class LegacyImportAssistant
     private sealed class LegacyManagedConfigurationDocumentSet(string codeplugPath) : IImportDocumentSet
     {
         private readonly string revisionRoot = Path.GetDirectoryName(Path.GetFullPath(codeplugPath))!;
-        public IReadableDocument Primary { get; } = new DesktopConfigurationDocument(codeplugPath);
+        public IReadableDocument Primary { get; } = new FileConfigurationDocument(codeplugPath);
 
         public ValueTask<IReadableDocument?> ResolveCompanionAsync(
             string relativeReference,
@@ -395,7 +395,7 @@ internal sealed class LegacyImportAssistant
                 return ValueTask.FromResult<IReadableDocument?>(null);
             string path = Path.Combine(revisionRoot, "companions", name);
             return ValueTask.FromResult<IReadableDocument?>(
-                File.Exists(path) ? new DesktopConfigurationDocument(path) : null);
+                File.Exists(path) ? new FileConfigurationDocument(path) : null);
         }
     }
 }

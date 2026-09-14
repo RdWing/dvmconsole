@@ -149,7 +149,7 @@ public sealed class LegacyImportAssistantTests
         var oldLibrary = new ManagedConfigurationLibrary(
             Path.Combine(fixture.OldRoot, "ConfigurationLibrary"));
         await oldLibrary.ImportAsync(
-            new DesktopConfigurationDocumentSet(sourcePath),
+            new FileConfigurationDocumentSet(sourcePath),
             new ConfigurationImportOptions(
                 ConfigurationConflictResolution.ImportAsNew,
                 ConfirmExternalCompanions: true));

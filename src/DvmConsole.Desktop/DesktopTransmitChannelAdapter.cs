@@ -10,15 +10,7 @@ internal static class DesktopTransmitChannelAdapter
     public static TransmitChannelDescriptor ToTransmitDescriptor(this ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        return new TransmitChannelDescriptor(
-            new ChannelId(channel.SessionId),
-            channel.Definition,
-            channel.IsReceivePresentationActive,
-            channel.IsTransmitEncrypted,
-            channel.CanTransmitByConfiguration,
-            channel.ConfigurationTransmitUnavailableReason,
-            channel.TalkgroupUnavailableReason,
-            channel.HasCallPriority);
+        return channel.SessionState.CaptureTransmitDescriptor(channel.ConfigurationAccess);
     }
 
 }

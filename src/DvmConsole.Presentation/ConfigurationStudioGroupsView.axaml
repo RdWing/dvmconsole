@@ -21,10 +21,11 @@
                  TextWrapping="Wrap"/>
       <Border Classes="panel">
         <StackPanel Spacing="4">
-          <CheckBox Content="Preserve inbound source ID when forwarding patches"
-                    IsChecked="{Binding PatchSourceIdPassthrough, Mode=TwoWay}"
+          <CheckBox IsChecked="{Binding PatchSourceIdPassthrough, Mode=TwoWay}"
                     IsEnabled="{Binding CanEdit}"
-                    AutomationProperties.Name="Preserve patch source IDs"/>
+                    AutomationProperties.Name="Preserve patch source IDs">
+            <TextBlock Text="Preserve inbound source ID when forwarding patches" TextWrapping="Wrap"/>
+          </CheckBox>
           <TextBlock Classes="caption"
                      Text="Codeplug-wide. When disabled, forwarded calls use the destination FNE system's configured console RID."
                      TextWrapping="Wrap"/>

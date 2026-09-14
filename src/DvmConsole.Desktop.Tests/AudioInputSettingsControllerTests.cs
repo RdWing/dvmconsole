@@ -11,6 +11,27 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class AudioInputSettingsControllerTests
 {
     [Fact]
+    public void PresetSaveUsesSharedNamesAndReplacesWithoutApplyingAudio()
+    {
+        var settings = new UserSettings();
+        var workspace = new AudioSettingsViewModel(settings, "DVM Console")
+        { AudioInputPresetNameText = " Field ", AudioInputGainText = "2" };
+        var session = new RecordingAudioSession(settings);
+        var controller = new AudioInputSettingsController(workspace, settings, session);
+        controller.SavePreset();
+        Assert.Equal("Field", Assert.Single(workspace.MutableAudioInputPresets).Name);
+        workspace.AudioInputPresetNameText = "FIELD";
+        workspace.AudioInputGainText = "0.5";
+        controller.SavePreset();
+        Assert.Equal(0.5, Assert.Single(workspace.MutableAudioInputPresets).Gain);
+        Assert.Equal(1, settings.AudioInputGain);
+        workspace.AudioInputPresetNameText = new string('x', 81);
+        controller.SavePreset();
+        Assert.Single(workspace.MutableAudioInputPresets);
+        Assert.Contains("80 characters", session.Status);
+    }
+
+    [Fact]
     public async Task ApplyCommitsValidatedSettingsAfterRuntimeSucceeds()
     {
         var settings = new UserSettings

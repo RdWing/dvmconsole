@@ -57,7 +57,7 @@ public sealed partial class SystemViewModelTests
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 path,
                 new UserSettingsStore(settingsPath),
-                networkDisabledDemo: true);
+                networkDisabledDemo: true, uiDispatcher: new ImmediateUiDispatcher());
             SystemViewModel system = viewModel.Systems[0];
             var historyChanges = new List<NotifyCollectionChangedAction>();
             ((INotifyCollectionChanged)viewModel.FilteredCallHistory).CollectionChanged +=
@@ -194,7 +194,7 @@ public sealed partial class SystemViewModelTests
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 path,
                 new UserSettingsStore(settingsPath),
-                networkDisabledDemo: true);
+                networkDisabledDemo: true, uiDispatcher: new ImmediateUiDispatcher());
             SystemViewModel system = viewModel.Systems[0];
             ChannelViewModel channel = system.Channels.Single(candidate => candidate.Name == "Alpha Dispatch");
 
@@ -257,7 +257,7 @@ public sealed partial class SystemViewModelTests
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 path,
                 new UserSettingsStore(settingsPath),
-                networkDisabledDemo: true);
+                networkDisabledDemo: true, uiDispatcher: new ImmediateUiDispatcher());
             SystemViewModel system = viewModel.Systems[0];
             ChannelViewModel channel = system.Channels.Single(candidate => candidate.Name == "Alpha Dispatch");
             channel.SetAudioEnabled(true);
@@ -297,7 +297,7 @@ public sealed partial class SystemViewModelTests
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 path,
                 new UserSettingsStore(settingsPath),
-                networkDisabledDemo: true);
+                networkDisabledDemo: true, uiDispatcher: new ImmediateUiDispatcher());
             SystemViewModel system = viewModel.Systems[0];
             ChannelViewModel channel = system.Channels.Single(candidate => candidate.Name == "Alpha Operations");
 
@@ -365,7 +365,7 @@ public sealed partial class SystemViewModelTests
 
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 codeplugPath,
-                new UserSettingsStore(settingsPath));
+                new UserSettingsStore(settingsPath), uiDispatcher: new ImmediateUiDispatcher());
             SystemViewModel system = Assert.Single(viewModel.Systems);
             foreach (ChannelViewModel channel in system.Channels)
                 channel.SetAudioEnabled(true);
@@ -390,7 +390,7 @@ public sealed partial class SystemViewModelTests
             {
                 Assert.True(channel.IsReceivePresentationActive);
                 Assert.Equal(
-                    Color.Parse("#008A3A"),
+                    Color.Parse("#008238"),
                     Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color);
             });
 
@@ -400,7 +400,7 @@ public sealed partial class SystemViewModelTests
             Assert.True(system.Zones[0].IsReceiving);
             Assert.False(system.Zones[1].IsReceiving);
             Assert.NotEqual(
-                Color.Parse("#008A3A"),
+                Color.Parse("#008238"),
                 Assert.IsType<SolidColorBrush>(system.Channels[1].CardBackgroundBrush).Color);
         }
         finally
@@ -421,7 +421,7 @@ public sealed partial class SystemViewModelTests
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 path,
                 new UserSettingsStore(settingsPath),
-                networkDisabledDemo: true);
+                networkDisabledDemo: true, uiDispatcher: new ImmediateUiDispatcher());
             SystemViewModel system = viewModel.Systems.Single(candidate => candidate.Name == "Alpha");
             byte[] identifiedPayload = P25DfsiFrameCodec.CreateLdu1Payload(
                 sourceId: 4_500_355,

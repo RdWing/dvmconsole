@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using DvmConsole.Core.Configuration;
@@ -16,6 +17,57 @@ public sealed partial class ConfigurationStudioKeysView : UserControl
     public ConfigurationStudioKeysView()
     {
         InitializeComponent();
+        desktopKeyTemplate = this.FindControl<ListBox>("KeyList")!.ItemTemplate;
+        SizeChanged += (_, _) => ApplyTouchLayout();
+    }
+
+    private readonly IDataTemplate? desktopKeyTemplate;
+    private bool touchLayout;
+    private bool compactLayout;
+    private ScrollViewer? compactScroll;
+
+    internal void SetTouchLayout(bool enabled)
+    {
+        touchLayout = enabled;
+        ApplyTouchLayout();
+    }
+
+    private void ApplyTouchLayout()
+    {
+        bool compact = touchLayout && Bounds.Width < 800;
+        if (compact == compactLayout) return;
+        compactLayout = compact;
+        var root = this.FindControl<Grid>("KeysRoot")!;
+        var columns = this.FindControl<Grid>("KeyColumns")!;
+        var listPanel = this.FindControl<Border>("KeyListPanel")!;
+        var list = this.FindControl<ListBox>("KeyList")!;
+        var inspector = this.FindControl<Border>("KeyInspector")!;
+        root.RowDefinitions = new(compact ? "Auto,Auto" : "Auto,*");
+        columns.ColumnDefinitions = new(compact ? "*" : "3*,2*");
+        columns.RowDefinitions = new(compact ? "Auto,Auto" : "*");
+        columns.RowSpacing = compact ? 12 : 0;
+        Grid.SetColumn(inspector, compact ? 0 : 1);
+        Grid.SetRow(inspector, compact ? 1 : 0);
+        listPanel.MaxHeight = compact ? 180 : double.PositiveInfinity;
+        listPanel.MinHeight = compact ? 80 : 0;
+        this.FindControl<Border>("KeyTableHeader")!.IsVisible = !compact;
+        list.ItemTemplate = compact ? (IDataTemplate)Resources["CompactKeyTemplate"]! : desktopKeyTemplate;
+        if (compact)
+        {
+            Content = null;
+            compactScroll = new ScrollViewer
+            {
+                Content = root,
+                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled
+            };
+            Content = compactScroll;
+        }
+        else
+        {
+            compactScroll!.Content = null;
+            Content = root;
+            compactScroll = null;
+        }
     }
 
     public event EventHandler? DeleteRequested;
@@ -27,8 +79,10 @@ public sealed partial class ConfigurationStudioKeysView : UserControl
         => DeleteRequested?.Invoke(this, EventArgs.Empty);
     private void HandleKeyFieldEdit(object? sender, RoutedEventArgs e)
     {
-        if (IsLoaded)
-            ViewModel?.CommitKeyEdit();
+        // Opening a picker can move focus while its selected item is being laid out.
+        // Committing here synchronously rebinds that same picker and reenters focus loss.
+        if (IsLoaded && !handlingSelectionChange)
+            QueueCommit(() => ViewModel?.CommitKeyEdit());
     }
 
     private void HandleKeyProtocolChanged(object? sender, SelectionChangedEventArgs e)

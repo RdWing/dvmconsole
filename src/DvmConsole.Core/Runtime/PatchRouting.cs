@@ -62,6 +62,27 @@ public sealed class PatchRoutingTable
     private readonly Dictionary<SourceStreamKey, ForwardTarget[]> audioRouteSnapshots = [];
     private bool sourceIdPassthrough;
     private int membershipGeneration;
+    private bool forwardingEnabled = true;
+
+    // Preserve configured groups while suppressing the interrupted source call.
+    // A fresh source stream can forward after recovery; the old call cannot restart.
+    public void SetForwardingEnabled(bool enabled)
+    {
+        List<ForwardTarget>? stops = null;
+        lock (sync)
+        {
+            if (forwardingEnabled == enabled) return;
+            forwardingEnabled = enabled;
+            membershipGeneration++;
+            if (!enabled)
+                foreach (GroupState group in groups.Values)
+                {
+                    if (group.Source is { } source) source.Suppressed = true;
+                    CollectAndClearStops(group, ref stops);
+                }
+        }
+        EndTargets(stops);
+    }
 
     public PatchRoutingTable(
         Func<PatchMemberAddress, uint, uint> beginCall,
@@ -190,14 +211,15 @@ public sealed class PatchRoutingTable
                         continue;
                     }
 
-                    if (!IsSourceStale(group.Source, now))
+                    if (!group.Source.Suppressed && !IsSourceStale(group.Source, now))
                         continue;
 
                     CollectAndClearStops(group, ref stops);
                     group.Source = null;
                 }
 
-                group.Source = new ActiveSource(source.Identity, streamId, sourceId, sourceId != 0, now);
+                group.Source = new ActiveSource(source.Identity, streamId, sourceId, sourceId != 0, now)
+                { Suppressed = !forwardingEnabled };
                 AddStartRequests(group, ref starts);
             }
         }
@@ -230,12 +252,13 @@ public sealed class PatchRoutingTable
                     continue;
                 if (group.Source is null ||
                     (group.Source.Source != source.Identity || group.Source.StreamId != streamId) &&
-                    IsSourceStale(group.Source, now))
+                    (group.Source.Suppressed || IsSourceStale(group.Source, now)))
                 {
                     if (group.Source is not null)
                         CollectAndClearStops(group, ref stops);
 
-                    group.Source = new ActiveSource(source.Identity, streamId, sourceId, sourceId != 0, now);
+                    group.Source = new ActiveSource(source.Identity, streamId, sourceId, sourceId != 0, now)
+                    { Suppressed = !forwardingEnabled };
                 }
 
                 if (group.Source.Source != source.Identity || group.Source.StreamId != streamId)
@@ -355,7 +378,7 @@ public sealed class PatchRoutingTable
         {
             DateTimeOffset now = timeProvider.GetUtcNow();
             foreach (GroupState group in groups.Values.Where(group =>
-                         group.Source is not null && IsSourceStale(group.Source, now)))
+                         group.Source is { Suppressed: false } && IsSourceStale(group.Source, now)))
             {
                 CollectAndClearStops(group, ref stops);
                 group.Source = null;
@@ -433,6 +456,7 @@ public sealed class PatchRoutingTable
 
     private void AddStartRequests(GroupState group, ref List<StartRequest>? starts)
     {
+        if (!forwardingEnabled || group.Source is { Suppressed: true }) return;
         if (sourceIdPassthrough && group.Source is { SourceIdLatched: false })
             return;
 
@@ -570,6 +594,7 @@ public sealed class PatchRoutingTable
         public uint StreamId { get; }
         public uint SourceId { get; set; }
         public bool SourceIdLatched { get; set; }
+        public bool Suppressed { get; set; }
         private HashSet<PatchMemberIdentity>? skippedTargets;
         public void SkipTarget(PatchMemberIdentity member) => (skippedTargets ??= []).Add(member);
         public bool IsTargetSkipped(PatchMemberIdentity member) => skippedTargets?.Contains(member) == true;

@@ -5,12 +5,45 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using Avalonia.Styling;
 using DvmConsole.Core.Configuration;
 
 namespace DvmConsole.Presentation;
 
 public sealed partial class ConfigurationStudioView : UserControl
 {
+    public static readonly StyledProperty<bool> UseTouchLayoutProperty =
+        AvaloniaProperty.Register<ConfigurationStudioView, bool>(nameof(UseTouchLayout));
+    public bool UseTouchLayout { get => GetValue(UseTouchLayoutProperty); set => SetValue(UseTouchLayoutProperty, value); }
+    public static readonly StyledProperty<bool> ShowZoneLayoutPreviewProperty =
+        AvaloniaProperty.Register<ConfigurationStudioView, bool>(nameof(ShowZoneLayoutPreview), true);
+    public bool ShowZoneLayoutPreview { get => GetValue(ShowZoneLayoutPreviewProperty); set => SetValue(ShowZoneLayoutPreviewProperty, value); }
+    public bool PreferTouchSidebar { get; set; }
+    private bool touchNavigationOpen;
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == ShowZoneLayoutPreviewProperty)
+        {
+            this.FindControl<ConfigurationStudioZonesView>("zonesView")?.SetLiveLayoutVisible(ShowZoneLayoutPreview);
+            return;
+        }
+        if (change.Property != UseTouchLayoutProperty) return;
+        Classes.Set("touch", UseTouchLayout);
+        this.FindControl<ConfigurationStudioKeysView>("KeysPage")?.SetTouchLayout(UseTouchLayout);
+        this.FindControl<ConfigurationStudioFilesView>("FilesPage")?.SetTouchLayout(UseTouchLayout);
+        responsiveLayoutInitialized = false;
+        ApplyResponsiveLayout(Bounds.Width);
+    }
+
+    public void ToggleTouchNavigation()
+    {
+        if (!UseTouchLayout) return;
+        touchNavigationOpen = !touchNavigationOpen;
+        ApplyResponsiveLayout(Bounds.Width);
+    }
+
     private const double NarrowWidth = 1180;
     private const double PhoneWidth = 400;
     private bool responsiveLayoutInitialized;
@@ -20,9 +53,21 @@ public sealed partial class ConfigurationStudioView : UserControl
     public ConfigurationStudioView()
     {
         InitializeComponent();
+        this.FindControl<ConfigurationStudioNavigationView>("Navigation")!.NavigationCompleted += (_, _) =>
+        {
+            if (!UseTouchLayout) return;
+            touchNavigationOpen = false;
+            ApplyResponsiveLayout(Bounds.Width);
+        };
         SizeChanged += (_, _) => ApplyResponsiveLayout(Bounds.Width);
         Loaded += (_, _) => ApplyResponsiveLayout(Bounds.Width);
+        ActualThemeVariantChanged += (_, _) => RefreshPreviewAppearance();
+        DataContextChanged += (_, _) => RefreshPreviewAppearance();
+        AttachedToVisualTree += (_, _) => RefreshPreviewAppearance();
     }
+
+    private void RefreshPreviewAppearance()
+        => ViewModel?.SetPreviewAppearance(ActualThemeVariant == ThemeVariant.Dark);
 
     public event EventHandler? DeleteSystemRequested;
     public event EventHandler<ConfigurationStudioEditCommandEventArgs>? EditCommandRequested;
@@ -90,11 +135,17 @@ public sealed partial class ConfigurationStudioView : UserControl
     }
 
     private void HandleSaveAsClick(object? sender, RoutedEventArgs e)
-        => SaveCopyRequested?.Invoke(this, EventArgs.Empty);
+    {
+        this.FindControl<Button>("TouchActionsButton")?.Flyout?.Hide();
+        SaveCopyRequested?.Invoke(this, EventArgs.Empty);
+    }
     private void HandleReviewAndSaveClick(object? sender, RoutedEventArgs e)
         => ReviewSaveRequested?.Invoke(this, EventArgs.Empty);
     private void HandleExportFullClick(object? sender, RoutedEventArgs e)
-        => ExportFullRequested?.Invoke(this, EventArgs.Empty);
+    {
+        this.FindControl<Button>("TouchActionsButton")?.Flyout?.Hide();
+        ExportFullRequested?.Invoke(this, EventArgs.Empty);
+    }
 
     private void HandleSharedDeleteSystemRequested(object? sender, EventArgs e)
         => DeleteSystemRequested?.Invoke(this, EventArgs.Empty);
@@ -161,6 +212,30 @@ public sealed partial class ConfigurationStudioView : UserControl
             Bounds.Height * (useNarrow ? 0.38 : 0.32),
             160,
             320);
+        Border touchFooter = this.FindControl<Border>("TouchFooter")!;
+        touchFooter.IsVisible = UseTouchLayout;
+        footer.IsVisible = !UseTouchLayout;
+        this.FindControl<Border>("StudioHeader")!.IsVisible = !UseTouchLayout;
+        if (UseTouchLayout)
+        {
+            shell.RowDefinitions = new RowDefinitions("0,*,Auto");
+            bool sidebar = PreferTouchSidebar && width >= 700;
+            workspace.ColumnDefinitions = new ColumnDefinitions(sidebar ? "240,*" : "*");
+            workspace.RowDefinitions = new RowDefinitions("*");
+            Grid.SetColumn(pageHost, sidebar ? 1 : 0);
+            Grid.SetRow(pageHost, 0);
+            navigation.SetCompactLayout(false, true);
+            navigation.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left;
+            navigation.Width = sidebar ? 240 : Math.Min(320, Math.Max(0, width));
+            navigation.ZIndex = 20;
+            navigation.IsVisible = sidebar || touchNavigationOpen;
+            validationDrawer.Margin = new Thickness(8, 0);
+            return;
+        }
+        navigation.IsVisible = true;
+        navigation.Width = double.NaN;
+        navigation.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch;
+        navigation.ZIndex = 0;
         if (!layoutChanged)
             return;
 

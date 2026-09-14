@@ -40,13 +40,17 @@ public sealed class MainWindowSessionHostTests
             await host.ApplicationSession.Commands.SetTransmitSelectedAsync(channelId, true);
             await host.ApplicationSession.Commands.SetPageSelectedAsync(channelId, true);
             await host.ApplicationSession.Commands.SetAlertSelectedAsync(channelId, true);
+            await Assert.IsAssignableFrom<IConsoleRecordingCommands>(host.ApplicationSession.Commands)
+                .SetRecordingEnabledAsync(channelId, true);
             await host.ApplicationSession.FlushSettingsAsync(CancellationToken.None);
 
             Assert.True(channel.IsTransmitSelected);
             Assert.True(channel.IsPageSelected);
             Assert.True(channel.IsAlertSelected);
+            Assert.True(channel.IsRecordingEnabled);
             Assert.Equal($"{channel.Name} armed for DTMF and alert tones.", viewModel.TransmitStatusText);
             Assert.Contains(channel.SettingsKey, store.Load().TransmitSelectedChannelKeys);
+            Assert.Contains(channel.SettingsKey, store.Load().RecordingEnabledChannelKeys);
         }
         finally
         {

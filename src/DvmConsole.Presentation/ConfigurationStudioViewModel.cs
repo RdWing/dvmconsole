@@ -14,6 +14,7 @@ namespace DvmConsole.Presentation;
 
 public sealed class ConfigurationStudioViewModel :
     INotifyPropertyChanged,
+    IConfigurationStudioSaveSource,
     IConfigurationStudioNavigationViewModel,
     IConfigurationStudioFieldEditSession,
     IConfigurationStudioEditTransactionPort,
@@ -187,6 +188,9 @@ public sealed class ConfigurationStudioViewModel :
     public string SelectedZoneHeading => SelectedZone is null
         ? "Zone"
         : $"Zone: {SelectedZone.Name}  ({Channels.Count} channels)  ·  FNE: {SelectedZoneSystemDisplayName}";
+    public string SelectedZoneTouchHeading => SelectedZone is null
+        ? "Zone"
+        : $"Zone: {SelectedZone.Name}  ·  FNE: {SelectedZoneSystemDisplayName}";
     public string SelectedZoneSystemDisplayName => SelectedZone is null
         ? "None"
         : string.IsNullOrWhiteSpace(SelectedZoneSystemName) ? "Unassigned or mixed" : SelectedZoneSystemName;
@@ -200,6 +204,7 @@ public sealed class ConfigurationStudioViewModel :
             SelectedZone.Name = value ?? string.Empty;
             OnPropertyChanged();
             OnPropertyChanged(nameof(SelectedZoneHeading));
+            OnPropertyChanged(nameof(SelectedZoneTouchHeading));
         }
     }
     public string SelectedZoneSystemName
@@ -224,6 +229,7 @@ public sealed class ConfigurationStudioViewModel :
             OnPropertyChanged();
             OnPropertyChanged(nameof(SelectedZoneSystemDisplayName));
             OnPropertyChanged(nameof(SelectedZoneHeading));
+            OnPropertyChanged(nameof(SelectedZoneTouchHeading));
         }
     }
     public string ValidationStatusText => HasValidationIssues ? IssueSummary : "No errors";
@@ -454,6 +460,7 @@ public sealed class ConfigurationStudioViewModel :
             RefreshChannelsAndPreview();
             OnPropertyChanged(nameof(SelectedZoneName));
             OnPropertyChanged(nameof(SelectedZoneHeading));
+            OnPropertyChanged(nameof(SelectedZoneTouchHeading));
             OnPropertyChanged(nameof(SelectedZoneSystemName));
             OnPropertyChanged(nameof(SelectedZoneSystemDisplayName));
         }
@@ -580,23 +587,35 @@ public sealed class ConfigurationStudioViewModel :
         {
             if (!SetField(ref selectedHierarchyNode, value) || value is null)
                 return;
-            if (value.Channel is not null && value.Zone is not null)
-            {
-                SelectedZone = value.Zone;
-                SelectedChannel = value.Channel;
-                SelectSection(ConfigurationStudioSection.Zones);
-            }
-            else if (value.Zone is not null)
-            {
-                SelectedZone = value.Zone;
-                SelectedChannel = null;
-                SelectSection(ConfigurationStudioSection.Zones);
-            }
-            else if (value.System is not null)
-            {
-                SelectedSystem = value.System;
-                SelectSection(ConfigurationStudioSection.Systems);
-            }
+            NavigateHierarchyNode(value);
+        }
+    }
+
+    void IConfigurationStudioNavigationViewModel.ActivateHierarchyNode(IConfigurationHierarchyNode node)
+    {
+        if (node is not ConfigurationHierarchyNode target) return;
+        if (ReferenceEquals(selectedHierarchyNode, target)) NavigateHierarchyNode(target);
+        else SelectedHierarchyNode = target;
+    }
+
+    private void NavigateHierarchyNode(ConfigurationHierarchyNode value)
+    {
+        if (value.Channel is not null && value.Zone is not null)
+        {
+            SelectedZone = value.Zone;
+            SelectedChannel = value.Channel;
+            SelectSection(ConfigurationStudioSection.Zones);
+        }
+        else if (value.Zone is not null)
+        {
+            SelectedZone = value.Zone;
+            SelectedChannel = null;
+            SelectSection(ConfigurationStudioSection.Zones);
+        }
+        else if (value.System is not null)
+        {
+            SelectedSystem = value.System;
+            SelectSection(ConfigurationStudioSection.Systems);
         }
     }
 
@@ -1048,11 +1067,29 @@ public sealed class ConfigurationStudioViewModel :
         runtimeContext.SetOperationalGroupEnabled(group);
     }
 
+    string IConfigurationStudioSaveSource.DocumentIdentity => DocumentIdentity;
+    ConfigurationStudioSaveState IConfigurationStudioSaveSource.CaptureSaveState() => CaptureSaveState();
+    void IConfigurationStudioSaveSource.ApplyOperatorStateForSave(
+        UserSettings settings, string destinationIdentity, bool identityChanged)
+        => ApplyOperatorStateForSave(settings, destinationIdentity, identityChanged);
+    string IConfigurationStudioSaveSource.BuildIdentityMigrationReviewText() => BuildIdentityMigrationReviewText();
+
     internal ConfigurationStudioSaveState CaptureSaveState()
         => companions.CaptureSaveState(document.Serialize(), ValidationIssues.ToArray());
 
-    internal IReadOnlyDictionary<string, string> CaptureExportCompanionContents()
+    public IReadOnlyDictionary<string, string> CaptureExportCompanionContents()
         => companions.CaptureExportContents(Configuration);
+
+    public ConfigurationDraftEditorState CaptureEditorState()
+        => new(
+            previewState.Positions.GroupBy(entry => GetChannelSettingsKey(entry.Key), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => new ConfigurationDraftPosition(
+                    group.Last().Value.X, group.Last().Value.Y), StringComparer.OrdinalIgnoreCase),
+            draftZoneSystemNames.Where(entry => !string.IsNullOrWhiteSpace(entry.Value))
+                .ToDictionary(entry => entry.Key.Name, entry => entry.Value, StringComparer.OrdinalIgnoreCase),
+            draftCallPrioritySystemIds.Select(identities.FindSystem).Where(system => system is not null)
+                .Select(system => system!.Name).Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray());
 
     internal void ApplyOperatorStateForSave(
         UserSettings settings,
@@ -1067,29 +1104,12 @@ public sealed class ConfigurationStudioViewModel :
             CodeplugStudioStateStore.CopyForSaveAs(settings, documentIdentity, destinationIdentity);
         }
         ApplyIdentityMigrations(settings, destinationIdentity, destinationIdentity, identityChanged);
-        foreach (KeyValuePair<ChannelConfiguration, WidgetPositionSetting> position in previewState.Positions)
-        {
-            settings.ChannelWidgetPositions[GetChannelSettingsKey(position.Key)] = new WidgetPositionSetting
-            {
-                X = position.Value.X,
-                Y = position.Value.Y
-            };
-        }
+        ConfigurationDraftEditorState editor = CaptureEditorState();
+        foreach (var position in editor.ChannelPositions)
+            settings.ChannelWidgetPositions[position.Key] = new WidgetPositionSetting { X = position.Value.X, Y = position.Value.Y };
         CodeplugStudioState destinationStudioState = CodeplugStudioStateStore.Get(settings, destinationIdentity);
-        destinationStudioState.ZoneSystemAssignments = draftZoneSystemNames
-            .Where(entry => !string.IsNullOrWhiteSpace(entry.Value))
-            .ToDictionary(
-                entry => entry.Key.Name,
-                entry => entry.Value,
-                StringComparer.OrdinalIgnoreCase);
-        destinationStudioState.CallPrioritySystemNames = draftCallPrioritySystemIds
-            .Select(identities.FindSystem)
-            .Where(system => system is not null)
-            .Select(system => system!.Name)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        destinationStudioState.ZoneSystemAssignments = new(editor.ZoneSystemAssignments, StringComparer.OrdinalIgnoreCase);
+        destinationStudioState.CallPrioritySystemNames = editor.CallPrioritySystemNames.ToList();
     }
 
     public void AcceptSaved(
@@ -1451,8 +1471,18 @@ public sealed class ConfigurationStudioViewModel :
             preview.IsSelected = ReferenceEquals(preview.Channel, SelectedChannel);
         OnPropertyChanged(nameof(LayoutChanged));
         OnPropertyChanged(nameof(SelectedZoneHeading));
+        OnPropertyChanged(nameof(SelectedZoneTouchHeading));
         OnPropertyChanged(nameof(PreviewCanvasWidth));
         OnPropertyChanged(nameof(PreviewCanvasHeight));
+    }
+
+    /// <summary>Refreshes only preview colors; appearance is not a draft edit.</summary>
+    public void SetPreviewAppearance(bool darkMode)
+    {
+        if (!previewState.SetHostAppearance(darkMode)) return;
+        Replace(PreviewChannels, previewState.Project(SelectedZone));
+        foreach (IConfigurationChannelPreviewViewModel preview in PreviewChannels)
+            preview.IsSelected = ReferenceEquals(preview.Channel, SelectedChannel);
     }
 
     private void RefreshVisibleChannelRows()
@@ -1786,7 +1816,7 @@ public sealed class ConfigurationStudioViewModel :
                      nameof(IsDirty), nameof(CanSaveDraft), nameof(StatusText), nameof(CanUndo), nameof(CanRedo),
                      nameof(ConfigurationShapeText), nameof(UnknownFieldsText), nameof(LayoutChanged),
                      nameof(ValidationStatusText), nameof(ValidationDrawerHeading), nameof(ValidationIndicatorBrush),
-                     nameof(HasValidationIssues), nameof(HasWarnings), nameof(SelectedZoneHeading),
+                     nameof(HasValidationIssues), nameof(HasWarnings), nameof(SelectedZoneHeading), nameof(SelectedZoneTouchHeading),
                      nameof(SystemNavigationHeading), nameof(ZoneNavigationHeading),
                      nameof(StreamNavigationHeading), nameof(GroupNavigationHeading),
                      nameof(KeyNavigationHeading), nameof(FileNavigationHeading),

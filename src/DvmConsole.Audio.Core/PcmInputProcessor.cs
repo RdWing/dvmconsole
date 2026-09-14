@@ -24,7 +24,7 @@ public sealed class AudioInputProcessingOptions
             ProcessingMode = Enum.IsDefined(ProcessingMode) ? ProcessingMode : AudioProcessingMode.DvmConsole,
             AgcEnabled = AgcEnabled,
             AgcTargetDbfs = NormalizeFinite(AgcTargetDbfs, -25.0, -40.0, -12.0),
-            Gain = NormalizeFinite(Gain, 1.0, 0.25, 3.0),
+            Gain = NormalizeFinite(Gain, 1.0, 0.25, 4.0),
             LowGainDb = NormalizeFinite(LowGainDb, 0, -12, 12),
             MidGainDb = NormalizeFinite(MidGainDb, 0, -12, 12),
             HighGainDb = NormalizeFinite(HighGainDb, 0, -12, 12)

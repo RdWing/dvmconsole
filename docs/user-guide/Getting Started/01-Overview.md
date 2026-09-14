@@ -1,12 +1,18 @@
 # Overview
 
 DVM Console NEO is an open-source DVM FNE operator console for macOS, Windows,
-and Linux. It puts live channels, patches, tones, recordings, and diagnostics
-in one workspace. Version 0.7.0 covers Apple Silicon and Intel Macs, Windows x64
-and ARM64, and Linux x64 and ARM64. macOS 14 and newer is officially supported;
-macOS 12 and 13 remain best-effort compatibility targets.
+Linux, iOS and iPadOS. Listen to your channels, transmit, send tones, set up
+patches, and review recorded calls in one workspace, on your computer, iPhone or
+iPad. Diagnostics are there when you need to investigate a problem.
 
-NEO stores its data separately from the earlier WPF application. If the new
+Version 0.8.0 covers Apple Silicon and Intel Macs, Windows x64 and ARM64, and
+Linux x64 and ARM64. macOS 14 and newer is officially supported; macOS 12 and 13
+remain best-effort compatibility targets. iPhone and iPad use the
+[public TestFlight beta](https://testflight.apple.com/join/KuYtQqja), distributed separately from desktop packages.
+See the [mobile guide](04-Operations/05-iOS%20and%20iPadOS.md) for installation,
+touch controls and platform differences.
+
+On desktop, NEO stores its data separately from the earlier WPF application. If the new
 store is empty and an earlier shared DVM Console folder exists, first launch
 offers a selective import assistant. Nothing is selected by default, and the
 old folder is never modified.
@@ -19,13 +25,29 @@ life-safety operation.
 
 ---
 
+# Install on macOS
+
+Download the Apple Silicon (`osx-arm64`) or Intel (`osx-x64`) ZIP from the
+[GitHub releases page](https://github.com/RdWing/dvmconsole/releases).
+Extract it, move `DVMConsole.app` to Applications, and open the app.
+Official packages starting with v0.8.0 are signed with Developer ID and notarized
+by Apple; no quarantine-removal command is needed. Keep the bundle contents intact.
+
+macOS may request local-network access for FNE connections, microphone access for
+PTT, and Accessibility or Input Monitoring access for global keyboard PTT.
+These permissions are separate from the app's signature.
+
+---
+
 # Starting without a codeplug
 
-Choose **File > New Configuration** to open Configuration Studio. Add an FNE
+On desktop, choose **File > New Configuration** to open Configuration Studio.
+On iPhone or iPad, create a configuration from **Settings → Configuration Library**. Add an FNE
 system and its first channel, then add aliases, encryption keys, web streams,
 and group definitions as needed. **Review & Save** stores the configuration;
 accept **Disconnect and load** to use it in the console. You can also import an
-existing YAML file with **File > Import Codeplug**.
+existing YAML file with **File > Import Codeplug** on desktop or
+**Settings → Configuration Library → Import from Files** on mobile.
 
 See [Configuration Studio and codeplugs](03-Configurations/01-Codeplug%20Creation.md)
 for the complete first-time setup sequence.
@@ -39,7 +61,8 @@ for the complete first-time setup sequence.
 A system is an FNE peer connection defined in the codeplug. It has its own
 address, port, peer ID, console RID, credentials, and optional RID alias file.
 
-Click a system status card to connect or disconnect that FNE. Manual connection controls are also available under:
+Click a system status card to connect or disconnect that FNE. On mobile, use
+the FNE connection button or **Settings → Connections**. Manual connection controls are also available under:
 
 ```
 Tools > FNE Connection Manager
@@ -47,7 +70,8 @@ Tools > FNE Connection Manager
 
 ## Zones
 
-Zones appear as tabs across the top of the channel area. They group channels by
+In Cards, zones appear as tabs across the top of the channel area. Mobile List
+uses collapsible FNE and zone headings, omitting a redundant single-zone heading. They group channels by
 dispatch area, agency, site, or operator role.
 
 ## Channels
@@ -64,8 +88,8 @@ TG 9990 - P25
 
 ## Groups
 
-Define groups and manage their operator state under **View > Groups**, which
-opens Configuration Studio.
+Create groups and manage their membership and active state under **View >
+Groups**, which opens Configuration Studio.
 
 - Patch groups forward received audio between member channels.
 - Multi-select groups key several member channels from one operator PTT.
@@ -75,6 +99,9 @@ Membership is saved separately from whether a patch is active.
 ---
 
 # Main console
+
+The controls below describe desktop. See the [mobile guide](04-Operations/05-iOS%20and%20iPadOS.md)
+for the corresponding iPhone and iPad controls.
 
 ## Operator workspace
 

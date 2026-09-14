@@ -19,12 +19,12 @@ public sealed class RecordingFinalizationSpoolTests
             RecordingFinalizationDescriptor descriptor = CreateDescriptor(root);
             JsonObject json = JsonNode.Parse(JsonSerializer.Serialize(
                 descriptor,
-                DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor))!.AsObject();
+                RecordingSpoolJsonContext.Default.RecordingFinalizationDescriptor))!.AsObject();
             json.Remove(nameof(RecordingFinalizationDescriptor.IsEncryptionKnown));
 
             RecordingFinalizationDescriptor restored = JsonSerializer.Deserialize(
                 json.ToJsonString(),
-                DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor)!;
+                RecordingSpoolJsonContext.Default.RecordingFinalizationDescriptor)!;
 
             Assert.True(restored.EncryptionKnown);
             Assert.False(restored.IsSecure);
@@ -47,11 +47,11 @@ public sealed class RecordingFinalizationSpoolTests
             };
             string json = JsonSerializer.Serialize(
                 descriptor,
-                DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor);
+                RecordingSpoolJsonContext.Default.RecordingFinalizationDescriptor);
 
             RecordingFinalizationDescriptor restored = JsonSerializer.Deserialize(
                 json,
-                DesktopSettingsJsonContext.Default.RecordingFinalizationDescriptor)!;
+                RecordingSpoolJsonContext.Default.RecordingFinalizationDescriptor)!;
 
             Assert.False(restored.EncryptionKnown);
         }

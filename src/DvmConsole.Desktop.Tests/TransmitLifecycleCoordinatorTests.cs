@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2025-2026 RdWing
 // SPDX-License-Identifier: AGPL-3.0-only
 
-using System.Diagnostics;
 using DvmConsole.Application;
 using DvmConsole.Audio;
 using DvmConsole.Core.Configuration;
@@ -56,6 +55,65 @@ public sealed class TransmitLifecycleCoordinatorTests
         rig.Recovered.SetResult();
         await start.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(rig.Activated.Task.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task RevokedCaptureStartupReachesTransportAndRunsNormalFailureCleanup()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var rig = new Rig { HoldCaptureStartup = true };
+        Task start = rig.Coordinator.StartAsync(rig.Request(false) with { CancellationToken = cancellation.Token });
+        try
+        {
+            await rig.CaptureEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            cancellation.Cancel();
+            await start.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.IsAssignableFrom<OperationCanceledException>(rig.StartFailure);
+            Assert.False(rig.Activated.Task.IsCompleted);
+            Assert.Empty(rig.ActiveChannels);
+            Assert.Equal(1, rig.StopCalls);
+            Assert.Equal(1, rig.RestoreCalls);
+        }
+        finally { rig.AllowCaptureStartup.TrySetResult(); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RevokedReadinessCannotActivateOrReleaseMicrophone(bool permitTone)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var rig = new Rig();
+        Task start = rig.Coordinator.StartAsync(rig.Request(permitTone) with { CancellationToken = cancellation.Token });
+        await rig.ReadinessEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        cancellation.Cancel();
+        await start.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.IsAssignableFrom<OperationCanceledException>(rig.StartFailure);
+        Assert.False(rig.Activated.Task.IsCompleted);
+        Assert.False(rig.ReleaseEntered.Task.IsCompleted);
+        Assert.Empty(rig.ActiveChannels);
+        Assert.Equal(1, rig.StopCalls);
+        Assert.Equal(1, rig.RestoreCalls);
+        // A late physical readiness callback belongs to the retired attempt.
+        rig.Ready.TrySetResult(new(TimeSpan.Zero, TimeSpan.Zero));
+        Assert.False(rig.Activated.Task.IsCompleted);
+    }
+
+    [Fact]
+    public async Task RevokedPostCueRecoveryCannotReleaseMicrophone()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var rig = new Rig();
+        rig.Ready.SetResult(new(TimeSpan.Zero, TimeSpan.Zero));
+        rig.CueFinished.SetResult();
+        Task start = rig.Coordinator.StartAsync(rig.Request(true) with { CancellationToken = cancellation.Token });
+        await rig.ReleaseEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        cancellation.Cancel();
+        await start.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.IsAssignableFrom<OperationCanceledException>(rig.StartFailure);
+        Assert.Empty(rig.ActiveChannels);
+        Assert.Equal(1, rig.StopCalls);
+        Assert.Equal(1, rig.RestoreCalls);
     }
 
     [Theory]
@@ -170,6 +228,10 @@ public sealed class TransmitLifecycleCoordinatorTests
 
     private sealed class Rig : ITransmitLifecycleTransport, ITransmitLifecycleAudio, ITransmitLifecyclePresentation
     {
+        public DateTimeOffset Now => DateTimeOffset.UnixEpoch;
+        public long GetTimestamp() => 0;
+        public TimeSpan GetElapsedTime(long started) => TimeSpan.Zero;
+
         private readonly TransmitTarget target;
         public Rig()
         {
@@ -213,35 +275,41 @@ public sealed class TransmitLifecycleCoordinatorTests
         public int MuteCalls { get; private set; }
         public void SetActive() => ActiveChannels = [target.Channel.Id];
         public uint GetActiveStreamId(ChannelId channel) => ActiveChannels.Contains(channel) ? 42u : 0u;
-        public Task<MicrophoneStartExpectation> InspectNextMicrophoneStartAsync(bool? inputIsBluetooth)
+        public Task<MicrophoneStartExpectation> InspectNextMicrophoneStartAsync(bool? inputIsBluetooth, CancellationToken cancellationToken = default)
             => Task.FromResult(new MicrophoneStartExpectation(ActiveMicrophoneStartedCold, inputIsBluetooth));
         public void SetMicrophoneAudioSuppressed(bool suppressed) => Suppressed = suppressed;
-        public Task StartAsync(IReadOnlyList<TransmitTarget> targets)
+        public bool HoldCaptureStartup { get; init; }
+        public TaskCompletionSource CaptureEntered { get; } = Barrier();
+        public TaskCompletionSource AllowCaptureStartup { get; } = Barrier();
+        public async Task StartAsync(IReadOnlyList<TransmitTarget> targets, CancellationToken cancellationToken = default)
         {
+            CaptureEntered.TrySetResult();
+            if (HoldCaptureStartup) await AllowCaptureStartup.Task.WaitAsync(cancellationToken);
             Assert.True(Suppressed);
             CaptureStarted = true;
             ActiveChannels = targets.Select(target => target.Channel.Id).ToArray();
-            return Task.CompletedTask;
         }
-        public async Task<MicrophoneReadinessTiming> WaitForMicrophoneReadyAsync()
+        public async Task<MicrophoneReadinessTiming> WaitForMicrophoneReadyAsync(CancellationToken cancellationToken = default)
         {
             ReadinessEntered.TrySetResult();
-            await Ready.Task;
+            await Ready.Task.WaitAsync(cancellationToken);
             Fail("readiness");
             return await Ready.Task;
         }
         public Task ActivateAsync(CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             Fail("activation");
             Activated.TrySetResult();
             return Task.CompletedTask;
         }
-        public async Task<TimeSpan> ReleaseMicrophoneAudioAsync(bool requireFreshRecoveryCallback, TimeSpan postCueSuppressionDuration)
+        public async Task<TimeSpan> ReleaseMicrophoneAudioAsync(bool requireFreshRecoveryCallback, TimeSpan postCueSuppressionDuration,
+            CancellationToken cancellationToken = default)
         {
             RequireFreshCallback = requireFreshRecoveryCallback;
             Guard = postCueSuppressionDuration;
             ReleaseEntered.TrySetResult();
-            await Recovered.Task;
+            await Recovered.Task.WaitAsync(cancellationToken);
             Fail("recovery");
             Suppressed = false;
             return TimeSpan.Zero;
@@ -277,11 +345,11 @@ public sealed class TransmitLifecycleCoordinatorTests
                 new(TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero,
                     TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero));
         }
-        public async Task CompletePermitToneAsync(Task<LocalTonePlaybackResult> playback, TransmitStartupDiagnostics diagnostics, Stopwatch timer)
+        public async Task CompletePermitToneAsync(Task<LocalTonePlaybackResult> playback, TransmitStartupDiagnostics diagnostics, Func<TimeSpan> getElapsed)
             => await playback;
         public Task RestoreSuspendedAudioAsync() { RestoreCalls++; return Task.CompletedTask; }
         public Task StartedAsync(IReadOnlyList<TransmitTarget> targets, IReadOnlyList<ChannelId> activeChannels,
-            TransmitStartupDiagnostics diagnostics, Stopwatch timer)
+            TransmitStartupDiagnostics diagnostics, Func<TimeSpan> getElapsed)
         {
             Assert.True(Activated.Task.IsCompletedSuccessfully);
             Assert.True(Suppressed);

@@ -9,6 +9,38 @@ namespace DvmConsole.Audio.Tests;
 public sealed class OpusOggPcmStreamReaderTests
 {
     [Fact]
+    public async Task DisposalJoinsCancelledDecodeAndRejectsNewReaders()
+    {
+        using var source = new DisposalSignalingStream();
+        using var releaseRead = new ManualResetEventSlim();
+        using var packetReader = new BlockingPacketReader(releaseRead);
+        var reader = new OpusOggPcmStreamReader(source, packetReader);
+        using var cancellation = new CancellationTokenSource();
+        Task? disposal = null;
+        try
+        {
+            Task<int> read = reader.ReadSamplesAsync(new short[160], cancellation.Token).AsTask();
+            Assert.True(packetReader.ReadStarted.Wait(TimeSpan.FromSeconds(10)));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => reader.ReadSamplesAsync(new short[160]).AsTask());
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read).WaitAsync(TimeSpan.FromSeconds(10));
+            disposal = reader.DisposeAsync().AsTask();
+            Assert.False(disposal.IsCompleted);
+            Assert.Equal(0, packetReader.DisposeCount);
+            await Assert.ThrowsAsync<ObjectDisposedException>(() => reader.ReadSamplesAsync(new short[160]).AsTask());
+            releaseRead.Set();
+            await disposal.WaitAsync(TimeSpan.FromSeconds(10));
+            await reader.DisposeAsync();
+            Assert.Equal(1, packetReader.DisposeCount);
+        }
+        finally
+        {
+            releaseRead.Set();
+            await (disposal ?? reader.DisposeAsync().AsTask()).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    [Fact]
     public async Task CancellationInterruptsABlockedSynchronousPacketRead()
     {
         using var source = new DisposalSignalingStream();
@@ -42,6 +74,7 @@ public sealed class OpusOggPcmStreamReaderTests
         : IOpusOggPacketReader
     {
         public ManualResetEventSlim ReadStarted { get; } = new();
+        public int DisposeCount { get; private set; }
 
         public bool HasNextPacket
         {
@@ -57,7 +90,10 @@ public sealed class OpusOggPcmStreamReaderTests
             => throw new InvalidOperationException("No packet should be decoded.");
 
         public void Dispose()
-            => ReadStarted.Dispose();
+        {
+            DisposeCount++;
+            ReadStarted.Dispose();
+        }
     }
 
     private sealed class DisposalSignalingStream : MemoryStream

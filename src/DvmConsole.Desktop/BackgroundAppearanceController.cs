@@ -299,16 +299,7 @@ internal sealed class BackgroundAppearanceController : IAsyncDisposable
         if (!Guid.TryParse(removedAssetId, out Guid removedId))
             return;
 
-        var referenced = new HashSet<AssetId>();
-        if (Guid.TryParse(settings.UserBackgroundAssetId, out Guid backgroundId))
-            referenced.Add(new AssetId(backgroundId));
-        foreach (AlertToneSetting tone in settings.AlertTones)
-        {
-            if (Guid.TryParse(tone.AssetId, out Guid toneId))
-                referenced.Add(new AssetId(toneId));
-        }
-
-        await TryDeleteUnreferencedAsync(new AssetId(removedId), referenced).ConfigureAwait(false);
+        await TryDeleteUnreferencedAsync(new AssetId(removedId), ConsoleAssetReferences.FromSettings(settings)).ConfigureAwait(false);
     }
 
     private async ValueTask TryDeleteUnreferencedAsync(

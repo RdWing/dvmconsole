@@ -43,18 +43,20 @@ and reopen the Groups page to use those controls.
 
 ## An imported source changed outside DVM Console
 
-The managed revision does not change when its original YAML or companion files
-change. Use **File > Import Codeplug** again to bring in the new external
-content. If both the source and its managed configuration have changed, DVM
-Console asks whether to import it as a new configuration, replace the managed
-entry with a recoverable revision, or cancel.
+Editing the original YAML or companion files does not update the copy in your
+Configuration Library. Import again through **File > Import Codeplug** on
+desktop or **Settings → Configuration Library → Import from Files** on mobile.
+If both the source and its managed configuration have changed, DVM Console asks
+whether to import it as a new configuration, replace the managed entry with a
+recoverable revision, or cancel.
 
 ## The codeplug saved but the console did not change
 
-Saving does not hot-apply systems, zones, channels, or streams to a running
-session. Choose **Disconnect and reload** after Review & Save, or load the saved
-managed revision later with **File > Open Recent** or **File > Configuration
-Library**.
+Your edits are saved, but the running console keeps its current systems, zones,
+channels, and streams until you reload. Choose **Disconnect and reload** after
+Review & Save, or load the saved managed revision later with **File > Open
+Recent** or **File > Configuration Library**. On mobile, use **Settings →
+Configuration Library**.
 
 ## Reload failed
 
@@ -73,7 +75,7 @@ copy.
 ## Imported card positions or receive selections are missing
 
 A codeplug export contains configuration definitions, not the operator layout.
-Load the matching codeplug on the destination, then use **File > Import
+On desktop, load the matching codeplug on the destination, then use **File > Import
 Settings…** with the source console's exported settings. FNE and channel names
 must match for positions and receive selections to apply. Enable **Restore
 selected channels on startup** before exporting if you want those channels
@@ -84,9 +86,15 @@ settings import when transferring channel on/off state. Web-stream automatic
 startup is authorized separately; start each stream on the destination. See
 [Import and export settings](../04-Operations/02-Settings%20Reference.md#import-and-export-settings).
 
+On iPhone and iPad, card positions, List order and receive selections stay local
+to each configuration on that device. A configuration bundle does not transfer
+them. Arrange the console and select the listening channels after importing;
+desktop settings-import instructions do not apply to mobile.
+
 ## A patched call is missing or cut short
 
-Check **View > Debug Logs** for `PATCH` warnings. An overloaded destination can
+Check **View > Debug Logs** on desktop or **Settings → Diagnostics → Logs** on mobile for
+`PATCH` warnings. An overloaded destination can
 skip a new call or shorten an existing one to avoid replaying stale audio.
 See [Groups and patching](04-Groups%20and%20Patching.md#when-a-forwarded-call-is-skipped-or-shortened)
 for the limits and other reasons a destination may be unavailable.

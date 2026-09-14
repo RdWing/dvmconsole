@@ -29,43 +29,60 @@ public sealed partial class MainWindowViewModel
     }
 
     private void RegisterSessionOwnership(ConsoleSessionServices services)
+        => RegisterSessionOwnership(services, PreparedLiveSession.FromViewModel(this));
+
+    // Reserve the same global order before construction. Operational resources
+    // belong to preparation; view subscriptions only exist after attachment.
+    internal static void RegisterSessionOwnership(ConsoleSessionServices services, PreparedLiveSession prepared)
     {
-        services.Presentation.Register("shell-settings", shellSettings.DisposeAsync);
-        services.Presentation.Register("operator-undo", operatorUndo.DisposeAsync);
-        services.Transmit.Own("ptt-state-change-lock", pttStateChangeLock);
-        services.Transmit.Own("transmit-admission-gate", transmitAdmissionGate);
-        services.Presentation.Register(
-            "channel-subscriptions",
-            () => new ValueTask(DetachChannelSubscriptionsAsync()));
-        services.Presentation.Register("background-appearance", backgroundAppearance.DisposeAsync);
-        services.Recording.Register("call-recording-manager", () => DisposeAsync(callRecordings));
-        services.Recording.Register("recording-finalized-subscription", DetachRecordingSubscription);
-        services.Audio.Own("reconfiguration-lock", audioReconfigurationLock);
-        services.Audio.Register("backend-provider", () => DisposeAsync(audioBackendProvider));
-        services.Recording.Register("recording-playback", () => DisposeAsync(recordingPlayback));
-        services.Recording.Register("recording-playback-subscription", DetachRecordingPlaybackSubscription);
-        services.Audio.Register(
-            "web-stream-operator",
-            () => webStreamOperator is null ? ValueTask.CompletedTask : webStreamOperator.DisposeAsync());
-        services.Audio.Register("receive-audio-coordinator", () => DisposeAsync(audioCoordinator));
-        services.Audio.Register("receive-output-failure-subscription", DetachReceiveOutputSubscription);
-        services.Patch.Register("routing", DisposePatchRouting);
-        services.Patch.Register("source-decode", () => DisposeAsync(patchSourceDecode));
-        services.Patch.Register("source-receive-work", () => DisposeAsync(patchSourceReceiveWork));
-        services.Receive.Register("audio-work", () => DisposeAsync(receiveAudioWork));
-        services.Receive.Register("session-reconciler", () => DisposeAsync(receiveSessionReconciler));
-        services.Connection.Register("p25-key-request-coordinator", p25KeyRequestCoordinator.DisposeAsync);
-        services.Transmit.Register(
-            "coordinators-under-ptt-gate",
-            () => new ValueTask(DisposeTransmitCoordinatorsAsync()));
-        services.Transmit.Register("ptt-session", () => DisposeAsync(pttSession));
-        services.Presentation.Register("view-model-subscriptions", DetachViewModelSubscriptions);
-        services.Recording.Register("catalog-scan", () => new ValueTask(DisposeRecordingCatalogScanAsync()));
-        services.Audio.Register("default-device-monitor", () => DisposeAsync(defaultAudioDeviceMonitor));
-        services.Presentation.Own("debug-log-workspace", debugLogs);
-        services.Audio.Register(
-            "receive-output-controller",
-            () => receiveOutput is null ? ValueTask.CompletedTask : receiveOutput.DisposeAsync());
+        ConsoleOperationalRuntime runtime = prepared.Runtime;
+        services.Presentation.Register("shell-settings", () => DisposeAsync(prepared.ViewModel?.shellSettings));
+        services.Presentation.Register("operator-undo", () => DisposeAsync(prepared.ViewModel?.operatorUndo));
+        services.Transmit.Own("ptt-state-change-lock", prepared.PttStateChangeLock);
+        services.Transmit.Own("transmit-admission-gate", prepared.TransmitAdmissionGate);
+        services.Presentation.Register("channel-subscriptions", () =>
+            new ValueTask(prepared.ViewModel?.DetachChannelSubscriptionsAsync() ?? Task.CompletedTask));
+        services.Presentation.Register("background-appearance", () => DisposeAsync(prepared.ViewModel?.backgroundAppearance));
+        services.Recording.Register("call-recording-manager", () => DisposeAsync(prepared.OwnedRecordings));
+        services.Recording.Register("recording-finalized-subscription", () =>
+            prepared.ViewModel?.DetachRecordingSubscription() ?? ValueTask.CompletedTask);
+        runtime.RegisterRecordingOwnership(services.Recording);
+        services.Audio.Own("reconfiguration-lock", prepared.AudioReconfigurationLock);
+        services.Audio.Register("backend-provider", () => DisposeAsync(prepared.OwnedAudioBackendProvider));
+        runtime.RegisterRecordingPlaybackOwnership("recording-playback",
+            () => prepared.RecordingPlayback?.DetachRuntime());
+        services.Recording.Register("recording-playback-subscription", () =>
+        {
+            prepared.UnbindRecordingPlaybackState();
+            return prepared.ViewModel?.DetachRecordingPlaybackSubscription() ?? ValueTask.CompletedTask;
+        });
+        runtime.RegisterWebPlaybackOwnership("web-stream-operator", () =>
+            prepared.ViewModel?.webStreamOperator is { } webOperator
+                ? webOperator.DisposeAsync()
+                : DisposeAsync(prepared.WebPlayback));
+        runtime.RegisterReceiveAudioOwnership();
+        runtime.RegisterPatchOwnership(() => prepared.ViewModel?.patchRouting?.Dispose());
+        runtime.RegisterReceiveWorkOwnership();
+        services.Receive.Register("session-reconciler", () => DisposeAsync(prepared.ReceiveReconciler ?? prepared.ViewModel?.receiveSessionReconciler));
+        services.Connection.Register("p25-key-retrieval", () =>
+            (prepared.KeyRetrieval ?? prepared.ViewModel?.p25KeyRetrieval)?.DisposeAsync() ?? ValueTask.CompletedTask);
+        runtime.RegisterTransmitOwnership("coordinators-under-ptt-gate",
+            prepared.PttStateChangeLock, prepared.TransmitAdmissionGate,
+            () => prepared.ViewModel?.PrepareMicrophoneRetirementAsync() ?? Task.CompletedTask);
+        services.Transmit.Register("ptt-session", () => DisposeAsync(prepared.ViewModel?.pttSession));
+        services.Presentation.Register("view-model-subscriptions", () =>
+            prepared.ViewModel?.DetachViewModelSubscriptions() ?? ValueTask.CompletedTask);
+        services.Recording.Register("catalog-scan", () =>
+            new ValueTask(prepared.ViewModel?.DisposeRecordingCatalogScanAsync() ?? Task.CompletedTask));
+        services.Audio.Register("default-device-monitor", () => DisposeAsync(prepared.ViewModel?.defaultAudioDeviceMonitor));
+        services.Presentation.Register("debug-log-workspace", () =>
+        {
+            prepared.ViewModel?.debugLogs?.Dispose();
+            return ValueTask.CompletedTask;
+        });
+        runtime.RegisterReceiveOutputOwnership();
+        runtime.RegisterSnapshotOwnership();
+
     }
 
     private ValueTask DetachRecordingSubscription()
@@ -82,25 +99,18 @@ public sealed partial class MainWindowViewModel
         return ValueTask.CompletedTask;
     }
 
-    private ValueTask DetachReceiveOutputSubscription()
-    {
-        if (audioCoordinator is not null)
-            audioCoordinator.OutputFailed -= receiveOutput.HandleOutputFailed;
-        return ValueTask.CompletedTask;
-    }
-
-    private ValueTask DisposePatchRouting()
-        => patchRouting is null ? ValueTask.CompletedTask : patchRouting.DisposeAsync();
-
     private ValueTask DetachViewModelSubscriptions()
     {
         toneTargetRefresh?.Dispose();
-        if (transmitCoordinator is not null)
+        historyDiagnostics?.Dispose();
+        if (channelsById is not null)
+            foreach (var channel in channelsById.Values) channel.DetachSessionState();
+        if (operationalRuntime is not null && transmitCoordinator is not null)
         {
             transmitCoordinator.Faulted -= HandleTransmitFaulted;
             transmitCoordinator.ActiveChannelsChanged -= HandleTransmitAvailabilityChanged;
         }
-        if (toneTransmitCoordinator is not null)
+        if (operationalRuntime is not null && toneTransmitCoordinator is not null)
             toneTransmitCoordinator.SendingChanged -= HandleGeneratedAudioAvailabilityChanged;
         if (pttSession is not null)
         {
@@ -134,73 +144,19 @@ public sealed partial class MainWindowViewModel
         cleanup.ThrowIfFailed();
     }
 
-    private async Task DisposeTransmitCoordinatorsAsync()
+    private async Task PrepareMicrophoneRetirementAsync()
     {
+        if (warmMicrophoneReconciler is null) return;
         var cleanup = new AsyncCleanup();
-        // Cancel and join operations before taking the admission gate they own.
-        if (generatedAudioOperation is not null)
-            await cleanup.RunTaskAsync(() => generatedAudioOperation.DisposeAsync().AsTask()).ConfigureAwait(false);
-        bool pttGateEntered = false;
-        bool admissionEntered = false;
-        try
-        {
-            await pttStateChangeLock.WaitAsync().ConfigureAwait(false);
-            pttGateEntered = true;
-            await transmitAdmissionGate.WaitAsync().ConfigureAwait(false);
-            admissionEntered = true;
-        }
-        catch (Exception exception)
-        {
-            cleanup.Capture(exception);
-        }
-
-        if (pttGateEntered)
-        {
-            try
-            {
-                if (toneTransmitCoordinator is not null)
-                {
-                    await cleanup.RunTaskAsync(
-                        () => toneTransmitCoordinator.DisposeAsync().AsTask()).ConfigureAwait(false);
-                }
-                if (generatedAudioMonitor is not null)
-                {
-                    await cleanup.RunTaskAsync(
-                        () => generatedAudioMonitor.DisposeAsync().AsTask()).ConfigureAwait(false);
-                }
-                if (localTonePlayer is not null)
-                {
-                    await cleanup.RunTaskAsync(
-                        () => localTonePlayer.DisposeAsync().AsTask()).ConfigureAwait(false);
-                }
-                if (warmMicrophoneReconciler is not null)
-                {
-                    cleanup.Run(() => warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled);
-                    await cleanup.RunTaskAsync(warmMicrophoneReconciler.WhenIdleAsync).ConfigureAwait(false);
-                }
-                if (transmitCoordinator is not null)
-                {
-                    await cleanup.RunTaskAsync(
-                        () => transmitCoordinator.DisposeAsync().AsTask()).ConfigureAwait(false);
-                }
-            }
-            finally
-            {
-                if (admissionEntered)
-                    transmitAdmissionGate.Release();
-                pttStateChangeLock.Release();
-            }
-        }
-
+        cleanup.Run(() => warmMicrophoneReconciler.Reconciled -= HandleWarmMicrophoneReconciled);
+        await cleanup.RunTaskAsync(warmMicrophoneReconciler.WhenIdleAsync).ConfigureAwait(false);
         cleanup.ThrowIfFailed();
     }
 
-    private async Task DisposeSystemsAsync()
+    private async Task DisposeSystemsAsync(IReadOnlyList<SystemViewModel> ownedSystems)
     {
         var cleanup = new AsyncCleanup();
-        radioIngress.TrafficReceived -= HandleSubscribedSystemTraffic;
-        radioIngress.AuthorityChanged -= HandleSystemTalkgroupAuthorityChanged;
-        foreach (SystemViewModel system in Systems)
+        foreach (SystemViewModel system in ownedSystems)
         {
             cleanup.Run(() =>
             {
@@ -213,15 +169,30 @@ public sealed partial class MainWindowViewModel
         }
 
         await cleanup.RunTasksAsync(
-            Systems.Select(system => (Func<Task>)(() => system.DisposeAsync().AsTask())))
+            ownedSystems.Select(system => (Func<Task>)(() => system.DisposeAsync().AsTask())))
             .ConfigureAwait(false);
+        cleanup.ThrowIfFailed();
+    }
+
+    internal static async Task DisposePreparedSystemsAsync(
+        PreparedLiveSession? prepared, IReadOnlyList<SystemViewModel> ownedSystems)
+    {
+        if (prepared?.ViewModel is { } view)
+        {
+            await view.DisposeSystemsAsync(ownedSystems).ConfigureAwait(false);
+            return;
+        }
+
+        var cleanup = new AsyncCleanup();
+        await cleanup.RunTasksAsync(ownedSystems.Select(system =>
+            (Func<Task>)(() => system.DisposeAsync().AsTask()))).ConfigureAwait(false);
         cleanup.ThrowIfFailed();
     }
 
     private Task DetachChannelSubscriptionsAsync()
     {
         var cleanup = new AsyncCleanup();
-        foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
+        foreach (ChannelViewModel channel in (Systems ?? []).SelectMany(system => system.Channels))
         {
             cleanup.Run(() =>
             {

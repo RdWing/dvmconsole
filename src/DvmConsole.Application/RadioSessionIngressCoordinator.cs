@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2025-2026 RdWing
 // SPDX-License-Identifier: AGPL-3.0-only
 
+using DvmConsole.Core.Diagnostics;
+
 namespace DvmConsole.Application;
 
 /// <summary>
@@ -21,12 +23,26 @@ public sealed class RadioSessionIngressCoordinator : IDisposable
         {
             session.TrafficReceived += HandleTrafficReceived;
             session.AuthorityChanged += HandleAuthorityChanged;
+            if (session is IRadioSubscriberAcknowledgementSource acknowledgements)
+                acknowledgements.SubscriberAcknowledged += HandleSubscriberAcknowledged;
+            if (session is IRadioLogSource logs) logs.LogPublished += HandleLogPublished;
+            if (session is IRadioP25KeyEndpoint keys) keys.P25KeyReceived += HandleP25KeyReceived;
+            if (session is IRadioConnectionStateNotifications connection)
+                connection.ConnectionStateChanged += HandleConnectionStateChanged;
         }
     }
 
     public event EventHandler<RadioTrafficRecord>? TrafficReceived;
 
     public event EventHandler<TalkgroupAuthorityRecord>? AuthorityChanged;
+
+    public event EventHandler<RadioConnectionSnapshot>? ConnectionChanged;
+
+    public event EventHandler<RadioP25KeyResponse>? P25KeyReceived;
+
+    public event EventHandler<ConsoleSubscriberAcknowledgement>? SubscriberAcknowledged;
+
+    public event EventHandler<DebugLogEntry>? LogPublished;
 
     public void Dispose()
     {
@@ -37,6 +53,12 @@ public sealed class RadioSessionIngressCoordinator : IDisposable
         {
             session.TrafficReceived -= HandleTrafficReceived;
             session.AuthorityChanged -= HandleAuthorityChanged;
+            if (session is IRadioSubscriberAcknowledgementSource acknowledgements)
+                acknowledgements.SubscriberAcknowledged -= HandleSubscriberAcknowledged;
+            if (session is IRadioLogSource logs) logs.LogPublished -= HandleLogPublished;
+            if (session is IRadioP25KeyEndpoint keys) keys.P25KeyReceived -= HandleP25KeyReceived;
+            if (session is IRadioConnectionStateNotifications connection)
+                connection.ConnectionStateChanged -= HandleConnectionStateChanged;
         }
     }
 
@@ -54,6 +76,35 @@ public sealed class RadioSessionIngressCoordinator : IDisposable
             return;
 
         AuthorityChanged?.Invoke(this, authority);
+    }
+
+    private void HandleSubscriberAcknowledged(object? sender, ConsoleSubscriberAcknowledgement response)
+    {
+        if (IsRegisteredSender(sender, response.System))
+            SubscriberAcknowledged?.Invoke(sender, response);
+    }
+
+    private void HandleLogPublished(object? sender, DebugLogEntry entry)
+    {
+        if (sender is IRadioSession session && IsRegisteredSender(sender, session.SystemId))
+            LogPublished?.Invoke(sender, entry);
+    }
+
+    private void HandleP25KeyReceived(object? sender, RadioP25KeyResponse response)
+    {
+        if (IsRegisteredSender(sender, response.SystemId))
+            P25KeyReceived?.Invoke(sender, response);
+    }
+
+    private void HandleConnectionStateChanged(object? sender, EventArgs args)
+    {
+        if (sender is not IRadioSession session || !IsRegisteredSender(sender, session.SystemId) ||
+            sender is not IRadioConnectionStateSource source)
+            return;
+        RadioConnectionSnapshot snapshot = source.ConnectionState;
+        if (snapshot.SystemId != session.SystemId)
+            return;
+        ConnectionChanged?.Invoke(session, snapshot);
     }
 
     private bool IsRegisteredSender(object? sender, SystemId systemId)

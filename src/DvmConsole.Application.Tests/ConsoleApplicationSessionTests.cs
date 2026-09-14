@@ -94,6 +94,31 @@ public sealed class ConsoleApplicationSessionTests
     }
 
     [Fact]
+    public async Task FailedReplacementReactivationRequiresFreshQuiescenceOnTheNextReplacement()
+    {
+        int calls = 0;
+        await using var session = CreateSession(quiesce: _ => { calls++; return ValueTask.CompletedTask; });
+        await session.QuiesceAsync(CancellationToken.None);
+        session.ReactivateAfterFailedReplacement();
+        Assert.False(session.Snapshot.IsQuiescing);
+        await session.QuiesceAsync(CancellationToken.None);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task ReactivationCannotRaceAnUnfinishedQuiescence()
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var session = CreateSession(quiesce: _ => new ValueTask(completion.Task));
+        Task quiescing = session.QuiesceAsync(CancellationToken.None).AsTask();
+        Assert.Throws<InvalidOperationException>(session.ReactivateAfterFailedReplacement);
+        completion.SetResult();
+        await quiescing;
+        session.ReactivateAfterFailedReplacement();
+        Assert.False(session.Snapshot.IsQuiescing);
+    }
+
+    [Fact]
     public async Task ConcurrentQuiesceCallersShareTheSameOperation()
     {
         var release = new TaskCompletionSource(

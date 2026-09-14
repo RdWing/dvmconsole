@@ -90,6 +90,8 @@ public interface IRecordingWriteHandle : IAsyncDisposable
 {
     RecordingId Id { get; }
     Stream Stream { get; }
+    ValueTask CheckpointAsync(CancellationToken cancellationToken = default)
+        => new(Stream.FlushAsync(cancellationToken));
     void UpdateContext(RecordingCaptureContext context)
     {
     }
@@ -100,6 +102,8 @@ public interface IRecordingWriteHandle : IAsyncDisposable
         string? fault,
         CancellationToken cancellationToken = default);
 }
+
+public sealed record RecordingPlaybackSource(Stream Stream, RecordingCallIdentity? Identity = null);
 
 public interface IRecordingStore
 {
@@ -112,6 +116,9 @@ public interface IRecordingStore
     ValueTask<Stream> OpenReadAsync(
         RecordingId id,
         CancellationToken cancellationToken = default);
+    async ValueTask<RecordingPlaybackSource> OpenPlaybackAsync(
+        RecordingId id, CancellationToken cancellationToken = default)
+        => new(await OpenReadAsync(id, cancellationToken).ConfigureAwait(false));
     IAsyncEnumerable<RecordingDescriptor> ListAsync(
         CancellationToken cancellationToken = default);
 }

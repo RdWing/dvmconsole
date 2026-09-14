@@ -30,16 +30,15 @@ internal sealed class PatchRoutingSessionPort(
 }
 
 /// <summary>
-/// Owns persisted patch-group membership and projects it into the live routing
-/// coordinator. The main view model remains the XAML facade and supplies only
-/// persistence, status, and patch-source reconciliation ports.
+/// Adapts desktop patch editors to the shared configuration runtime.
+/// Persistence, status, and patch-source reconciliation remain host ports.
 /// </summary>
-internal sealed class PatchRoutingController : IDisposable, IAsyncDisposable
+internal sealed class PatchRoutingController : IDisposable
 {
     private readonly PatchForwardingCoordinator forwarding;
     private readonly IPatchRoutingSessionPort session;
     private readonly IReadOnlyList<ChannelViewModel> channels;
-    private readonly bool retainOnStartup;
+    private readonly PatchConfigurationRuntime configuration;
     private bool disposed;
 
     public PatchRoutingController(
@@ -47,22 +46,34 @@ internal sealed class PatchRoutingController : IDisposable, IAsyncDisposable
         IEnumerable<ChannelViewModel> channels,
         IEnumerable<GroupConfiguration> groupDefinitions,
         bool retainOnStartup,
-        IPatchRoutingSessionPort session)
+        IPatchRoutingSessionPort session,
+        PatchConfigurationRuntime? preparedConfiguration = null)
     {
         this.forwarding = forwarding ?? throw new ArgumentNullException(nameof(forwarding));
         this.session = session ?? throw new ArgumentNullException(nameof(session));
         this.channels = channels?.Distinct().ToArray() ??
             throw new ArgumentNullException(nameof(channels));
-        this.retainOnStartup = retainOnStartup;
 
         GroupConfiguration[] definitions = groupDefinitions?.ToArray() ??
             throw new ArgumentNullException(nameof(groupDefinitions));
         CodeplugGroupState state = session.State;
-        RestoreState(definitions);
+        configuration = preparedConfiguration ?? new PatchConfigurationRuntime(
+            new PatchConfigurationPort(() => session.State,
+                new ConsoleTransmitChannelDirectory(this.channels.DistinctBy(channel => channel.Id)
+                    .Select(channel => (channel.SessionState, channel.ConfigurationAccess))), forwarding),
+            definitions.Select(group => new PatchGroupRuntimeDefinition(group.Name, group.IsMultiselectGroup())));
+        if (preparedConfiguration is null) configuration.Restore(retainOnStartup);
         Groups = BuildGroups(definitions, state);
         RefreshMembershipConflicts();
     }
 
+    public event EventHandler? ConfigurationStateChanged
+    {
+        add => configuration.Changed += value;
+        remove => configuration.Changed -= value;
+    }
+    public IReadOnlyDictionary<ChannelId, IReadOnlyList<ChannelPatchMembership>> MembershipIndex => configuration.MembershipIndex;
+    public IReadOnlyList<ConsoleGroupDefinitionSnapshot> SavedGroups => configuration.SavedGroups;
     public PatchForwardingCoordinator Forwarding => forwarding;
     public IReadOnlyList<string> GroupNames => forwarding.GroupNames;
     public IReadOnlyList<PatchGroupEditorViewModel> Groups { get; }
@@ -77,17 +88,8 @@ internal sealed class PatchRoutingController : IDisposable, IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(groupName);
         ArgumentNullException.ThrowIfNull(members);
 
-        List<PatchMemberAddress> normalizedMembers = members
-            .Where(member => !string.IsNullOrWhiteSpace(member.SystemName) && member.DestinationId != 0)
-            .Select(member => new PatchMemberAddress(
-                member.SystemName,
-                member.DestinationId,
-                member.ChannelName))
-            .GroupBy(member => member.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First())
-            .ToList();
-        PersistGroupDefinition(groupName.Trim(), normalizedMembers, enabled, oneWay);
-        ReapplyState();
+        configuration.SaveDefinition(groupName, members, enabled, oneWay);
+        configuration.Apply();
         session.PersistSettings();
         RefreshMembershipConflicts();
         session.ReconcilePatchSources();
@@ -113,7 +115,7 @@ internal sealed class PatchRoutingController : IDisposable, IAsyncDisposable
             List<PatchMemberAddress> members = group.GetMembersInRoutingOrder()
                 .Select(member => PatchMemberResolver.FromChannel(member.Channel))
                 .ToList();
-            PersistGroupDefinition(
+            configuration.SaveDefinition(
                 group.Name,
                 members,
                 enabled: group.IsPatchGroup ? group.IsEnabled : true,
@@ -122,7 +124,7 @@ internal sealed class PatchRoutingController : IDisposable, IAsyncDisposable
         }
 
         if (patchStateChanged)
-            ReapplyState();
+            configuration.Apply();
         session.PersistSettings();
         RefreshMembershipConflicts();
         if (patchStateChanged)
@@ -141,8 +143,8 @@ internal sealed class PatchRoutingController : IDisposable, IAsyncDisposable
         if (!group.IsPatchGroup)
             return;
 
-        session.State.EnabledStates[group.Name] = group.IsEnabled;
-        ReapplyState();
+        configuration.SetEnabled(group.Name, group.IsEnabled);
+        configuration.Apply();
         session.PersistSettings();
         session.ReconcilePatchSources();
         session.PublishStatus($"Patch group '{group.Name}' {(group.IsEnabled ? "enabled" : "disabled")}.");
@@ -154,33 +156,7 @@ internal sealed class PatchRoutingController : IDisposable, IAsyncDisposable
             return;
         foreach (PatchGroupEditorViewModel group in Groups)
             group.MembershipChanged -= HandleMembershipChanged;
-        forwarding.Dispose();
         disposed = true;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (disposed)
-            return;
-        foreach (PatchGroupEditorViewModel group in Groups)
-            group.MembershipChanged -= HandleMembershipChanged;
-        disposed = true;
-        await forwarding.DisposeAsync().ConfigureAwait(false);
-    }
-
-    private void PersistGroupDefinition(
-        string groupName,
-        IEnumerable<PatchMemberAddress> members,
-        bool enabled,
-        bool oneWay)
-    {
-        string normalizedName = groupName.Trim();
-        CodeplugGroupState state = session.State;
-        state.Memberships[normalizedName] = members
-            .Select(PatchMemberResolver.ToSetting)
-            .ToList();
-        state.OneWayModes[normalizedName] = oneWay;
-        state.EnabledStates[normalizedName] = enabled;
     }
 
     private IReadOnlyList<PatchGroupEditorViewModel> BuildGroups(
@@ -272,51 +248,6 @@ internal sealed class PatchRoutingController : IDisposable, IAsyncDisposable
                 : $"{conflictingChannels.Count} member overlap(s): " +
                   string.Join(", ", conflictingChannels.Distinct(StringComparer.OrdinalIgnoreCase)));
         }
-    }
-
-    private void RestoreState(IEnumerable<GroupConfiguration> groupDefinitions)
-    {
-        if (!retainOnStartup)
-            return;
-        ReapplyState(groupDefinitions);
-    }
-
-    private void ReapplyState(IEnumerable<GroupConfiguration>? groupDefinitions = null)
-    {
-        CodeplugGroupState state = session.State;
-        IEnumerable<string> configuredPatchNames = groupDefinitions is not null
-            ? groupDefinitions
-                .Where(group => group.IsPatchGroup())
-                .Select(group => group.Name.Trim())
-            : Groups
-                .Where(group => group.IsPatchGroup)
-                .Select(group => group.Name);
-        HashSet<string> patchGroupNames = configuredPatchNames
-            .Where(name => name.Length > 0)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var memberResolver = new PatchMemberResolver(channels);
-        var memberships = new Dictionary<string, IReadOnlyList<PatchMemberAddress>>(
-            StringComparer.OrdinalIgnoreCase);
-        foreach (KeyValuePair<string, List<PatchMemberSetting>> entry in state.Memberships)
-        {
-            if (!patchGroupNames.Contains(entry.Key) ||
-                !state.EnabledStates.TryGetValue(entry.Key, out bool enabled) ||
-                !enabled)
-            {
-                continue;
-            }
-
-            memberships[entry.Key] = entry.Value
-                .Select(memberResolver.Resolve)
-                .Where(channel => channel is not null)
-                .Cast<ChannelViewModel>()
-                .Select(PatchMemberResolver.FromChannel)
-                .GroupBy(member => member.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(group => group.First())
-                .ToArray();
-        }
-
-        forwarding.ApplyMemberships(memberships, state.OneWayModes);
     }
 
     private static string FormatAppliedGroupStatus(PatchGroupEditorViewModel group)

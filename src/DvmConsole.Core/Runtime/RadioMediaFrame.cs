@@ -28,3 +28,11 @@ public interface IRadioMediaFrame
     uint StreamId { get; }
     byte[] Payload { get; }
 }
+
+// Optional transport timing accompanies the frame without coupling media work
+// to a particular network client. Timestamps share the host monotonic clock.
+public interface IRadioFrameIngressTiming
+{
+    long BoundaryTimestamp { get; }
+    long TransportIngressTimestamp { get; }
+}

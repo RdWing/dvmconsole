@@ -1,78 +1,47 @@
 // SPDX-FileCopyrightText: 2025-2026 RdWing
 // SPDX-License-Identifier: AGPL-3.0-only
 
+using System.Runtime.CompilerServices;
+
 namespace DvmConsole.Desktop;
 
-// Owns operator-selected receive mute scopes. The coordinator remains
-// responsible for the playback mechanism; this type only decides whether a
-// channel's decoded PCM should currently reach live output.
-internal sealed class ReceiveOutputMutePolicy
+// Maps desktop scope objects to portable identities. Application owns mute
+// intent and policy; system-specific zone copies retain distinct memberships.
+internal sealed class ReceiveOutputMutePolicy(ReceiveMuteState? sessionState = null)
 {
-    private readonly HashSet<SystemViewModel> mutedSystems =
-        new(ReferenceEqualityComparer.Instance);
-    private readonly HashSet<ZoneViewModel> mutedZones =
-        new(ReferenceEqualityComparer.Instance);
+    private readonly ReceiveMuteState state = sessionState ?? new();
+    internal ReceiveMuteState State => state;
+    private readonly ConditionalWeakTable<SystemViewModel, ReceiveMuteScope> systems = new();
+    private readonly ConditionalWeakTable<ZoneViewModel, ReceiveMuteScope> zones = new();
 
     public bool IsMuted(ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        return mutedSystems.Any(system => system.Channels.Contains(channel)) ||
-            mutedZones.Any(zone => zone.Channels.Contains(channel));
+        return state.IsMuted(channel.Id);
     }
+    public bool IsMuted(SystemViewModel system) => state.IsMuted(Scope(system));
+    public bool IsMuted(ZoneViewModel zone) => state.IsMuted(Scope(zone));
+    public bool Toggle(SystemViewModel system) => state.Toggle(Scope(system));
+    public bool Toggle(ZoneViewModel zone) => state.Toggle(Scope(zone));
 
     public string? GetEffectiveReason(ChannelViewModel channel, bool globallyMuted)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        if (globallyMuted)
-            return "global output mute";
-
-        SystemViewModel? system = mutedSystems.FirstOrDefault(candidate =>
-            candidate.Channels.Contains(channel));
-        if (system is not null)
-            return $"system {system.Name} output mute";
-
-        ZoneViewModel? zone = mutedZones.FirstOrDefault(candidate =>
-            candidate.Channels.Contains(channel));
-        return zone is null ? null : $"zone {zone.Name} output mute";
+        return state.GetEffectiveReason(channel.Id, globallyMuted);
     }
 
-    public bool ShouldEnableLivePlayback(
-        ChannelViewModel channel,
-        bool isTemporarilySuspended)
+    public bool ShouldEnableLivePlayback(ChannelViewModel channel, bool isTemporarilySuspended)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        return channel.IsAudioEnabled &&
-            !isTemporarilySuspended &&
-            !IsMuted(channel);
+        return state.ShouldEnableLivePlayback(channel.Id, channel.OperatorState.Snapshot.AudioEnabled,
+            isTemporarilySuspended);
     }
 
-    public bool IsMuted(SystemViewModel system)
-    {
-        ArgumentNullException.ThrowIfNull(system);
-        return mutedSystems.Contains(system);
-    }
+    private ReceiveMuteScope Scope(SystemViewModel system)
+        => systems.GetValue(system, static value => new(ReceiveMuteScopeKind.System,
+            value.Name, value.Channels.Select(channel => channel.Id)));
 
-    public bool IsMuted(ZoneViewModel zone)
-    {
-        ArgumentNullException.ThrowIfNull(zone);
-        return mutedZones.Contains(zone);
-    }
-
-    public bool Toggle(SystemViewModel system)
-    {
-        ArgumentNullException.ThrowIfNull(system);
-        if (mutedSystems.Remove(system))
-            return false;
-        mutedSystems.Add(system);
-        return true;
-    }
-
-    public bool Toggle(ZoneViewModel zone)
-    {
-        ArgumentNullException.ThrowIfNull(zone);
-        if (mutedZones.Remove(zone))
-            return false;
-        mutedZones.Add(zone);
-        return true;
-    }
+    private ReceiveMuteScope Scope(ZoneViewModel zone)
+        => zones.GetValue(zone, static value => new(ReceiveMuteScopeKind.Zone,
+            value.Name, value.Channels.Select(channel => channel.Id)));
 }

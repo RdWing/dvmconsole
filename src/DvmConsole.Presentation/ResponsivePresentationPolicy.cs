@@ -9,6 +9,13 @@ public enum ConsoleRendererPreference
     List
 }
 
+public enum ConsoleHostFormFactor
+{
+    Desktop,
+    Phone,
+    Tablet
+}
+
 public enum ResponsivePresentationState
 {
     Wide,
@@ -33,6 +40,13 @@ public static class ResponsivePresentationPolicy
         double logicalWidth,
         ConsoleRendererPreference savedPreference,
         bool mobileHost = false)
+        => Resolve(logicalWidth, savedPreference,
+            mobileHost ? ConsoleHostFormFactor.Phone : ConsoleHostFormFactor.Desktop);
+
+    public static ResponsivePresentation Resolve(
+        double logicalWidth,
+        ConsoleRendererPreference savedPreference,
+        ConsoleHostFormFactor formFactor)
     {
         double width = double.IsFinite(logicalWidth) ? Math.Max(0, logicalWidth) : 0;
         ResponsivePresentationState state = width switch
@@ -42,7 +56,7 @@ public static class ResponsivePresentationPolicy
             >= NarrowMinimum => ResponsivePresentationState.Narrow,
             _ => ResponsivePresentationState.Phone
         };
-        ConsoleRendererPreference renderer = mobileHost || width < NarrowMinimum
+        ConsoleRendererPreference renderer = formFactor == ConsoleHostFormFactor.Phone || width < NarrowMinimum
             ? ConsoleRendererPreference.List
             : savedPreference;
         return new ResponsivePresentation(

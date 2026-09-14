@@ -161,10 +161,5 @@ internal sealed class ReceiveAudioRouteRegistry
         sessionFollowsSystemDefault.Clear();
     }
 
-    public ReceiveAudioRoute[] RemoveAllRoutes()
-    {
-        ReceiveAudioRoute[] snapshot = routes.Values.ToArray();
-        routes.Clear();
-        return snapshot;
-    }
+
 }

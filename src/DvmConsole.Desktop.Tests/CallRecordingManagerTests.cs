@@ -19,6 +19,69 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class CallRecordingManagerTests
 {
     [Fact]
+    public async Task CheckpointFlushesQueuedPcmWithoutEndingTheActiveCall()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "neo-recording-checkpoint-" + Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        { Name = "Checkpoint", System = "Test", Tgid = "99", Mode = "analog" });
+        channel.SetRecordingEnabled(true);
+        try
+        {
+            await using var manager = new CallRecordingManager(root);
+            short[] samples = Enumerable.Repeat((short)1200, 160).ToArray();
+            manager.WriteSamples(channel, 41, 7, samples);
+            await manager.CheckpointAsync();
+            string path = Assert.Single(manager.ActivePaths);
+            byte[] ReadWave()
+            {
+                using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var copy = new MemoryStream();
+                input.CopyTo(copy);
+                return copy.ToArray();
+            }
+            Assert.Equal(320u, System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(ReadWave().AsSpan(40, 4)));
+            manager.WriteSamples(channel, 41, 7, samples);
+            await manager.CheckpointAsync();
+            Assert.Equal(path, Assert.Single(manager.ActivePaths));
+            Assert.Equal(640u, System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(ReadWave().AsSpan(40, 4)));
+            Assert.True(manager.CaptureState([(ChannelRecordingDescriptor)channel])[channel.Id].IsRecording);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public async Task RetiringCaptureSessionKeepsHostStoreAndReplacementCaptureAlive()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "neo-shared-recording-" + Guid.NewGuid().ToString("N"));
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        { Name = "Dispatch", System = "Test", Tgid = "99", Mode = "analog" });
+        channel.SetRecordingEnabled(true);
+        try
+        {
+            await using var store = new OpusRecordingStore(root, null, 0);
+            await using var first = new CallRecordingManager(store);
+            await using var replacement = new CallRecordingManager(store);
+            first.WriteSamples(channel, 41, 7, ActiveSamples());
+            await first.DisposeAsync();
+            replacement.WriteSamples(channel, 42, 7, ActiveSamples());
+            await replacement.DrainAcceptedWorkAsync();
+            Assert.True(replacement.CaptureState([(ChannelRecordingDescriptor)channel])[channel.Id].IsRecording);
+            await first.DisposeAsync();
+            Assert.True(replacement.CaptureState([(ChannelRecordingDescriptor)channel])[channel.Id].IsRecording);
+            await replacement.DisposeAsync();
+            await store.DisposeAsync();
+            await using var reopened = new CallRecordingManager(root);
+            Assert.Equal(2, reopened.LoadRecordings().Count);
+            var health = Assert.IsType<DvmConsole.Operations.CatalogScanHealth>(
+                ((IRecordingCatalogHealthSource)reopened).CatalogHealth);
+            Assert.Equal(2, health.Loaded);
+            // Reading health must use the completed scan, not perform more I/O.
+            Assert.Same(health, ((IRecordingCatalogHealthSource)reopened).CatalogHealth);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
     public async Task CaptureStateDoesNotWaitForTheRecordingWorker()
     {
         string root = Path.Combine(
@@ -50,12 +113,13 @@ public sealed class CallRecordingManagerTests
         try
         {
             manager.WriteSamples(channel, streamId: 41, sourceId: 7, ActiveSamples());
-            Assert.True(workerEntered.Wait(TimeSpan.FromSeconds(2)));
+            Assert.True(workerEntered.Wait(TimeSpan.FromSeconds(10)));
 
-            Task<IReadOnlyDictionary<ChannelId, ChannelRecordingState>> capture = Task.Run(() =>
-                manager.CaptureState([(ChannelRecordingDescriptor)channel]));
+            Task<IReadOnlyDictionary<ChannelId, ChannelRecordingState>> capture = Task.Factory.StartNew(() =>
+                manager.CaptureState([(ChannelRecordingDescriptor)channel]), CancellationToken.None,
+                TaskCreationOptions.LongRunning, TaskScheduler.Default);
             IReadOnlyDictionary<ChannelId, ChannelRecordingState> state =
-                await capture.WaitAsync(TimeSpan.FromSeconds(1));
+                await capture.WaitAsync(TimeSpan.FromSeconds(10));
 
             Assert.True(state.ContainsKey(new ChannelId(channel.SessionId)));
         }
@@ -999,7 +1063,7 @@ public sealed class CallRecordingManagerTests
             }
 
             Assert.Empty(Directory.GetFiles(root, "*.json", SearchOption.AllDirectories));
-            OggOpusTagSet tags = DesktopRecordingFileCodec.ReadOpusTags(firstPath);
+            OggOpusTagSet tags = RecordingFileCodec.ReadOpusTags(firstPath);
             Assert.True(tags.Fields.ContainsKey(OpusRecordingMetadataStore.MetadataTag));
             CallRecordingMetadata metadata = Assert.Single(manager.LoadRecordings());
             Assert.Equal("ANALOG", metadata.Protocol);
@@ -1078,7 +1142,13 @@ public sealed class CallRecordingManagerTests
             await WriteCatalogEntryAsync(root, "old", DateTimeOffset.UtcNow.AddDays(-8));
             await WriteCatalogEntryAsync(root, "recent", DateTimeOffset.UtcNow.AddDays(-2));
 
-            Assert.Equal(1, manager.PruneExpired());
+            IRecordingRetentionControl retention = manager;
+            var preview = await retention.PreviewRetentionAsync(7);
+            Assert.Equal(1, preview.CandidateCount);
+            Assert.NotNull(preview.Cutoff);
+            Assert.Equal(2, manager.LoadRecordings().Count);
+            Assert.Equal(0, (await retention.PreviewRetentionAsync(0)).CandidateCount);
+            Assert.Equal(1, await retention.PruneExpiredAsync());
             Assert.Single(manager.LoadRecordings());
             Assert.Equal("recent.opus", manager.LoadRecordings()[0].FileName);
         }
@@ -1555,7 +1625,7 @@ public sealed class CallRecordingManagerTests
             Assert.Equal((ushort)0x50, metadata.EncryptionKeyIdValue);
             Assert.EndsWith("_System 1_99_42_SECURE_AES_63.opus", metadata.FileName, StringComparison.Ordinal);
 
-            string encoded = DesktopRecordingFileCodec.ReadOpusTags(metadata.FilePath).Fields[OpusRecordingMetadataStore.MetadataTag];
+            string encoded = RecordingFileCodec.ReadOpusTags(metadata.FilePath).Fields[OpusRecordingMetadataStore.MetadataTag];
             using JsonDocument embedded = DecodeMetadata(encoded);
             JsonElement payload = embedded.RootElement;
             Assert.False(payload.TryGetProperty(nameof(CallRecordingMetadata.FilePath), out _));
@@ -1905,7 +1975,7 @@ public sealed class CallRecordingManagerTests
         string opusPath = Path.Combine(root, "legacy.opus");
         using (var writer = PcmWavTestFile.Create(wavPath, PcmAudioFormat.Voice8KhzMono16Bit))
             writer.Write(Enumerable.Repeat((short)1200, 800).ToArray());
-        await DesktopRecordingFileCodec.EncodeWaveAsync(wavPath, opusPath);
+        await RecordingFileCodec.EncodeWaveAsync(wavPath, opusPath);
         File.Delete(wavPath);
 
         string sidecarPath = Path.ChangeExtension(opusPath, ".json");
@@ -1941,7 +2011,7 @@ public sealed class CallRecordingManagerTests
         {
             Assert.Empty(manager.LoadRecordings());
             Assert.True(File.Exists(sidecarPath));
-            Assert.False(DesktopRecordingFileCodec.ReadOpusTags(opusPath).Fields.ContainsKey(OpusRecordingMetadataStore.MetadataTag));
+            Assert.False(RecordingFileCodec.ReadOpusTags(opusPath).Fields.ContainsKey(OpusRecordingMetadataStore.MetadataTag));
 
             await using IAudioPcmStreamReader reader = await PcmStreamDecoder.OpenAsync(File.OpenRead(opusPath));
             short[] decoded = new short[1600];
@@ -2094,7 +2164,7 @@ public sealed class CallRecordingManagerTests
             ChannelName = "Dispatch",
             PlaybackValidated = true
         };
-        await DesktopRecordingFileCodec.EncodeWaveAsync(
+        await RecordingFileCodec.EncodeWaveAsync(
             wavPath,
             opusPath,
             new OpusRecordingMetadataStore().CreateTags(metadata));

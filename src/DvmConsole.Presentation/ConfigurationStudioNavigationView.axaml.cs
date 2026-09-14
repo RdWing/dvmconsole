@@ -14,9 +14,16 @@ public sealed partial class ConfigurationStudioNavigationView : UserControl
     public ConfigurationStudioNavigationView()
     {
         InitializeComponent();
+        ConfigurationTree.KeyDown += (_, args) =>
+        {
+            if (args.Key != Key.Enter || ConfigurationTree.SelectedItem is not IConfigurationHierarchyNode node) return;
+            Activate(node);
+            args.Handled = true;
+        };
     }
 
     public event EventHandler<ConfigurationStudioSectionEventArgs>? SectionRequested;
+    public event EventHandler? NavigationCompleted;
 
     public void SetCompactLayout(bool compact, bool phone)
     {
@@ -33,6 +40,18 @@ public sealed partial class ConfigurationStudioNavigationView : UserControl
             button.MinHeight = phone ? 44 : 0;
     }
 
+    private void HandleHierarchyTapped(object? sender, TappedEventArgs args)
+    {
+        if (sender is Control { DataContext: IConfigurationHierarchyNode node }) Activate(node);
+    }
+
+    private void Activate(IConfigurationHierarchyNode node)
+    {
+        if (DataContext is not IConfigurationStudioNavigationViewModel viewModel) return;
+        viewModel.ActivateHierarchyNode(node);
+        NavigationCompleted?.Invoke(this, EventArgs.Empty);
+    }
+
     private void HandleOverviewClick(object? sender, RoutedEventArgs e)
         => Publish(ConfigurationStudioSection.Overview);
     private void HandleSystemsClick(object? sender, RoutedEventArgs e)
@@ -47,7 +66,10 @@ public sealed partial class ConfigurationStudioNavigationView : UserControl
         => Publish(ConfigurationStudioSection.Files);
 
     private void Publish(ConfigurationStudioSection section)
-        => SectionRequested?.Invoke(this, new ConfigurationStudioSectionEventArgs(section));
+    {
+        SectionRequested?.Invoke(this, new ConfigurationStudioSectionEventArgs(section));
+        NavigationCompleted?.Invoke(this, EventArgs.Empty);
+    }
 
     private void HandleHierarchyWheelChanged(object? sender, PointerWheelEventArgs e)
     {

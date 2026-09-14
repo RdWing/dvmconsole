@@ -10,7 +10,7 @@ namespace DvmConsole.Desktop;
 public sealed partial class MainWindowViewModel
 {
     private readonly RuntimeHealthController runtimeHealth;
-    private readonly PttActivationArbiter pttActivationArbiter = new();
+    private readonly PttActivationArbiter pttActivationArbiter;
 
     public string PttInputSourceText => runtimeHealth.PttInputSourceText;
 
@@ -48,7 +48,9 @@ public sealed partial class MainWindowViewModel
         => runtimeHealth.ObserveReceiveTiming(timing);
 
     private void ObserveRecordingCatalogHealth(RecordingCatalogScanResult scan)
-        => runtimeHealth.ObserveRecordingCatalog(scan);
+        => runtimeHealth.ObserveRecordingCatalog(new CatalogScanHealth(
+            scan.ScannedFiles, scan.Recordings.Count, scan.PrunedFiles,
+            scan.DamagedFiles, scan.InaccessiblePaths, scan.Duration));
 
     private void ObservePttActivationSource(PttActivationSource source)
     {

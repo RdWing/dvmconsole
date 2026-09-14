@@ -216,7 +216,7 @@ public sealed class AudioMixer : IAsyncDisposable
             if (!discarded)
                 return diagnostics.TransitionDiscardedSamples;
 
-            endExpectedPlayback = outputWasPrimed;
+            endExpectedPlayback = outputWasPrimed && channels.Values.All(channel => channel.HonorReceiveSuppression);
             outputWasPrimed = false;
             targetOutputBufferedFrames = NormalOutputBufferedFrames;
             recoveryHoldUntilTimestamp = 0;
@@ -224,6 +224,7 @@ public sealed class AudioMixer : IAsyncDisposable
             List<MixerLaneBuffer>? drainedChannels = null;
             foreach (MixerLaneBuffer channel in channels.Values)
             {
+                if (!channel.HonorReceiveSuppression) continue;
                 while (channel.Frames.TryDequeue(out short[]? frame))
                 {
                     diagnostics.AddTransitionDiscardedSamples(frame.Length);
@@ -261,6 +262,13 @@ public sealed class AudioMixer : IAsyncDisposable
     }
 
     public IAudioPlayback OpenChannel(string? diagnosticLabel = null)
+        => OpenChannelCore(diagnosticLabel, honorReceiveSuppression: true);
+
+    /// <summary>Local cues and recording playback share the output but remain audible during receive suppression.</summary>
+    public IAudioPlayback OpenMonitorChannel(string? diagnosticLabel = null)
+        => OpenChannelCore(diagnosticLabel, honorReceiveSuppression: false);
+
+    private IAudioPlayback OpenChannelCore(string? diagnosticLabel, bool honorReceiveSuppression)
     {
         lock (sync)
         {
@@ -270,7 +278,8 @@ public sealed class AudioMixer : IAsyncDisposable
                 ? $"mixer lane {id}"
                 : diagnosticLabel.Trim();
             MixerLaneDiagnosticsAccumulator laneDiagnostics = diagnostics.GetOrCreateLane(label);
-            var channel = new MixerLaneBuffer(id, frameSamples, label, laneDiagnostics);
+            var channel = new MixerLaneBuffer(id, frameSamples, label, laneDiagnostics)
+            { HonorReceiveSuppression = honorReceiveSuppression };
             channel.FrameHandedOff = (sampleCount, presentationDelay) =>
                 MarkFrameHandedOff(channel, sampleCount, presentationDelay);
             channel.FrameReleased = frame => ReturnPresentedFrame(channel, frame);
@@ -624,7 +633,7 @@ public sealed class AudioMixer : IAsyncDisposable
                 throw new ObjectDisposedException(nameof(IAudioPlayback));
             if (!channel.LivePlaybackEnabled)
                 return;
-            if (inputDiscarded)
+            if (inputDiscarded && channel.HonorReceiveSuppression)
             {
                 diagnostics.AddTransitionDiscardedSamples(samples.Length);
                 return;

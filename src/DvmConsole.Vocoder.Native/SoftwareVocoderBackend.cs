@@ -12,7 +12,8 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
     private bool disposed;
 
     public SoftwareVocoderBackend(
-        IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions>? receiveAudioProcessingOptions = null)
+        IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions>? receiveAudioProcessingOptions = null,
+        NativeVocoderLinkage linkage = NativeVocoderLinkage.Dynamic)
     {
         this.receiveAudioProcessingOptions = Enum.GetValues<VocoderMode>()
             .ToDictionary(
@@ -20,7 +21,7 @@ public sealed class SoftwareVocoderBackend : IVocoderBackend
                 mode => receiveAudioProcessingOptions?.TryGetValue(mode, out ReceiveAudioProcessingOptions? options) == true
                     ? Validate(options)
                     : new ReceiveAudioProcessingOptions());
-        api = NativeVocoderApi.Load();
+        api = NativeVocoderApi.Load(linkage);
     }
 
     public string Name => "Built-in software vocoder";

@@ -21,14 +21,15 @@ internal sealed class MainWindowSessionComposition
 
     public HistoryRecordingController CreateHistoryRecording(
         string recordingRetentionDays,
-        string recordingRootPath)
-        => new(recordingRetentionDays, recordingRootPath);
+        string recordingRootPath, ConsoleCallHistory? history = null)
+        => new(recordingRetentionDays, recordingRootPath, history);
 
     public HistoryDiagnosticsController CreateHistoryDiagnostics(
         HistoryRecordingController history,
         DebugLogWorkspace debugLogs,
-        IHistoryDiagnosticsSession session)
-        => new(history, debugLogs, session);
+        IHistoryDiagnosticsSession session,
+        ConsoleSubscriberCommandDispatcher? subscriberCommands = null)
+        => new(history, debugLogs, session, subscriberCommands);
 
     public RecordingCommandController CreateRecordingCommands(IRecordingCommandSession session)
         => new(session);
@@ -64,19 +65,10 @@ internal sealed class MainWindowSessionComposition
         => new(settings, serialFactory, getSerialTargetScope);
 
     public WebStreamPlaybackCoordinator CreateWebStreamPlayback(
-        Func<IAudioBackend> createAudioBackend,
-        Func<string?> getOutputDeviceId,
-        Func<WebStreamConfiguration, CancellationToken, Task<Stream>>? openStream,
-        Func<Stream, CancellationToken, Task<IAudioPcmStreamReader>>? createDecoder,
-        Func<WebStreamViewModel, string?>? getStreamOutputDeviceId,
-        IUiDispatcher uiDispatcher)
-        => new(
-            createAudioBackend,
-            getOutputDeviceId,
-            openStream,
-            createDecoder,
-            getStreamOutputDeviceId,
-            uiDispatcher);
+        ConsoleOperationalRuntime runtime, ConsoleWebPlaybackDependencies dependencies,
+        Func<WebStreamViewModel, string?>? getStreamOutputDeviceId, IUiDispatcher uiDispatcher)
+        => new(observer => runtime.InitializeWebPlayback(dependencies, observer),
+            getStreamOutputDeviceId, uiDispatcher);
 
     public WebStreamOperatorController CreateWebStreamOperator(
         UserSettings settings,
@@ -84,20 +76,6 @@ internal sealed class MainWindowSessionComposition
         WebStreamPlaybackCoordinator playback,
         IWebStreamOperatorSession session)
         => new(settings, configurationIdentity, playback, session);
-
-    public ReceiveSessionController CreateReceiveSession(IReceiveSessionPort port)
-        => new(port);
-
-    public ReceiveOutputController CreateReceiveOutput(
-        IReceiveOutputRoutePort routes,
-        IReceiveOutputMutePort mute,
-        IReceiveOutputPresentationPort presentation,
-        IReceiveOutputLifetimePort lifetime)
-        => new(routes, mute, presentation, lifetime);
-
-    public ReceivePresentationController CreateReceivePresentation(
-        IReceivePresentationPort port)
-        => new(port);
 
     public RuntimeHealthController CreateRuntimeHealth(
         IRecordingFinalizationHealthSource recordingFinalization)
@@ -109,25 +87,14 @@ internal sealed class MainWindowSessionComposition
         IAudioInputSettingsSession session)
         => new(workspace, settings, session);
 
-    public TransmitAudioTransitionController CreateTransmitAudioTransition(
-        ITransmitReceiveRoutePort routes,
-        ITransmitReceiveMutePort mute,
-        ITransmitPermitTonePort tones,
-        ITransmitAudioPresentationPort presentation,
-        ITransmitAudioGate gate)
-        => new(routes, mute, tones, presentation, gate);
-
     public PatchRoutingController CreatePatchRouting(
         PatchForwardingCoordinator forwarding,
         IEnumerable<ChannelViewModel> channels,
         IEnumerable<GroupConfiguration> groupDefinitions,
         bool retainOnStartup,
-        IPatchRoutingSessionPort session)
-        => new(forwarding, channels, groupDefinitions, retainOnStartup, session);
+        IPatchRoutingSessionPort session,
+        PatchConfigurationRuntime? preparedConfiguration = null)
+        => new(forwarding, channels, groupDefinitions, retainOnStartup, session, preparedConfiguration);
 
-    public ConnectionSessionController CreateConnectionSession(
-        IReadOnlyList<SystemViewModel> systems,
-        IConnectionPatchLifecyclePort patchLifecycle,
-        IConnectionPresentationPort presentation)
-        => new(systems, patchLifecycle, presentation);
+
 }

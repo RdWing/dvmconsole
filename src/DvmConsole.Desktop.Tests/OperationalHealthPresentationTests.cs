@@ -3,12 +3,20 @@
 
 using DvmConsole.Application;
 using DvmConsole.Operations;
+using DvmConsole.Presentation;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
 
 public sealed class OperationalHealthPresentationTests
 {
+    [Fact]
+    public void UnavailableRecordingHealthDoesNotClaimMeasuredZeroWork()
+    {
+        Assert.Equal("TAR finalization: unavailable", OperationalHealthPresentation.FormatWorkBacklog("TAR finalization", null));
+        Assert.Equal("TAR catalog: not scanned", OperationalHealthPresentation.FormatCatalog(null));
+    }
+
     [Fact]
     public void FixedBucketsReportDeterministicPercentileUpperBounds()
     {

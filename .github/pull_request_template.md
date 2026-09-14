@@ -1,7 +1,7 @@
 ## Problem and outcome
 
-Describe the operator or contributor problem and the observable outcome of this
-change. Link the related issue when one exists.
+Explain the problem and what changes for the operator or contributor. Include a
+before/after example when helpful, and link the related issue if there is one.
 
 Closes #
 
@@ -16,9 +16,9 @@ Closes #
 
 ## Compatibility and scope
 
-Describe any effect on settings paths/schema, codeplugs, FNE framing, native ABI,
-package contents/names, executable or bundle identity, application-data paths,
-public constructors, XAML bindings, or existing operator workflows.
+Describe any compatibility changes: settings paths or schema, codeplugs, FNE
+framing, native ABI, package contents or names, executable or bundle identity,
+application-data paths, public constructors, XAML bindings, or operator workflows.
 
 - [ ] Existing functionality and information density are preserved, or the
       intentional change and migration are documented.
@@ -30,10 +30,12 @@ public constructors, XAML bindings, or existing operator workflows.
 
 ## Evidence
 
-List exact commands, counts, package targets, environments, and results. Mark
-unperformed tiers **not run**; one tier never silently proves another.
+List the commands you ran, test counts, package targets, environments, and
+results. Mark checks you did not perform **not run**. Report each kind of testing
+separately: a passing build or test suite does not establish live radio or device
+behavior.
 
-| Tier | Result and evidence |
+| Check | Result and evidence |
 | --- | --- |
 | Source review | |
 | Automated validation | |
@@ -43,15 +45,19 @@ unperformed tiers **not run**; one tier never silently proves another.
 | Package smoke: Windows ARM64 | Not run |
 | Package smoke: Linux x64 | Not run |
 | Package smoke: Linux ARM64 | Not run |
+| iPhone simulator | Not run |
+| iPad simulator | Not run |
+| Physical iPhone | Not run |
+| Physical iPad | Not run |
 | Live FNE integration | Not run |
 | Hardware exercise | Not run |
 | Community validation | Not run |
 
 ## Visual changes
 
-For visible changes, attach before/after images at relevant scale and theme. Use
-fictional or fully anonymized data and describe keyboard, scaling, contrast, and
-screen-reader review.
+For visible changes, attach before/after images at the affected screen sizes and
+themes. Use fictional or fully anonymized data. Describe your checks for touch or
+keyboard interaction, scaling, contrast, and screen-reader access.
 
 ## Privacy and publication review
 

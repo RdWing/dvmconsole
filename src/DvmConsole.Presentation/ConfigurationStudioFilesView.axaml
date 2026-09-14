@@ -9,7 +9,7 @@
              x:DataType="presentation:ConfigurationStudioViewModel">
   <ScrollViewer Margin="18" IsVisible="{Binding IsFiles}">
     <StackPanel Spacing="10">
-      <TextBlock Classes="heading" Text="Files &amp; Interoperability"/>
+      <TextBlock Classes="heading" Text="Files &amp; Interoperability" TextWrapping="Wrap"/>
       <Border x:Name="ReferencedFilesPanel" Classes="panel">
         <StackPanel Spacing="6">
           <TextBlock Classes="subheading" Text="Referenced files"/>
@@ -25,12 +25,12 @@
       </Border>
       <Border Classes="panel">
         <StackPanel Spacing="6">
-          <Grid ColumnDefinitions="*,220,Auto" ColumnSpacing="8">
+          <Grid x:Name="AliasHeader" ColumnDefinitions="*,220,Auto" ColumnSpacing="8">
             <StackPanel>
               <TextBlock Classes="subheading" Text="RID aliases"/>
-              <TextBlock Classes="caption" Text="Choose the FNE system whose managed alias file you want to edit."/>
+              <TextBlock Classes="caption" Text="Choose the FNE system whose managed alias file you want to edit." TextWrapping="Wrap"/>
             </StackPanel>
-            <ComboBox Grid.Column="1"
+            <ComboBox x:Name="AliasOwner" Grid.Column="1"
                       ItemsSource="{Binding Systems}"
                       SelectedItem="{Binding SelectedAliasSystem, Mode=TwoWay}"
                       IsEnabled="{Binding CanEdit}"
@@ -39,16 +39,26 @@
                 <DataTemplate x:DataType="config:SystemConfiguration"><TextBlock Text="{Binding Name}"/></DataTemplate>
               </ComboBox.ItemTemplate>
             </ComboBox>
-            <StackPanel x:Name="AliasActions" Grid.Column="2" Orientation="Horizontal" Spacing="4" IsEnabled="{Binding CanEdit}">
+            <WrapPanel x:Name="AliasActions" Grid.Column="2" Orientation="Horizontal" ItemSpacing="4" LineSpacing="4" IsEnabled="{Binding CanEdit}">
               <Button Content="Choose file&#x2026;"
                       Tag="{Binding SelectedAliasSystem}"
                       AutomationProperties.Name="Choose managed RID alias file"
                       Click="HandleBrowseAliasFileClick"/>
               <Button Content="Add" AutomationProperties.Name="Add RID alias" Click="HandleAddAliasClick"/>
               <Button Content="Delete" AutomationProperties.Name="Delete RID alias" Click="HandleDeleteAliasClick"/>
-            </StackPanel>
+            </WrapPanel>
           </Grid>
           <ListBox Classes="dense-list" MaxHeight="220" ItemsSource="{Binding Aliases}" SelectedItem="{Binding SelectedAlias, Mode=TwoWay}">
+            <ListBox.Styles>
+              <Style Selector="ListBoxItem" x:DataType="presentation:ConfigurationAliasRow">
+                <Setter Property="AutomationProperties.Name">
+                  <MultiBinding StringFormat="{}RID {0}: {1}">
+                    <Binding Path="Rid"/>
+                    <Binding Path="Name"/>
+                  </MultiBinding>
+                </Setter>
+              </Style>
+            </ListBox.Styles>
             <ListBox.ItemTemplate>
               <DataTemplate x:DataType="presentation:ConfigurationAliasRow">
                 <Border Classes="dense-row">

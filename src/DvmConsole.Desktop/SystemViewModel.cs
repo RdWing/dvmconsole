@@ -15,6 +15,7 @@ namespace DvmConsole.Desktop;
 
 public sealed class SystemViewModel :
     IFneTrafficEndpoint,
+    IRadioSubscriberCommandEndpoint,
     IChannelAudioRouteSystemViewModel,
     IConnectionSystemViewModel,
     IRecorderSystemViewModel,
@@ -22,17 +23,19 @@ public sealed class SystemViewModel :
     IAsyncDisposable
 {
     private readonly IFneRadioSession radioSession;
+    private readonly ConsoleTransmitChannelDirectory transmitChannels;
+    internal RadioConnectionEndpoint ConnectionEndpoint { get; }
+    private readonly bool ownsRadioSession;
     private readonly FneConnectionOptions options;
     private string connectionStatus = "Disconnected";
-    private readonly object keyRequestSync = new();
-    private readonly HashSet<(byte AlgorithmId, ushort KeyId)> requestedP25Keys = [];
-    private readonly HashSet<(byte AlgorithmId, ushort KeyId)> receivedP25Keys = [];
+    private readonly P25KeyRequestState keyRequests;
+    internal P25KeyRequestPort KeyRequestPort { get; }
+    internal P25KeyRequestState KeyRequestState => keyRequests;
     private readonly FneTrafficStatistics trafficStatistics = new();
     private readonly RxJitterBufferModeViewModel[] rxJitterBufferModes;
     private ReceiveJitterBufferTelemetry jitterBufferTelemetry;
     private bool restoringJitterBuffer;
     private long nonCallDmrTerminatorCount;
-    private long droppedSystemTrafficCount;
     private int trafficDiagnosticsDirty;
     private bool verboseLoggingEnabled;
     private bool isSelected;
@@ -66,20 +69,29 @@ public sealed class SystemViewModel :
         IEnumerable<ZoneViewModel>? zones,
         int accentIndex,
         IFneRadioSessionFactory? radioSessionFactory,
-        bool hasCallPriority)
+        bool hasCallPriority,
+        IFneRadioSession? preparedRadioSession = null,
+        P25KeyRequestState? preparedKeyRequests = null)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
+        keyRequests = preparedKeyRequests ?? new P25KeyRequestState();
         verboseLoggingEnabled = options.EnableVerboseLogging;
         Name = name;
         Endpoint = endpoint;
         Channels = channels?.ToArray() ?? [];
+        transmitChannels = new(Channels.DistinctBy(channel => channel.Id)
+            .Select(channel => (channel.SessionState, channel.ConfigurationAccess)));
         Zones = zones?.ToArray() ?? [];
         HasCallPriority = hasCallPriority;
         var defaultFactory = new FneRadioSessionFactory(
             this.options,
-            () => Channels.Select(channel => channel.ToTransmitDescriptor()).ToArray());
+            transmitChannels.CaptureAll);
         IFneRadioSessionFactory factory = radioSessionFactory ?? defaultFactory;
-        radioSession = factory.Create();
+        radioSession = preparedRadioSession ?? factory.Create();
+        KeyRequestPort = new P25KeyRequestPort(keyRequests, radioSession.RequestP25Key, LogP25KeyRequest);
+        ownsRadioSession = preparedRadioSession is null;
+        ConnectionEndpoint = RadioConnectionEndpoint.FromSession(SystemId.FromName(Name), Name,
+            radioSession, keyRequests, ResetPacketDiagnostics);
         rxJitterBufferModes = CreateJitterBufferModes(new RxJitterBufferSetting());
         foreach (RxJitterBufferModeViewModel mode in rxJitterBufferModes)
             mode.PropertyChanged += HandleJitterBufferModePropertyChanged;
@@ -93,11 +105,11 @@ public sealed class SystemViewModel :
         }
         foreach (WebStreamViewModel stream in Zones.SelectMany(zone => zone.WebStreams).Distinct())
             stream.PropertyChanged += HandleWebStreamPropertyChanged;
+        ConsoleChannelState.LinkReceivePeers(Channels.Select(channel => channel.SessionState));
         foreach (ChannelViewModel channel in Channels)
         {
             channel.SetHasCallPriority(HasCallPriority);
-            channel.SetReceivePresentationOwnerResolver(() => Channels.FirstOrDefault(candidate =>
-                SameResource(channel, candidate) && candidate.HasLocalReceivePresentation));
+            channel.RefreshReceivePresentation();
             channel.PropertyChanged += HandleChannelPropertyChanged;
         }
         radioSession.StatusChanged += HandleConnectionStatus;
@@ -118,10 +130,10 @@ public sealed class SystemViewModel :
     System.Collections.IEnumerable IChannelAudioRouteSystemViewModel.AudioRouteChannels => Channels;
     System.Collections.IEnumerable IRecorderSystemViewModel.RecorderChannels => Channels;
     IReadOnlyCollection<TransmitChannelDescriptor> IFneTrafficEndpoint.ChannelDescriptors
-        => Channels.Select(channel => channel.ToTransmitDescriptor()).ToArray();
+        => transmitChannels.CaptureAll();
 
     IReadOnlyCollection<ChannelId> IFneTrafficEndpoint.ChannelIds
-        => Channels.Select(channel => new ChannelId(channel.SessionId)).ToArray();
+        => transmitChannels.ChannelIds;
     public IReadOnlyList<ZoneViewModel> Zones { get; }
     public ZoneViewModel? SelectedZone
     {
@@ -170,16 +182,9 @@ public sealed class SystemViewModel :
         get
         {
             long nonCallTerminators = Interlocked.Read(ref nonCallDmrTerminatorCount);
-            long backlogDrops = Interlocked.Read(ref droppedSystemTrafficCount);
-            if (nonCallTerminators == 0 && backlogDrops == 0)
-                return "Local receive health · no discarded control traffic or UI backlog drops";
-
-            var details = new List<string>(2);
-            if (nonCallTerminators > 0)
-                details.Add($"non-call DMR terminators {nonCallTerminators:N0}");
-            if (backlogDrops > 0)
-                details.Add($"UI backlog drops {backlogDrops:N0}");
-            return $"Local receive health · {string.Join(" · ", details)}";
+            return nonCallTerminators == 0
+                ? "Local receive health · no discarded control traffic"
+                : $"Local receive health · non-call DMR terminators {nonCallTerminators:N0}";
         }
     }
     public IReadOnlyList<RxJitterBufferModeViewModel> RxJitterBufferModes => rxJitterBufferModes;
@@ -219,22 +224,12 @@ public sealed class SystemViewModel :
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected)));
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken = default)
-    {
-        ResetPacketDiagnostics();
-        await radioSession.StartAsync(cancellationToken).ConfigureAwait(false);
-    }
-    public async Task StopAsync(CancellationToken cancellationToken = default)
-    {
-        await radioSession.StopAsync(cancellationToken).ConfigureAwait(false);
-        lock (keyRequestSync)
-        {
-            requestedP25Keys.Clear();
-            receivedP25Keys.Clear();
-        }
-    }
+    public Task StartAsync(CancellationToken cancellationToken = default)
+        => ConnectionEndpoint.StartAsync(cancellationToken).AsTask();
 
-    internal void Abort() => radioSession.Abort();
+    public Task StopAsync(CancellationToken cancellationToken = default)
+        => ConnectionEndpoint.StopAsync(cancellationToken).AsTask();
+
 
     public async Task RestartAsync(CancellationToken cancellationToken = default)
     {
@@ -270,43 +265,16 @@ public sealed class SystemViewModel :
     }
 
     public void RequestP25Key(byte algorithmId, ushort keyId)
-    {
-        lock (keyRequestSync)
-        {
-            if (!requestedP25Keys.Add((algorithmId, keyId)))
-                return;
-        }
-
-        try
-        {
-            radioSession.RequestP25Key(algorithmId, keyId);
-            LogP25KeyRequest(algorithmId, keyId, retry: false);
-        }
-        catch
-        {
-            lock (keyRequestSync)
-                requestedP25Keys.Remove((algorithmId, keyId));
-            throw;
-        }
-    }
+        => KeyRequestPort.Request(algorithmId, keyId);
 
     internal bool HasReceivedP25Key(byte algorithmId, ushort keyId)
-    {
-        lock (keyRequestSync)
-            return receivedP25Keys.Contains((algorithmId, keyId));
-    }
+        => KeyRequestPort.HasResponse(algorithmId, keyId);
 
     internal void RetryP25Key(byte algorithmId, ushort keyId)
-    {
-        lock (keyRequestSync)
-        {
-            if (receivedP25Keys.Contains((algorithmId, keyId)))
-                return;
-        }
+        => KeyRequestPort.Retry(algorithmId, keyId);
 
-        radioSession.RequestP25Key(algorithmId, keyId);
-        LogP25KeyRequest(algorithmId, keyId, retry: true);
-    }
+    void IRadioSubscriberCommandEndpoint.SendSubscriberCommand(ConsoleSubscriberCommand command, uint destinationId)
+        => SendP25SubscriberCommand(FneSubscriberCommandBindings.ToFne(command), destinationId);
 
     public void SendP25SubscriberCommand(P25SubscriberCommand command, uint destinationId)
         => radioSession.SendP25SubscriberCommand(command, destinationId);
@@ -361,15 +329,6 @@ public sealed class SystemViewModel :
     {
         SaturatingAdd(ref nonCallDmrTerminatorCount, 1);
         Volatile.Write(ref trafficDiagnosticsDirty, 1);
-    }
-
-    internal void RecordDroppedSystemTraffic(long count)
-    {
-        if (count > 0)
-        {
-            SaturatingAdd(ref droppedSystemTrafficCount, count);
-            Volatile.Write(ref trafficDiagnosticsDirty, 1);
-        }
     }
 
     internal RxJitterBufferSetting GetConfiguredJitterBuffer()
@@ -442,18 +401,15 @@ public sealed class SystemViewModel :
         radioSession.StatusChanged -= HandleConnectionStatus;
         radioSession.LogReceived -= HandleLogReceived;
         radioSession.KeyResponseReceived -= HandleKeyResponse;
-        await radioSession.DisposeAsync().ConfigureAwait(false);
+        if (ownsRadioSession)
+            await radioSession.DisposeAsync().ConfigureAwait(false);
     }
 
     private void HandleConnectionStatus(object? sender, FneConnectionStatus status)
     {
         if (status.State != FneConnectionState.Connected)
         {
-            lock (keyRequestSync)
-            {
-                requestedP25Keys.Clear();
-                receivedP25Keys.Clear();
-            }
+            keyRequests.Clear();
         }
         StatusChanged?.Invoke(this, status);
     }
@@ -467,7 +423,6 @@ public sealed class SystemViewModel :
     {
         trafficStatistics.Reset();
         Interlocked.Exchange(ref nonCallDmrTerminatorCount, 0);
-        Interlocked.Exchange(ref droppedSystemTrafficCount, 0);
         Volatile.Write(ref trafficDiagnosticsDirty, 1);
         PublishTrafficDiagnostics();
     }
@@ -516,8 +471,7 @@ public sealed class SystemViewModel :
 
     private void HandleKeyResponse(object? sender, FneKeyResponse response)
     {
-        lock (keyRequestSync)
-            receivedP25Keys.Add((response.AlgorithmId, response.KeyId));
+        keyRequests.ObserveResponse(response.AlgorithmId, response.KeyId);
         KeyResponseReceived?.Invoke(this, response);
     }
 
@@ -546,7 +500,7 @@ public sealed class SystemViewModel :
             e.PropertyName is nameof(ChannelViewModel.State) or
                 nameof(ChannelViewModel.IsReceivePresentationActive))
         {
-            foreach (ChannelViewModel channel in Channels.Where(candidate => SameResource(changed, candidate)))
+            foreach (ChannelViewModel channel in Channels.Where(candidate => ChannelReceiveIdentity.AreEquivalent(changed, candidate)))
                 channel.RefreshReceivePresentation();
         }
 
@@ -570,6 +524,4 @@ public sealed class SystemViewModel :
             zone.RefreshReceiveActivity();
     }
 
-    private static bool SameResource(ChannelViewModel left, ChannelViewModel right)
-        => ChannelReceiveIdentity.AreEquivalent(left, right);
 }

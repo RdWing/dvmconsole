@@ -130,5 +130,10 @@ public sealed class TransmitFrameCadence
         => timeProvider.GetElapsedTime(target, timestamp) >= TimeSpan.Zero;
 
     private async ValueTask DelayAsync(TimeSpan duration, CancellationToken cancellationToken)
-        => await Task.Delay(duration, timeProvider, cancellationToken).ConfigureAwait(false);
+    {
+        // Task.Delay truncates fractional milliseconds. Round up at the system
+        // timer boundary so the final fraction of a frame never busy-spins.
+        TimeSpan timerDelay = TimeSpan.FromMilliseconds(Math.Ceiling(duration.TotalMilliseconds));
+        await Task.Delay(timerDelay, timeProvider, cancellationToken).ConfigureAwait(false);
+    }
 }

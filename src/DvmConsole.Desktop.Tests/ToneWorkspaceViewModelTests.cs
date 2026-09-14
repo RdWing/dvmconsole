@@ -21,7 +21,7 @@ public sealed class ToneWorkspaceViewModelTests
                 new UserSettingsStore(Path.Combine(root, "settings.json")),
                 uiDispatcher: new QueuedTestUiDispatcher(), networkDisabledDemo: true);
             ChannelViewModel channel = owner.Systems[0].Channels[0];
-            var tones = (DvmConsole.Application.IGeneratedAudioOperationPort)owner;
+            var tones = owner.GeneratedAudioPort;
             await using (await tones.EnterTransmitAsync(default))
             {
                 // Exercise the shared startup used by channel controls and hardware
@@ -85,7 +85,7 @@ public sealed class ToneWorkspaceViewModelTests
             QuickCallToneAFrequencyHz = 600,
             QuickCallToneBFrequencyHz = 1_200
         };
-        var workspace = new ToneWorkspaceViewModel(settings);
+        var workspace = new ToneWorkspaceViewModel(settings, DesktopAlertToneFiles.Instance);
         string? changedProperty = null;
         workspace.PropertyChanged += (_, args) => changedProperty = args.PropertyName;
 
@@ -111,7 +111,7 @@ public sealed class ToneWorkspaceViewModelTests
                 })
                 .ToList()
         };
-        var workspace = new ToneWorkspaceViewModel(settings);
+        var workspace = new ToneWorkspaceViewModel(settings, DesktopAlertToneFiles.Instance);
 
         workspace.DtmfPresetFilterText = "regional";
 

@@ -74,6 +74,29 @@ public sealed class CallRecordingServiceTests
     }
 
     [Fact]
+    public async Task CheckpointKeepsReceiveAndTransmitOpenAndAttemptsEveryRecordingOnFailure()
+    {
+        var store = new FakeRecordingStore();
+        await using var service = new CallRecordingService(store);
+        var channel = CreateChannel(recordingEnabled: true);
+        await service.WriteReceiveSamplesAsync(channel, 1, 2, new short[] { 11 });
+        await service.WriteTransmitSamplesAsync(channel, 3, new short[] { 22 });
+        store.Handles[0].FailFlush = true;
+        try
+        {
+            await Assert.ThrowsAsync<AggregateException>(() => service.CheckpointAsync().AsTask());
+            Assert.All(store.Handles, handle => Assert.True(handle.FlushCount > 0));
+            Assert.All(store.Handles, handle => Assert.False(handle.Committed));
+            Assert.All(store.Handles, handle => Assert.Equal(0, handle.DisposeCount));
+        }
+        finally { store.Handles[0].FailFlush = false; }
+        await service.WriteReceiveSamplesAsync(channel, 1, 2, new short[] { 33 });
+        await service.CheckpointAsync();
+        Assert.Equal(2, store.Handles.Count);
+        Assert.Equal(4u, BinaryPrimitives.ReadUInt32LittleEndian(store.Handles[0].Content.AsSpan(40, 4)));
+    }
+
+    [Fact]
     public async Task NewTransmitStreamFinalizesPreviousCaptureBeforeWritingReplacement()
     {
         var store = new FakeRecordingStore();
@@ -188,6 +211,7 @@ public sealed class CallRecordingServiceTests
         public bool Committed { get; private set; }
         public bool FailCommit { get; set; }
         public bool FailFlush { set => stream.FailFlush = value; }
+        public int FlushCount => stream.FlushCount;
         public int DisposeCount { get; private set; }
         public TimeSpan Duration { get; private set; }
         public byte[] Content => stream.ToArray();
@@ -224,8 +248,10 @@ public sealed class CallRecordingServiceTests
     private sealed class FaultableStream : MemoryStream
     {
         public bool FailFlush { get; set; }
+        public int FlushCount { get; private set; }
         public override void Flush()
         {
+            FlushCount++;
             if (FailFlush)
                 throw new IOException("Injected stream flush failure");
             base.Flush();

@@ -40,7 +40,7 @@ public static class FneTrafficProtocolMapper
 // Platform-neutral representation of an inbound FNE media frame. Enum values
 // from the legacy protocol library are intentionally represented as strings so
 // the desktop/audio layers do not depend on fnecore implementation types.
-public sealed record FneTrafficFrame : IRadioMediaFrame
+public sealed record FneTrafficFrame : IRadioMediaFrame, IRadioFrameIngressTiming
 {
     public FneTrafficFrame(
         FneTrafficProtocol protocol,
@@ -99,6 +99,7 @@ public sealed record FneTrafficFrame : IRadioMediaFrame
     // Monotonic timestamp taken at the app-owned fnecore event boundary. It
     // bounds delay above fnecore without depending on wall-clock adjustments.
     public long FneBoundaryTimestamp { get; }
+    long IRadioFrameIngressTiming.BoundaryTimestamp => FneBoundaryTimestamp;
     // Monotonic timestamp captured when the traffic UDP receiver completes its
     // socket read. Zero means the transport adapter did not provide one.
     public long TransportIngressTimestamp { get; }

@@ -5,7 +5,7 @@ using System.Threading.Channels;
 
 namespace DvmConsole.Application;
 
-public sealed class ConsoleApplicationSession : IConsoleApplicationSession
+public sealed class ConsoleApplicationSession : IConsoleApplicationSession, IConsoleSessionReactivation, IConsoleSessionInputAdmission
 {
     private readonly object stateSync = new();
     private readonly object quiesceSync = new();
@@ -147,6 +147,12 @@ public sealed class ConsoleApplicationSession : IConsoleApplicationSession
         CancellationToken cancellationToken = default)
         => logEvents.Reader.ReadAllAsync(cancellationToken);
 
+    public void SuspendInput()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+        (runtimeAdapter as IConsoleSessionInputAdmission)?.SuspendInput();
+    }
+
     public ValueTask QuiesceAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
@@ -170,6 +176,20 @@ public sealed class ConsoleApplicationSession : IConsoleApplicationSession
         return cancellationToken.CanBeCanceled
             ? new ValueTask(current.Task.WaitAsync(cancellationToken))
             : new ValueTask(current.Task);
+    }
+
+    public void ReactivateAfterFailedReplacement()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+        lock (quiesceSync)
+        {
+            if (quiesceCompletion is { Task.IsCompleted: false })
+                throw new InvalidOperationException("The outgoing session is still quiescing and cannot be restored safely.");
+            (runtimeAdapter as IConsoleSessionReactivation)?.ReactivateAfterFailedReplacement();
+            quiesceCompleted = false;
+            quiesceCompletion = null;
+        }
+        TryPublishQuiescingState(isQuiescing: false);
     }
 
     private async Task ExecuteQuiesceAsync(
@@ -207,13 +227,14 @@ public sealed class ConsoleApplicationSession : IConsoleApplicationSession
     {
         try
         {
-            if (!TryPublishSnapshot(
-                    Snapshot with { IsQuiescing = isQuiescing },
-                    out ConsoleRuntimeSnapshot previous,
-                    out ConsoleRuntimeSnapshot current,
-                    out IReadOnlyCollection<ChannelId> changed))
+            ConsoleRuntimeSnapshot previous;
+            ConsoleRuntimeSnapshot current;
+            IReadOnlyCollection<ChannelId> changed;
+            lock (stateSync)
             {
-                return;
+                if (!TryPublishSnapshot(snapshot with { IsQuiescing = isQuiescing },
+                        out previous, out current, out changed))
+                    return;
             }
 
             PublishSafely(
@@ -296,15 +317,26 @@ public sealed class ConsoleApplicationSession : IConsoleApplicationSession
         if (Volatile.Read(ref disposed) != 0 || runtimeAdapter is null)
             return;
 
-        ConsoleRuntimeSnapshot current = Snapshot;
-        ConsoleSnapshotUpdate update = runtimeAdapter.CaptureUpdate(current);
-        ConsoleRuntimeSnapshot captured = update.Snapshot with { IsQuiescing = current.IsQuiescing };
-        if (TryPublishSnapshot(captured, out ConsoleRuntimeSnapshot previous,
-                out ConsoleRuntimeSnapshot published, out IReadOnlyCollection<ChannelId> changed,
-                update.ChangedChannels, current) && !ReferenceEquals(previous, published))
+        // Capture outside the publication lock: adapters may acquire their own runtime locks.
+        // A concurrent publication invalidates the capture basis, so capture again rather
+        // than publishing older control state over a newer revision.
+        bool recaptured = false;
+        while (Volatile.Read(ref disposed) == 0)
         {
-            PublishSafely(SnapshotChanged,
-                new ConsoleSnapshotChangedEventArgs(previous, published, changed), "snapshot observer");
+            ConsoleRuntimeSnapshot basis = Snapshot;
+            ConsoleSnapshotUpdate update = runtimeAdapter.CaptureUpdate(basis);
+            ConsoleRuntimeSnapshot captured = update.Snapshot with { IsQuiescing = basis.IsQuiescing };
+            if (!TryPublishSnapshot(captured, out ConsoleRuntimeSnapshot previous,
+                    out ConsoleRuntimeSnapshot published, out IReadOnlyCollection<ChannelId> changed,
+                    recaptured ? null : update.ChangedChannels, basis))
+            {
+                recaptured = true;
+                continue;
+            }
+            if (!ReferenceEquals(previous, published))
+                PublishSafely(SnapshotChanged,
+                    new ConsoleSnapshotChangedEventArgs(previous, published, changed), "snapshot observer");
+            return;
         }
     }
 
@@ -320,7 +352,7 @@ public sealed class ConsoleApplicationSession : IConsoleApplicationSession
         {
             previous = snapshot;
             changed = [];
-            if (disposed != 0)
+            if (disposed != 0 || (candidateBase is not null && !ReferenceEquals(snapshot, candidateBase)))
             {
                 current = snapshot;
                 return false;

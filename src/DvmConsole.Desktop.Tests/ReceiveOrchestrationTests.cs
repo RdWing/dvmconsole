@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 using DvmConsole.Application;
+using DvmConsole.Core.Runtime;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Diagnostics;
 using DvmConsole.Desktop;
@@ -14,12 +15,27 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class ReceiveOrchestrationTests
 {
     [Fact]
+    public async Task AdaptiveBufferingLearnsBeforeIngressPresentation()
+    {
+        await using var rig = new Rig(Channel("Dispatch"));
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+        long At(int milliseconds) => start + milliseconds * System.Diagnostics.Stopwatch.Frequency / 1000;
+        rig.Ingress(Frame(1, fneBoundary: At(0) + 1, transport: At(0)));
+        rig.Ingress(Frame(2, fneBoundary: At(60) + 1, transport: At(60)));
+        rig.Ingress(Frame(3, fneBoundary: At(620) + 1, transport: At(620)));
+
+        Assert.Equal(TimeSpan.FromMilliseconds(540), rig.BufferingAtPresentation);
+        Assert.Equal(rig.BufferingAtPresentation,
+            rig.Buffering.GetProfile(rig.System.Name, RadioMediaProtocol.Dmr).TargetDelay);
+    }
+
+    [Fact]
     public async Task PhysicalEpisodeChecksPreserveSystemAndStreamIdentityWithoutPerChannelAllocation()
     {
         await using var rig = new Rig(Enumerable.Range(0, 500)
             .Select(index => Channel($"Channel {index}")).ToArray());
         ReceiveCallEpisodeSnapshot episode = rig.Traffic.ObserveIngress(
-            rig.System, Frame(), DateTimeOffset.UnixEpoch, 100).EpisodeSnapshot!;
+            rig.SharedSystem, Frame(), DateTimeOffset.UnixEpoch, 100).EpisodeSnapshot!;
         SystemViewModel[] systems = [rig.System];
         Assert.False(MainWindowViewModel.IsEpisodePhysicallyActive(systems, episode));
         Assert.True(rig.Channels[^1].TryApplyTraffic(rig.System.Name, Frame()));
@@ -74,9 +90,10 @@ public sealed class ReceiveOrchestrationTests
         Assert.Equal(new ushort[] { 1, 2, 3 }, rig.Audio.Select(item => item.Frame.PacketSequence));
         Assert.Equal(new ushort[] { 1, 2, 3 }, rig.Patch.Select(item => item.Frame.PacketSequence));
         Assert.Equal(new long[] { 100, 200, 300 }, rig.Audio.Select(item => item.Timestamp));
-        Assert.Equal(Enumerable.Repeat(new[] { "record", "audio", "meter", "patch", "present" }, 3).SelectMany(item => item), rig.Events);
+        Assert.Equal(Enumerable.Repeat(new[] { "record", "audio", "patch", "present" }, 3).SelectMany(item => item), rig.Events);
         Assert.Equal(3, rig.Presented.Count);
-        Assert.All(rig.Presented, item => Assert.Same(rig.Channels[0], Assert.Single(item.PreEnqueuedAudioChannels)));
+        Assert.All(rig.PresentedMeterStreams, stream => Assert.Equal(77L, stream));
+        Assert.All(rig.Presented, item => Assert.Same(rig.Channels[0].SessionState, Assert.Single(item.PreEnqueuedAudioChannels)));
         Assert.False(rig.Presented[0].Decision.CanCoalescePresentation);
         Assert.True(rig.Presented[1].Decision.CanCoalescePresentation);
         Assert.Equal(0, rig.PlaybackMarks);
@@ -95,7 +112,7 @@ public sealed class ReceiveOrchestrationTests
         Assert.Equal(channel.Id, Assert.Single(rig.Audio).Channel);
         Assert.False(channel.IsAudioEnabled);
         Assert.Empty(rig.Patch);
-        Assert.Same(channel, Assert.Single(rig.Presented[0].PreEnqueuedAudioChannels));
+        Assert.Same(channel.SessionState, Assert.Single(rig.Presented[0].PreEnqueuedAudioChannels));
     }
 
     [Fact]
@@ -120,7 +137,7 @@ public sealed class ReceiveOrchestrationTests
         rig.Ingress(Frame());
         Assert.Empty(rig.Presented[0].PreEnqueuedAudioChannels);
         Assert.Empty(rig.Presented[0].PreEnqueuedPatchChannels);
-        Assert.Equal(0, rig.MeterMarks);
+        Assert.Equal(0L, rig.Channels[0].SessionState.Receive.MeterStreamId);
         Assert.Equal(1, rig.Diagnostics);
     }
 
@@ -128,8 +145,8 @@ public sealed class ReceiveOrchestrationTests
     public async Task CapturedEpisodeDoesNotChangeWhenNewPhysicalStreamArrives()
     {
         await using var rig = new Rig(Channel("Dispatch"));
-        ReceivePacketDecisionEnvelope first = rig.Traffic.ObserveIngress(rig.System, Frame(stream: 77), DateTimeOffset.UnixEpoch, 100);
-        ReceivePacketDecisionEnvelope next = rig.Traffic.ObserveIngress(rig.System, Frame(stream: 78), DateTimeOffset.UnixEpoch.AddMilliseconds(100), 200);
+        ReceiveIngressDecision first = rig.Traffic.ObserveIngress(rig.SharedSystem, Frame(stream: 77), DateTimeOffset.UnixEpoch, 100);
+        ReceiveIngressDecision next = rig.Traffic.ObserveIngress(rig.SharedSystem, Frame(stream: 78), DateTimeOffset.UnixEpoch.AddMilliseconds(100), 200);
         Assert.Equal(first.EpisodeSnapshot!.EpisodeId, next.EpisodeSnapshot!.EpisodeId);
         Assert.Single(first.EpisodeSnapshot.StreamIds);
         Assert.Equal(2, next.EpisodeSnapshot.StreamIds.Count);
@@ -142,10 +159,10 @@ public sealed class ReceiveOrchestrationTests
     {
         await using var rig = new Rig(Channel("Owner"), Channel("Copy"));
         ChannelViewModel owner = rig.Channels[0];
-        ReceivePacketDecisionEnvelope decision = rig.Traffic.ObserveIngress(
-            rig.System, Frame(), DateTimeOffset.UnixEpoch, 100, [owner.Id]);
-        rig.Traffic.ObserveIngress(rig.System, Frame(stream: 78), DateTimeOffset.UnixEpoch.AddMilliseconds(50), 200);
-        Assert.Equal(owner, Assert.Single(rig.Traffic.ResolvePresentationCandidates(rig.System, decision)));
+        ReceiveIngressDecision decision = rig.Traffic.ObserveIngress(
+            rig.SharedSystem, Frame(), DateTimeOffset.UnixEpoch, 100, [owner.Id]);
+        rig.Traffic.ObserveIngress(rig.SharedSystem, Frame(stream: 78), DateTimeOffset.UnixEpoch.AddMilliseconds(50), 200);
+        Assert.Equal(owner.SessionState, Assert.Single(rig.Traffic.ResolvePresentationCandidates(rig.SharedSystem, decision)));
         Assert.Equal(77u, decision.Traffic.StreamId);
         Assert.Equal(77u, decision.EpisodeSnapshot!.PrimaryStreamId);
     }
@@ -181,11 +198,32 @@ public sealed class ReceiveOrchestrationTests
     public async Task QueueDropsAreCountedOnceAndOnlyAcceptedFramesUpdatePlayback(bool accepted, bool dropped, int diagnostics)
     {
         await using var rig = new Rig(Channel("Dispatch")) { AcceptAudio = accepted, DropAudio = dropped };
+        rig.Channels[0].SessionState.SetReceiveEnabled(true);
         rig.Dispatch.EnqueueAudio(rig.Channels[0].Id, Frame(), 0);
         Assert.Equal(dropped ? 1 : 0, rig.Dropped);
+        Assert.Equal(dropped ? 1L : 0L, rig.Channels[0].SessionState.Receive.DroppedFrames);
+        Assert.Equal(accepted ? 77L : 0L, rig.Channels[0].SessionState.Receive.MeterStreamId);
+        Assert.Equal(accepted, rig.Channels[0].SessionState.Receive.Playback is not null);
         Assert.Equal(diagnostics, rig.Diagnostics);
         Assert.Equal(accepted ? 1 : 0, rig.PlaybackMarks);
         Assert.Equal(900, Assert.Single(rig.Audio).Timestamp);
+    }
+
+    [Fact]
+    public async Task AdmissionClosingDuringEnqueueCannotReactivateMeterOrPlayback()
+    {
+        await using var rig = new Rig(Channel("Dispatch")) { SuspendDuringEnqueue = true };
+        var channel = rig.Channels[0].SessionState;
+        channel.SetReceiveEnabled(true);
+        rig.Dispatch.EnqueueAudio(channel.Id, Frame(), 0);
+        Assert.Single(rig.Audio);
+        Assert.Equal(0L, channel.Receive.MeterStreamId);
+        Assert.Null(channel.Receive.Playback);
+        Assert.Equal(0, rig.PlaybackMarks);
+        rig.Dispatch.MarkPlaybackActive(channel.Id, 42, 77);
+        Assert.Null(channel.Receive.Playback);
+        rig.Dispatch.EnqueueAudio(channel.Id, Frame(sequence: 2), 0);
+        Assert.Single(rig.Audio);
     }
 
     [Fact]
@@ -225,7 +263,7 @@ public sealed class ReceiveOrchestrationTests
         rig.Ingress(Frame(destination: 200));
         rig.RejectedAudioChannels.Add(rig.Channels[0].Id);
         rig.Ingress(Frame(sequence: 2, destination: 0, terminator: true));
-        Assert.Same(rig.Channels[1], Assert.Single(rig.Presented.Last().PreEnqueuedAudioChannels));
+        Assert.Same(rig.Channels[1].SessionState, Assert.Single(rig.Presented.Last().PreEnqueuedAudioChannels));
         Assert.Equal(1, rig.Diagnostics);
     }
 
@@ -233,9 +271,9 @@ public sealed class ReceiveOrchestrationTests
     public async Task LateTerminatorCannotReviveAnExpiredIngressStream()
     {
         await using var rig = new Rig(Channel("Dispatch"));
-        rig.Traffic.ObserveIngress(rig.System, Frame(), DateTimeOffset.UnixEpoch, 100);
-        ReceivePacketDecisionEnvelope late = rig.Traffic.ObserveIngress(
-            rig.System, Frame(sequence: 2, terminator: true), DateTimeOffset.UnixEpoch.AddSeconds(3), 200);
+        rig.Traffic.ObserveIngress(rig.SharedSystem, Frame(), DateTimeOffset.UnixEpoch, 100);
+        ReceiveIngressDecision late = rig.Traffic.ObserveIngress(
+            rig.SharedSystem, Frame(sequence: 2, terminator: true), DateTimeOffset.UnixEpoch.AddSeconds(3), 200);
         Assert.True(late.Routing.TryGet(rig.Channels[0].SessionDefinition.RouteKey, out ReceiveIngressRouteDecision route));
         Assert.Contains(route.PrecedingDecisions, item => item.StreamDecision.Transition == ReceiveStreamTransition.GraceExpired);
         Assert.Equal(ReceiveStreamTransition.IgnoredLate, route.StreamDecision.Transition);
@@ -248,12 +286,12 @@ public sealed class ReceiveOrchestrationTests
         ChannelViewModel channel = Channel("TAR");
         channel.SetRecordingEnabled(true);
         await using var rig = new Rig(channel);
-        var first = rig.Traffic.ObserveIngress(rig.System, Frame(), DateTimeOffset.UnixEpoch, 100);
-        rig.Traffic.EndPhysicalStream(rig.System.Name, FneTrafficProtocol.Dmr, channel.Id, 77,
+        var first = rig.Traffic.ObserveIngress(rig.SharedSystem, Frame(), DateTimeOffset.UnixEpoch, 100);
+        rig.Traffic.EndPhysicalStream(rig.System.Name, RadioMediaProtocol.Dmr, channel.Id, 77,
             DateTimeOffset.UnixEpoch.AddMilliseconds(20), ReceivePhysicalEndReason.Replaced);
         await rig.FinalizationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(0, rig.CompletedStreams);
-        var next = rig.Traffic.ObserveIngress(rig.System, Frame(stream: 78), DateTimeOffset.UnixEpoch.AddMilliseconds(100), 200);
+        var next = rig.Traffic.ObserveIngress(rig.SharedSystem, Frame(stream: 78), DateTimeOffset.UnixEpoch.AddMilliseconds(100), 200);
         Assert.Equal(first.EpisodeSnapshot!.EpisodeId, next.EpisodeSnapshot!.EpisodeId);
         Assert.Equal(77u, next.EpisodeSnapshot.PrimaryStreamId);
         Assert.True(channel.IsRecordingEnabled);
@@ -267,7 +305,7 @@ public sealed class ReceiveOrchestrationTests
     {
         await using var rig = new Rig(Channel("Owner"), Channel("Copy"));
         rig.AudioChannels.Add(rig.Channels[0].Id);
-        rig.Traffic.ObserveIngress(rig.System, Frame(), DateTimeOffset.UnixEpoch, 100);
+        rig.Traffic.ObserveIngress(rig.SharedSystem, Frame(), DateTimeOffset.UnixEpoch, 100);
         rig.Traffic.Advance(DateTimeOffset.UnixEpoch.AddSeconds(3));
         Assert.Contains(rig.Projections, item => item.Channel == rig.Channels[0].Id &&
             item.Decision.StreamDecision.EndedStreamId == 77);
@@ -278,12 +316,12 @@ public sealed class ReceiveOrchestrationTests
         => new(new ChannelConfiguration { Name = name, System = "Training", Tgid = destination, Slot = slot, Mode = mode });
     private static FneTrafficFrame Frame(ushort sequence = 1, uint stream = 77, byte slot = 0,
         FneTrafficProtocol protocol = FneTrafficProtocol.Dmr, long fneBoundary = 0,
-        uint destination = 100, bool terminator = false)
+        uint destination = 100, bool terminator = false, long transport = 0)
         => new(protocol, 1, 42, destination, slot, "GROUP", terminator ? "TERMINATOR" : "VOICE",
             terminator ? "TERMINATOR_WITH_LC" : protocol == FneTrafficProtocol.P25 ? "LDU1" : "VOICE",
-            sequence, stream, [], fneBoundary);
+            sequence, stream, [], fneBoundary, transport);
 
-    private sealed class Rig : IReceiveMediaState, IReceiveMediaWork, IReceiveMediaPresentation, IReceiveTrafficPresentation, IAsyncDisposable
+    private sealed class Rig : IReceiveMediaState, IReceiveMediaWork, IReceiveMediaPresentation, IReceiveIngressPresentation, IReceiveIngressProjection, IAsyncDisposable
     {
         private readonly ChannelId[] candidateChannels;
 
@@ -294,23 +332,36 @@ public sealed class ReceiveOrchestrationTests
             System = new(new FneConnectionOptions("Training", "Console", "127.0.0.1", 62031, 1, null, false, null),
                 "Training", "127.0.0.1:62031", channels);
             var clock = new FixedClock();
-            Dispatch = new(this, this, clock);
-            Traffic = new([System], channels.ToDictionary(channel => channel.Id), Episodes, this, Dispatch, this, clock);
+            var media = new ConsoleChannelMediaDirectory(channels.Select(channel =>
+                (channel.SessionState, new RadioAliasIndex(null))));
+            Dispatch = new(this, media, Admission, this, clock);
+            SharedSystem = new(System.Id, System.Name, channels.Select(channel => channel.SessionState).ToArray());
+            Traffic = new([SharedSystem], Episodes, this, Dispatch, this, this, FneReceiveFrameNormalization.Instance, Admission, Buffering, clock);
         }
         public ChannelViewModel[] Channels { get; }
         public SystemViewModel System { get; }
         public ReceiveCallEpisodeTracker Episodes { get; } = new();
-        public ReceiveTrafficCoordinator Traffic { get; }
+        public ReceiveIngressCoordinator Traffic { get; }
+        public ReceiveIngressSystem SharedSystem { get; }
         public ReceiveMediaDispatchCoordinator Dispatch { get; }
         public bool IsDisposing { get; set; }
-        public bool InputsSuppressed { get; set; }
+        public ConsoleSessionAdmission Admission { get; } = new(new SessionTerminalFence());
+        public ReceiveBufferingRuntime Buffering { get; } = new();
+        public TimeSpan BufferingAtPresentation { get; private set; }
+        public bool InputsSuppressed
+        {
+            get => Admission.IsSuppressed;
+            set { if (value) Admission.Suspend(); else Admission.TryResume(); }
+        }
+        public bool SuspendDuringEnqueue { get; set; }
         public List<ChannelId> AudioChannels { get; } = [];
         public List<ChannelId> PatchChannels { get; } = [];
         public IReadOnlyList<ChannelId> ActiveAudioChannels => AudioChannels;
         public IReadOnlyList<ChannelId> ActivePatchChannels => PatchChannels;
-        public List<(ChannelId Channel, FneTrafficFrame Frame, long Timestamp)> Audio { get; } = [];
-        public List<(ChannelId Channel, FneTrafficFrame Frame, long? Timestamp)> Patch { get; } = [];
-        public List<SystemTrafficWorkItem> Presented { get; } = [];
+        public List<(ChannelId Channel, IRadioMediaFrame Frame, long Timestamp)> Audio { get; } = [];
+        public List<(ChannelId Channel, IRadioMediaFrame Frame, long? Timestamp)> Patch { get; } = [];
+        public List<ReceiveIngressWorkItem> Presented { get; } = [];
+        public List<long> PresentedMeterStreams { get; } = [];
         public List<(ChannelId Channel, ReceiveRouteProjectionDecision Decision)> Projections { get; } = [];
         public List<string> Events { get; } = [];
         public List<Exception> CleanupFailures { get; } = [];
@@ -320,7 +371,6 @@ public sealed class ReceiveOrchestrationTests
         public HashSet<ChannelId> RejectedAudioChannels { get; } = [];
         public int Dropped { get; private set; }
         public int Diagnostics { get; private set; }
-        public int MeterMarks { get; private set; }
         public int PlaybackMarks { get; private set; }
         public int CompletedStreams { get; private set; }
         public int FinalSummaries { get; private set; }
@@ -329,21 +379,21 @@ public sealed class ReceiveOrchestrationTests
         public TaskCompletionSource FinalizationFinished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource QueuedPacketsFinished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public void Ingress(FneTrafficFrame frame, long boundary = 0)
-            => Traffic.HandleIngress(System, new RadioTrafficRecord(SystemId.FromName(System.Name), candidateChannels, frame,
+            => Traffic.HandleIngress(SharedSystem, new RadioTrafficRecord(SystemId.FromName(System.Name), candidateChannels, frame,
                 DateTimeOffset.UnixEpoch.AddMilliseconds(frame.PacketSequence), boundary));
         public bool IsAudioActive(ChannelId channel) => AudioChannels.Contains(channel);
         public bool IsPatchActive(ChannelId channel) => PatchChannels.Contains(channel);
         public bool IsAudioTrackingStream(ChannelId channel, uint streamId) => Audio.Any(item => item.Channel == channel && item.Frame.StreamId == streamId);
         public bool IsPatchTrackingStream(ChannelId channel, uint streamId) => Patch.Any(item => item.Channel == channel && item.Frame.StreamId == streamId);
-        public bool IsTrackingStream(ChannelId channel, uint streamId) => false;
-        public bool EnqueueAudio(ChannelId channel, FneTrafficFrame traffic, long ingressTimestamp, out bool droppedFrame)
+        public bool EnqueueAudio(ChannelId channel, IRadioMediaFrame traffic, long ingressTimestamp, out bool droppedFrame)
         {
             Events.Add("audio");
             Audio.Add((channel, traffic, ingressTimestamp));
             droppedFrame = DropAudio;
+            if (SuspendDuringEnqueue) Admission.Suspend();
             return AcceptAudio && !RejectedAudioChannels.Contains(channel);
         }
-        public bool EnqueuePatch(ChannelId channel, FneTrafficFrame traffic, long? ingressTimestamp)
+        public bool EnqueuePatch(ChannelId channel, IRadioMediaFrame traffic, long? ingressTimestamp)
         {
             Events.Add("patch");
             Patch.Add((channel, traffic, ingressTimestamp));
@@ -365,19 +415,22 @@ public sealed class ReceiveOrchestrationTests
             if (CompletionFailure is not null) throw CompletionFailure;
             return Task.CompletedTask;
         }
-        public void RecordDroppedFrame(ChannelId channel) => Dropped++;
+        public void ReportDroppedFrame(ChannelId channel) => Dropped++;
         public void PublishDiagnostics(ChannelId channel, uint streamId, DateTimeOffset now) => Diagnostics++;
-        public void MarkAudioMeter(ChannelId channel, uint streamId, bool ended) { MeterMarks++; Events.Add("meter"); }
-        public void MarkPlaybackActive(ChannelId channel, uint sourceId, uint streamId) => PlaybackMarks++;
+        public void PlaybackChanged(ChannelId channel) => PlaybackMarks++;
         public void PublishFinalJitterSummary(ChannelId channel, uint streamId) { FinalSummaries++; Events.Add("summary"); }
         public void ReportCleanupFailure(ChannelId channel, uint streamId, Exception failure) { CleanupFailures.Add(failure); Events.Add("failure"); }
-        public void RecordIngress(SystemViewModel system, FneTrafficFrame traffic) => Events.Add("record");
-        public void Present(SystemViewModel system, SystemTrafficWorkItem workItem) { Presented.Add(workItem); Events.Add("present"); }
-        public void ProjectLifecycle(ChannelId channel, ReceiveRouteProjectionDecision decision, DateTimeOffset now) => Projections.Add((channel, decision));
+        public void RecordIngress(ReceiveIngressSystem system, IRadioMediaFrame traffic)
+        {
+            BufferingAtPresentation = Buffering.GetProfile(system.Name, traffic.Protocol).TargetDelay;
+            Events.Add("record");
+        }
+        public void Apply(ReceiveIngressSystem system, ReceiveIngressWorkItem workItem) { Presented.Add(workItem); PresentedMeterStreams.Add(Channels[0].SessionState.Receive.MeterStreamId); Events.Add("present"); }
+        public void Advance(ConsoleChannelState channel, ReceiveRouteProjectionDecision decision, DateTimeOffset now) => Projections.Add((channel.Id, decision));
         public void Log(DateTimeOffset timestamp, string source, DebugLogSeverity severity, string message) => Events.Add("log");
         public ValueTask DisposeAsync() => System.DisposeAsync();
     }
-    private sealed class FixedClock : TimeProvider
+    private sealed class FixedClock : TimeProvider, IMonotonicTimeSource
     {
         public override long GetTimestamp() => 900;
         public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch;

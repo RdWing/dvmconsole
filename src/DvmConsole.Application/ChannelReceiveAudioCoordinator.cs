@@ -114,7 +114,7 @@ internal sealed class ReceiveAudioPresentationPort(
 // serializes traffic processing within each channel while allowing different
 // channels to decode concurrently before mixing.
 // Audio devices and the vocoder are created only when Listen is used.
-public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
+public sealed partial class ChannelReceiveAudioCoordinator : IAsyncDisposable
 {
     private static readonly TimeSpan RetirementGracePeriod = TimeSpan.FromMilliseconds(250);
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -345,10 +345,15 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(disposed, this);
             ChannelId[] desired;
+            Exception? stopFailure = null;
             await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 desired = selectChannels();
+                var affectedRoutes = desired.Select(id => routeRegistry.TryGetRoute(id, out var route) ? route : null)
+                    .OfType<ReceiveAudioRoute>().Distinct().ToArray();
+                try { await RetireMonitorOutputsAsync(affectedRoutes).ConfigureAwait(false); }
+                catch (Exception exception) { stopFailure = exception; }
             }
             finally
             {
@@ -366,7 +371,6 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                 channelId => sessions.TryGetValue(channelId, out ReceiveStreamSessionRegistry? state) &&
                            state.LivePlaybackEnabled);
 
-            Exception? stopFailure = null;
             foreach (ChannelId channelId in desired)
             {
                 try
@@ -757,7 +761,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
                     failure = exception;
                 }
 
-                if (routeId is not null && !routeRegistry.HasSessionsForRoute(routeId) &&
+                if (routeId is not null && !routeRegistry.HasSessionsForRoute(routeId) && !HasMonitorOutputs(routeId) &&
                     routeRegistry.TryRemoveRoute(routeId, out ReceiveAudioRoute? route))
                 {
                     try
@@ -775,7 +779,7 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             {
                 try
                 {
-                    await StopInfrastructureCoreAsync().ConfigureAwait(false);
+                    await StopInfrastructureCoreAsync(preserveMonitorOutputs: true).ConfigureAwait(false);
                 }
                 catch (Exception exception)
                 {
@@ -935,13 +939,19 @@ public sealed class ChannelReceiveAudioCoordinator : IAsyncDisposable
             throw failure;
     }
 
-    private async Task StopInfrastructureCoreAsync()
+    private async Task StopInfrastructureCoreAsync(bool preserveMonitorOutputs = false)
     {
         IVocoderBackend? oldVocoder = vocoderBackend;
-        ReceiveAudioRoute[] oldRoutes = routeRegistry.RemoveAllRoutes();
+        Exception? failure = null;
+        if (!preserveMonitorOutputs)
+        {
+            try { await RetireMonitorOutputsAsync(routeRegistry.RouteSnapshot).ConfigureAwait(false); }
+            catch (Exception exception) { failure = exception; }
+        }
+        ReceiveAudioRoute[] oldRoutes = routeRegistry.RouteSnapshot.Where(route => !HasMonitorOutputs(route.DeviceId)).ToArray();
+        foreach (var route in oldRoutes) routeRegistry.TryRemoveRoute(route.DeviceId, out _);
         vocoderBackend = null;
 
-        Exception? failure = null;
         foreach (ReceiveAudioRoute route in oldRoutes)
         {
             try

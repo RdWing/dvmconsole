@@ -222,6 +222,7 @@ internal sealed class LinuxPipeWirePlayback :
 
     public ValueTask FlushAsync(CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
         return ValueTask.CompletedTask;
     }

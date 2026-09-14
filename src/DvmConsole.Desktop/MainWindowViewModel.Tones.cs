@@ -24,18 +24,11 @@ public sealed partial class MainWindowViewModel : ITonePresentationSession
         if (busy || toneTransmitCoordinator.IsSending || transmitCoordinator.ActiveChannel is not null)
             return false;
 
-        ChannelViewModel[] targets = ResolveGeneratedToneChannels();
-        return targets.Length > 0 && targets.All(channel =>
-        {
-            SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Name.Equals(
-                channel.Definition.SystemName,
-                StringComparison.OrdinalIgnoreCase));
-            return system is not null &&
-                TransmitTargetPolicy.IsAvailable(channel.ToTransmitDescriptor(), system) &&
-                system.IsConnected &&
-                system.SourceId is uint sourceId &&
-                sourceId != 0;
-        });
+        TransmitTarget[] targets = transmitTargets.Capture(
+            transmitChannels.SelectToneChannels(ConsoleToneTargets.Alert, systemChannelIds));
+        return targets.Length > 0 && targets.All(target =>
+            TransmitTargetPolicy.IsAvailable(target.Channel, target.System) &&
+            target.System.IsConnected && target.System.SourceId is > 0);
     }
 
     private void SaveDtmfPreset() => tonePresentation.SaveDtmfPreset();
@@ -83,16 +76,9 @@ public sealed partial class MainWindowViewModel : ITonePresentationSession
         try
         {
             string normalizedDigits = NormalizeDtmfInput(DtmfDigits);
-            List<GeneratedToneStep> steps = [];
-            foreach (char digit in normalizedDigits)
-            {
-                if (steps.Count > 0)
-                    steps.Add(GeneratedToneStep.Silence(TimeSpan.FromMilliseconds(60)));
-                steps.Add(GeneratedToneStep.Dtmf(digit, TimeSpan.FromMilliseconds(240)));
-            }
             userSettings.LastDtmfDigits = normalizedDigits;
             PersistUserSettings();
-            await SendGeneratedToneAsync(new GeneratedToneSequence(steps), "DTMF");
+            await SendGeneratedToneAsync(ToneEditorSequences.Dtmf(normalizedDigits), "DTMF");
         }
         catch (Exception exception)
         {
@@ -105,12 +91,7 @@ public sealed partial class MainWindowViewModel : ITonePresentationSession
         ArgumentNullException.ThrowIfNull(preset);
         try
         {
-            var sequence = new GeneratedToneSequence(preset.Steps.Select(step =>
-                string.Equals(step.Kind, AudioPresetStepKinds.Hold, StringComparison.OrdinalIgnoreCase)
-                    ? GeneratedToneStep.Silence(TimeSpan.FromSeconds(step.DurationSeconds))
-                    : GeneratedToneStep.Dtmf(
-                        string.IsNullOrWhiteSpace(step.Digit) ? '1' : step.Digit[0],
-                        TimeSpan.FromSeconds(step.DurationSeconds))));
+            var sequence = ToneEditorSequences.DtmfPreset(preset);
             await SendGeneratedToneAsync(sequence, $"DTMF preset '{preset.Name}'");
         }
         catch (Exception exception)
@@ -243,7 +224,7 @@ public sealed partial class MainWindowViewModel : ITonePresentationSession
                 Name = name,
                 AssetId = imported.Id.ToString(),
                 FileName = Path.GetFileName(displayName)
-            });
+            }, DesktopAlertToneFiles.Instance);
             alertTones.Add(addedTone);
             userSettings.AlertTones = alertTones.Select(tone => tone.ToSetting()).ToList();
             try
@@ -445,10 +426,7 @@ public sealed partial class MainWindowViewModel : ITonePresentationSession
     }
 
     private static GeneratedToneSequence CreatePresetSequence(TonePresetViewModel preset)
-        => new(preset.Steps.Select(step =>
-            string.Equals(step.Kind, AudioPresetStepKinds.Hold, StringComparison.OrdinalIgnoreCase)
-                ? GeneratedToneStep.Silence(TimeSpan.FromSeconds(step.DurationSeconds))
-                : GeneratedToneStep.Tone(step.FrequencyHz, TimeSpan.FromSeconds(step.DurationSeconds))));
+        => ToneEditorSequences.TonePreset(preset);
 
     private bool TryBuildToneSequence(out GeneratedToneSequence? sequence, out string? error)
         => tonePresentation.TryBuildToneSequence(out sequence, out error);
@@ -478,12 +456,7 @@ public sealed partial class MainWindowViewModel : ITonePresentationSession
         ChannelViewModel[] channels = explicitTargets?.ToArray() ?? ResolveGeneratedToneChannels();
         if (channels.Length == 0)
             throw new InvalidOperationException("Arm ALERT on one or more channel cards before sending DTMF or alert audio.");
-        TransmitTarget[] targets = channels.Distinct().Select(channel => new TransmitTarget(
-            channel.ToTransmitDescriptor(),
-            Systems.FirstOrDefault(system => system.Name.Equals(
-                channel.Definition.SystemName, StringComparison.OrdinalIgnoreCase))
-                ?? throw new InvalidOperationException($"The system '{channel.Definition.SystemName}' was not found.")))
-            .ToArray();
+        TransmitTarget[] targets = transmitTargets.Capture(channels.Select(channel => channel.Id));
         try
         {
             Exception? monitorFailure = await send(targets);
@@ -521,18 +494,12 @@ public sealed partial class MainWindowViewModel : ITonePresentationSession
     }
 
     internal ChannelViewModel[] ResolveGeneratedToneChannels()
-        => Systems
-            .SelectMany(system => system.Channels)
-            .Where(channel => channel.IsAlertSelected)
-            .Distinct()
-            .ToArray();
+        => transmitChannels.SelectToneChannels(ConsoleToneTargets.Alert, systemChannelIds)
+            .Select(ResolveChannel).ToArray();
 
     internal ChannelViewModel[] ResolvePageToneChannels()
-        => Systems
-            .SelectMany(system => system.Channels)
-            .Where(channel => channel.IsPageSelected)
-            .Distinct()
-            .ToArray();
+        => transmitChannels.SelectToneChannels(ConsoleToneTargets.Page, systemChannelIds)
+            .Select(ResolveChannel).ToArray();
 
     private static string FormatToneTargetText(IEnumerable<ChannelViewModel> channels)
     {

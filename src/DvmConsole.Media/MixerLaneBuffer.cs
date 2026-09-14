@@ -9,6 +9,7 @@ internal sealed class MixerLaneBuffer(
     string diagnosticLabel,
     MixerLaneDiagnosticsAccumulator diagnostics)
 {
+    public bool HonorReceiveSuppression { get; init; } = true;
     public int Id { get; } = id;
     public string DiagnosticLabel { get; } = diagnosticLabel;
     public MixerLaneDiagnosticsAccumulator Diagnostics { get; } = diagnostics;

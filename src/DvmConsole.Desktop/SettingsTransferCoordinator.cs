@@ -77,7 +77,7 @@ internal sealed class SettingsTransferCoordinator(Func<ISettingsTransferSession>
 internal sealed class DesktopSettingsTransferSession(
     MainWindowViewModel owner,
     MainWindowSessionHost host,
-    Func<MainWindowViewModel> loadReplacement,
+    Func<Task<MainWindowViewModel>> loadReplacement,
     Func<MainWindowViewModel, Task> replace) : ISettingsTransferSession
 {
     public bool IsCurrent => ReferenceEquals(host.ViewModel, owner);
@@ -90,5 +90,5 @@ internal sealed class DesktopSettingsTransferSession(
             owner.ImportNamedSettingsProfile(profileName, stage, scope, acceptRecordingPolicy);
     }
     public void Reset() => owner.ResetSettings();
-    public Task ReloadAsync() => replace(loadReplacement());
+    public async Task ReloadAsync() => await replace(await loadReplacement());
 }

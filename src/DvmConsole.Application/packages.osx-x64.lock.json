@@ -43,7 +43,7 @@
         "type": "Project",
         "dependencies": {
           "Concentus.Oggfile": "[1.0.7, )",
-          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Abstractions": "[0.8.0, )",
           "NLayer": "[3.0.0, )"
         }
       },
@@ -62,17 +62,17 @@
       "dvmconsole.media": {
         "type": "Project",
         "dependencies": {
-          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
-          "DvmConsole.Audio.Core": "[0.7.0, )",
-          "DvmConsole.Core": "[0.7.0, )",
-          "DvmConsole.Fne": "[0.7.0, )",
-          "DvmConsole.Vocoder.Abstractions": "[0.7.0, )"
+          "DvmConsole.Audio.Abstractions": "[0.8.0, )",
+          "DvmConsole.Audio.Core": "[0.8.0, )",
+          "DvmConsole.Core": "[0.8.0, )",
+          "DvmConsole.Fne": "[0.8.0, )",
+          "DvmConsole.Vocoder.Abstractions": "[0.8.0, )"
         }
       },
       "dvmconsole.operations": {
         "type": "Project",
         "dependencies": {
-          "DvmConsole.Core": "[0.7.0, )"
+          "DvmConsole.Core": "[0.8.0, )"
         }
       },
       "dvmconsole.ptt.abstractions": {

@@ -3,48 +3,6 @@
 
 namespace DvmConsole.Ptt;
 
-public sealed class KeyboardPttInputSourceFactory(
-    KeyboardPttKey activationKey,
-    bool toggleMode = false) : IPttInputSourceFactory
-{
-    public PttInputDescriptor Descriptor { get; } = new(
-        $"desktop-keyboard-{activationKey.ToString().ToLowerInvariant()}",
-        "Focused keyboard PTT",
-        IsHardware: false,
-        HasSettings: true);
-
-    public ValueTask<IPttInputSource> CreateAsync(
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult<IPttInputSource>(new KeyboardPttSource(activationKey)
-        {
-            ToggleMode = toggleMode
-        });
-    }
-}
-
-public sealed class GlobalKeyboardPttInputSourceFactory(
-    KeyboardPttKey activationKey,
-    bool toggleMode = false) : IPttInputSourceFactory
-{
-    public PttInputDescriptor Descriptor { get; } = new(
-        $"desktop-global-keyboard-{activationKey.ToString().ToLowerInvariant()}",
-        "OS-global keyboard PTT",
-        IsHardware: false,
-        HasSettings: true);
-
-    public ValueTask<IPttInputSource> CreateAsync(
-        CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult<IPttInputSource>(new GlobalKeyboardPttSource(activationKey)
-        {
-            ToggleMode = toggleMode
-        });
-    }
-}
-
 public sealed class SerialPttInputSourceFactory : IPttInputSourceFactory
 {
     private readonly string portName;

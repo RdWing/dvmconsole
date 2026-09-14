@@ -88,6 +88,15 @@ public sealed class AudioSettingsApplicationTests
             Assert.Equal(1, vocoders.CreateCount);
             Assert.False(patch.Disposed);
             Assert.All(patch.Options.Values, processing => Assert.False(processing.CompressorEnabled));
+
+            // Key-policy changes rebuild patch decoders, unlike local RX enhancement.
+            vocoders.Created = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            owner.RequireConfiguredDmrReceiveKey = true;
+            ObservedVocoderBackend replacement = await vocoders.Created.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(patch.Disposed);
+            Assert.NotSame(patch, replacement);
+            Assert.Contains(mode, replacement.Modes);
+            Assert.All(replacement.Options.Values, processing => Assert.False(processing.CompressorEnabled));
         }
         finally
         {
@@ -97,7 +106,7 @@ public sealed class AudioSettingsApplicationTests
 
     private sealed class ObservedVocoderFactory : IVocoderFactory
     {
-        public TaskCompletionSource<ObservedVocoderBackend> Created { get; } =
+        public TaskCompletionSource<ObservedVocoderBackend> Created { get; set; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int CreateCount { get; private set; }
 
@@ -183,7 +192,7 @@ public sealed class AudioSettingsApplicationTests
             owner.RecordingStateChanged += OnRecovered;
             void OnRecovered(ChannelId changed)
             {
-                if (changed == id && owner.CaptureChannelRecordingState([channel])[id] is { IsRecording: true, Fault: null })
+                if (changed == id && owner.CreateSnapshotContextSource().Capture([id])[id] is { Recording: true, RecordingFault: null })
                     recovered.TrySetResult();
             }
             Assert.True(await owner.StartChannelTransmitAsync(channel));

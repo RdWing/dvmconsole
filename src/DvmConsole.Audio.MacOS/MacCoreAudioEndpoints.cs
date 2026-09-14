@@ -17,7 +17,6 @@ internal sealed class MacCoreAudioCapture :
     private readonly SafeCoreAudioStreamHandle stream;
     private readonly PcmRateConverter? rateConverter;
     private readonly NativeCapturePump pump;
-    private short[] conversionBuffer = [];
     private bool disposed;
 
     public MacCoreAudioCapture(
@@ -166,21 +165,9 @@ internal sealed class MacCoreAudioCapture :
             return;
         }
 
-        int maximumOutputSamples = rateConverter.GetMaximumOutputSampleCount(count);
-        if (maximumOutputSamples == 0)
-        {
-            rateConverter.Convert(buffer.AsSpan(0, count), Span<short>.Empty);
-            return;
-        }
-
-        if (conversionBuffer.Length < maximumOutputSamples)
-            conversionBuffer = new short[maximumOutputSamples];
-        Span<short> converted = conversionBuffer.AsSpan(0, maximumOutputSamples);
-        int convertedCount = rateConverter.Convert(buffer.AsSpan(0, count), converted);
-        if (convertedCount > 0)
-        {
-            PublishBorrowed(converted[..convertedCount]);
-        }
+        ReadOnlySpan<short> converted = rateConverter.ConvertBorrowed(buffer.AsSpan(0, count));
+        if (!converted.IsEmpty)
+            PublishBorrowed(converted);
     }
 
     private void PublishBorrowed(ReadOnlySpan<short> samples)
@@ -345,6 +332,7 @@ internal sealed class MacCoreAudioPlayback :
 
     public ValueTask FlushAsync(CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
         return ValueTask.CompletedTask;
     }

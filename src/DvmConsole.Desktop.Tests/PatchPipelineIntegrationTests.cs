@@ -9,12 +9,193 @@ using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
+using DvmConsole.Audio;
+using DvmConsole.Storage;
 using Xunit;
 
 namespace DvmConsole.Desktop.Tests;
 
 public sealed class PatchPipelineIntegrationTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ComposedSessionAppliesOneWayPatchAndRecoversOnlyNewTraffic(bool sourceIdPassthrough)
+    {
+        var (source, sourceRadio) = CreateChannel("Source", "Source channel", 100, 1001);
+        var (target, targetRadio) = CreateChannel("Target", "Target channel", 200, 2001, "dmr");
+        string root = Path.Combine(Path.GetTempPath(), "neo-composed-patch-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var settings = new ManagedReceivePreferences(Path.Combine(root, "UserSettings.json"));
+            var configuration = new ConsoleConfiguration
+            {
+                PatchSourceIdPassthrough = sourceIdPassthrough,
+                Systems = new[] { "Source", "Target" }.Select((name, index) => new SystemConfiguration
+                { Name = name, Identity = "Test", Address = "127.0.0.1", Port = 62031, PeerId = (uint)(index + 1), Rid = "1001" }).ToList(),
+                Groups = [new() { Name = "Patch" }],
+                Zones = [new() { Name = "Test", Channels = [
+                    new() { Name = "Source channel", System = "Source", Mode = "p25", Tgid = "100" },
+                    new() { Name = "Target channel", System = "Target", Mode = "dmr", Tgid = "200", Slot = 1 }] }]
+            };
+            var factory = new SessionFactory(sourceRadio, targetRadio);
+            var systems = configuration.Systems.Select(system => new RadioSystemDescriptor(SystemId.FromName(system.Name),
+                system.Name, "FNE", new Dictionary<string, string>())).ToArray();
+            await using var session = await ConsoleReceiveSession.CreateAsync(configuration, (state, _) =>
+            {
+                var host = new ConsoleHostServices(factory, null!, new NativeFactory(), null!, null!, null!, new SessionLifecycle(),
+                    SystemClock.Instance, new BackgroundApplicationScheduler(_ => { }), SystemApplicationDelay.Instance, null!, []);
+                return new(host, systems, DvmConsole.FneIntegration.FneReceiveFrameNormalization.Instance,
+                    Preferences: settings.ForConfiguration(ConfigurationId.New(), state.Channels.ToDictionary(pair => pair.Key,
+                        pair => pair.Value.Runtime.Definition.SystemName + "\u001F" + pair.Value.Runtime.Definition.Name)),
+                    ManualInput: new AudioInputProcessingOptions());
+            });
+            await session.SaveGroupAsync("Patch", [source.Id, target.Id], true, true);
+            Assert.Contains("Patch", session.EnabledPatchGroups);
+            Assert.True(Assert.Single(session.CaptureSnapshot().Channels[source.Id].Patches).IsSource);
+            short[] samples = CreateTestAudio(P25DfsiFrameCodec.CodewordsPerLdu);
+            sourceRadio.Emit(CreateNativeP25Voice(source, samples, 7001, 77));
+            await WaitForSentCountAsync(targetRadio, 4);
+            Assert.All(targetRadio.Sent, packet => Assert.Equal(sourceIdPassthrough ? 7001u : 2001u,
+                (uint)(packet.Payload[5] << 16 | packet.Payload[6] << 8 | packet.Payload[7])));
+            Assert.Empty(sourceRadio.Sent);
+            session.SetAudioAvailable(false, "Test interruption");
+            await session.ResumeAudioAsync(_ => Task.CompletedTask).WaitAsync(TimeSpan.FromSeconds(5));
+            targetRadio.ClearSent();
+            sourceRadio.Emit(CreateNativeP25Voice(source, samples, 7001, 77));
+            sourceRadio.Emit(CreateNativeP25Voice(source, samples, 7001, 78));
+            await WaitForSentCountAsync(targetRadio, 4);
+            Assert.Single(targetRadio.Sent.Select(packet => packet.StreamId).Distinct());
+            await session.QuiesceAsync(CancellationToken.None);
+            session.ReactivateAfterFailedReplacement();
+            await session.RestoreAsync([sourceRadio.SystemId, targetRadio.SystemId]);
+            targetRadio.ClearSent();
+            sourceRadio.Emit(CreateNativeP25Voice(source, samples, 7001, 79));
+            await WaitForSentCountAsync(targetRadio, 4);
+            await session.SaveGroupAsync("Patch", [source.Id, target.Id], false, true);
+            Assert.Single(targetRadio.Sent.Select(packet => packet.StreamId).Distinct());
+            Assert.DoesNotContain("Patch", session.EnabledPatchGroups);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    private sealed class SessionFactory(params FakeEndpoint[] radios) : IRadioSessionFactory
+    {
+        public ValueTask<IRadioSession> CreateAsync(RadioSystemDescriptor system, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<IRadioSession>(radios.Single(radio => radio.Name == system.Name));
+    }
+    private sealed class NativeFactory : IVocoderFactory
+    {
+        public IVocoderBackend Create(IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions>? receiveAudioProcessingOptions = null)
+            => new SoftwareVocoderBackend();
+    }
+    private sealed class SessionLifecycle : IApplicationLifecycle
+    {
+        public bool IsActive => true;
+        public event EventHandler? Activated { add { } remove { } }
+        public event EventHandler? Deactivated { add { } remove { } }
+        public event EventHandler? Suspending { add { } remove { } }
+        public event EventHandler? Resumed { add { } remove { } }
+        public event EventHandler? Stopping { add { } remove { } }
+    }
+    [Fact]
+    public async Task PatchRecoveryRejectsOldQueueEpochAndCurrentInterruptedStream()
+    {
+        var (source, sourceSystem) = CreateChannel("Source", "Source channel", 100, 1001);
+        var (target, targetSystem) = CreateChannel("Target", "Target channel", 200, 2001);
+        var runtime = new ConsolePatchRuntime();
+        await using var services = new ConsoleSessionServices();
+        runtime.RegisterOwnership(services);
+        int starts = 0;
+        runtime.Initialize([sourceSystem, targetSystem], new TransmitKeyPort(null, null, null),
+            () => { starts++; return new FakeVocoderBackend(); }, () => new FakeVocoderBackend(),
+            id => id == source.Id ? source.ToTransmitDescriptor() : target.ToTransmitDescriptor(),
+            () => DmrReceiveKeyPolicy.OnAirMetadata, false, _ => { }, (_, _) => default, _ => { }, _ => { });
+        await runtime.Decoder.ApplyChannelsAsync([source]);
+        runtime.Forwarding.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        { ["Patch"] = [new("Source", 100), new("Target", 200)] });
+        await runtime.PauseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(runtime.Enqueue(source.Id, CreateVoice(source, 42, 77), null));
+        runtime.Resume([new(source.Id, 77)]);
+        runtime.Work.Start(source.Id);
+        // Simulate late delivery of a frame admitted before the interruption.
+        runtime.Work.Enqueue(source.Id, RadioMediaIngressFrame.FromFrame(CreateVoice(source, 42, 999)));
+        await runtime.Work.RunAfterStreamsAsync(source.Id, [999], () => Task.CompletedTask).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, starts);
+        Assert.False(runtime.Enqueue(source.Id, CreateVoice(source, 42, 77), null));
+        Assert.True(runtime.Enqueue(source.Id, CreateVoice(source, 42, 78), null));
+        await runtime.Work.RunAfterStreamsAsync(source.Id, [78], () => Task.CompletedTask).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, starts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PartialPatchConstructionRetiresForwardingEvenWhenPresentationCleanupFails(bool failCleanup)
+    {
+        var (source, sourceSystem) = CreateChannel("Source", "Source channel", 100, 1001);
+        var (target, targetSystem) = CreateChannel("Target", "Target channel", 200, 2001);
+        var runtime = new ConsolePatchRuntime();
+        var services = new ConsoleSessionServices();
+        int transmitBackends = 0;
+        int detachments = 0;
+        runtime.RegisterOwnership(services, () =>
+        {
+            detachments++;
+            if (failCleanup) throw new InvalidOperationException("Presentation cleanup fixture failure.");
+        });
+        // Fail after forwarding construction but before a decoder can be owned.
+        Assert.Throws<ArgumentNullException>(() => runtime.Initialize(
+            [sourceSystem, targetSystem], new TransmitKeyPort(null, null, null),
+            () => { transmitBackends++; return new FakeVocoderBackend(); }, null!,
+            id => id == source.Id ? source.ToTransmitDescriptor() : target.ToTransmitDescriptor(),
+            () => DmrReceiveKeyPolicy.OnAirMetadata, false, _ => { }, (_, _) => default,
+            _ => { }, _ => { }));
+        Assert.NotNull(runtime.Forwarding);
+        Assert.Null(runtime.Decoder);
+        if (failCleanup)
+            await Assert.ThrowsAsync<InvalidOperationException>(() => services.DisposeAsync().AsTask());
+        else
+            await services.DisposeAsync();
+
+        runtime.Forwarding.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+        runtime.Forwarding.ObserveTraffic(source.Id, CreateVoice(source, 42, 77));
+        Assert.Equal(0, transmitBackends);
+        Assert.Empty(targetSystem.Sent);
+        Assert.Equal(1, detachments);
+    }
+
+    [Fact]
+    public async Task CancelledSourceWorkCannotStartAPatchTransmitter()
+    {
+        var (source, sourceSystem) = CreateChannel("Source", "Source channel", 100, 1001);
+        var (target, targetSystem) = CreateChannel("Target", "Target channel", 200, 2001);
+        int transmitBackends = 0;
+        await using var forwarding = new PatchForwardingCoordinator([sourceSystem, targetSystem],
+            createVocoderBackend: () => { transmitBackends++; return new FakeVocoderBackend(); });
+        await using var decoding = new PatchSourceDecodeCoordinator(null,
+            forwarding.ObserveDecodedSamples, () => new FakeVocoderBackend());
+        await decoding.ApplyChannelsAsync([source, target]);
+        forwarding.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        {
+            ["Patch"] = [new("Source", 100), new("Target", 200)]
+        });
+        var pipeline = new PatchSourceReceivePipeline(decoding, forwarding);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            pipeline.ProcessAsync(source, CreateVoice(source, 42, 77), cancellation.Token));
+        Assert.Equal(0, transmitBackends);
+        Assert.Empty(targetSystem.Sent);
+
+        await pipeline.ProcessAsync(source, CreateVoice(source, 42, 78));
+        Assert.Equal(1, transmitBackends);
+    }
+
     [Fact]
     public async Task MixedModePatchTranscodesNativeAudioInBothDirections()
     {
@@ -484,8 +665,17 @@ public sealed class PatchPipelineIntegrationTests
     private sealed class FakeEndpoint(
         string name,
         IReadOnlyList<ChannelViewModel> channels,
-        uint sourceId) : IFneTrafficEndpoint
+        uint sourceId) : IFneTrafficEndpoint, IRadioSession
     {
+        public SystemId SystemId => SystemId.FromName(name);
+        public bool IsConnectionActive => true;
+        public event EventHandler<RadioTrafficRecord>? TrafficReceived;
+        public event EventHandler<TalkgroupAuthorityRecord>? AuthorityChanged { add { } remove { } }
+        public ValueTask StartAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+        public ValueTask QuiesceAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public void Emit(FneTrafficFrame frame) => TrafficReceived?.Invoke(this,
+            new(SystemId, ChannelIds.ToArray(), frame, DateTimeOffset.UtcNow));
         private uint nextStreamId;
         private readonly ConcurrentQueue<SentPacket> sent = new();
 

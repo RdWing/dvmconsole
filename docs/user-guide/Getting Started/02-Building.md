@@ -1,7 +1,8 @@
 # Building and packaging
 
-Most users should download a release package. The steps below are for developers
-who need to build or package DVM Console from source.
+To start using Console NEO, download a release package. If you want to build or
+package it yourself, follow the steps below. On iPhone and iPad, you can [join the public TestFlight beta](https://testflight.apple.com/join/KuYtQqja) without
+building or signing the app yourself.
 
 ---
 
@@ -13,8 +14,9 @@ who need to build or package DVM Console from source.
 - ARM64 Windows: `win-arm64`
 - x86-64 Linux: `linux-x64`
 - ARM64 Linux: `linux-arm64`
+- iPhone/iPad: `ios-arm64`; Apple Silicon Simulator: `iossimulator-arm64`
 
-The tagged-release workflow includes all six targets in packaging, SBOM
+The desktop tagged-release workflow includes all six desktop targets in packaging, SBOM
 generation, checksums, attestations, and verification of the uploaded files.
 Both Windows targets use the same single-file package format. Linux releases use one AppImage per
 architecture and retain the PipeWire/X11-or-XWayland support boundaries below.
@@ -23,6 +25,15 @@ The application version is defined centrally in `src/Directory.Build.props`.
 See the current release notes for platform support and remaining limitations.
 
 ---
+
+# iPhone and iPad builds
+
+Mobile builds require macOS, full Xcode, and the .NET iOS workload in addition
+to the repository SDK and native build tools. Use `scripts/build-ios.sh` for
+isolated simulator or signed device builds; see the
+[script guide](../../../scripts/README.md#ios-builds) for modes and signing inputs. Device installation requires a suitable provisioning
+profile. TestFlight uses App Store distribution signing and a separate delivery
+workflow; it is not part of the desktop download matrix.
 
 # Build requirements
 
@@ -119,16 +130,14 @@ Do not move or rename files inside the application bundle. The managed
 assemblies, native libraries, icon, license, and third-party notices are loaded
 relative to the application executable.
 
-The package is unsigned. After moving an archive from an RdWing GitHub Release
-to Applications, remove its download quarantine before launching:
+The packaging commands above produce an unsigned build. Official macOS release
+packages starting with v0.8.0 are additionally signed with Developer ID and
+notarized by Apple; extract and open them normally. Maintainers can follow the
+[signing workflow](../../../scripts/README.md#developer-id-signing-and-notarization-for-macos)
+after creating the unsigned package.
 
-```sh
-xattr -dr com.apple.quarantine "/Applications/DVMConsole.app"
-```
-
-Do not run this command on an app from another source. macOS may also request
-local-network, microphone, Accessibility, or Input Monitoring permission for
-FNE connections, transmit audio, and OS-global PTT.
+macOS may request local-network, microphone, Accessibility, or Input Monitoring
+permission for FNE connections, transmit audio, and OS-global PTT.
 
 ---
 
@@ -179,10 +188,10 @@ chmod +x DVMConsole-test-x86_64.AppImage
 ./DVMConsole-test-x86_64.AppImage
 ```
 
-The AppImage is Linux's closest equivalent to handing over a Windows EXE or a
-macOS app bundle. It keeps DVM Console's managed files, native libraries, icon,
-desktop entry, notices, and .NET runtime together behind one executable file.
-Do not extract or rearrange its internal files.
+Like a Windows EXE package or macOS app bundle, the AppImage keeps DVM Console's
+managed files, native libraries, icon, desktop entry, notices, and .NET runtime
+together behind one executable file. Do not extract or rearrange its internal
+files.
 
 A direct host build remains useful during development:
 
@@ -255,8 +264,14 @@ six SPDX JSON SBOMs, and `SHA256SUMS`. It creates GitHub artifact attestations,
 downloads each staged asset, and verifies the hashes, title, notes, and
 attestations before publishing. Source tests, package smoke tests, live FNE
 trials, and hardware tests are separate evidence tiers. The workflow reports
-only the checks it can run. Signing and notarization are reported when
-available but are not required without maintainer-owned credentials.
+only the checks it can run.
+
+For official Mac downloads, both architectures must complete Developer ID signing,
+Apple notarization, ticket stapling, Gatekeeper verification and a native launch
+smoke test. These stages follow verification of the unsigned reproducible package.
+The final signed ZIPs receive updated SBOMs before release checksums and
+attestations are generated. Signing or notarization failure blocks publication;
+there is no unsigned fallback. Windows packages and Linux AppImages remain unsigned.
 
 ---
 
@@ -264,13 +279,14 @@ available but are not required without maintainer-owned credentials.
 
 Before handing a package to an operator:
 
-1. Launch the extracted package on the target operating system.
+1. Launch the packaged app on the target operating system. On iPhone or iPad, use the signed device or TestFlight build.
 2. Load a non-private test codeplug and connect to a test FNE.
 3. Select the intended microphone and speaker under **Audio > Audio settings**.
-4. Confirm receive audio, card PTT, global PTT, the permit tone, and TAR playback.
+4. Confirm receive audio, card PTT, the permit tone, and TAR playback. On desktop, also check global PTT.
 5. Send QCII and alert audio to at least two armed channels.
 6. Close and reopen the application and confirm settings and channel positions are restored.
+7. On iPhone and iPad, check background listening while connected, audio-session release after all sources stop, and touch reordering within a zone.
 
-Cross-publishing does not replace testing the package on real macOS, Windows,
-or Linux hardware. A final candidate still requires the live trials above on
-each architecture being published.
+Test the final candidate on real hardware for each platform and architecture
+being published. Cross-publishing and simulator checks do not replace these
+live trials.

@@ -40,6 +40,35 @@ public sealed class PatchForwardingCoordinator : IDisposable, IAsyncDisposable
     private IVocoderBackend? vocoderBackend;
     private volatile bool disposed;
     private Task? disposeTask;
+    private bool forwardingEnabled = true;
+    private long forwardingGeneration;
+    private Task forwardingPause = Task.CompletedTask;
+
+    public Task PauseForwardingAsync()
+    {
+        lock (sync)
+        {
+            if (!forwardingEnabled) return forwardingPause;
+            forwardingEnabled = false;
+            forwardingGeneration++;
+            PatchTransmitPump[] pumps = transmitPumps.ToArray();
+            foreach (PatchTransmitPump pump in pumps) pump.DiscardPendingAudioAndComplete();
+            router.SetForwardingEnabled(false);
+            return forwardingPause = Task.WhenAll(pumps.Select(pump => pump.Completion));
+        }
+    }
+
+    public void ResumeForwarding()
+    {
+        lock (sync)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (!forwardingPause.IsCompletedSuccessfully)
+                throw new InvalidOperationException("Patch transmitters must finish stopping before resuming.");
+            router.SetForwardingEnabled(true);
+            forwardingEnabled = true;
+        }
+    }
 
     public PatchForwardingCoordinator(
         IEnumerable<IRadioTrafficEndpoint> systems,
@@ -347,8 +376,11 @@ public sealed class PatchForwardingCoordinator : IDisposable, IAsyncDisposable
         string? unavailableReason = null;
         Task? startAfter = null;
         bool backlogFull = false;
+        long generation;
         lock (sync)
         {
+            if (!forwardingEnabled) return PatchCallStartResult.Skipped;
+            generation = forwardingGeneration;
             if (disposed)
                 unavailableReason = "the patch coordinator is stopping";
             else if (destinationPumps.TryGetValue(member.Identity, out HashSet<PatchTransmitPump>? owned))
@@ -421,13 +453,16 @@ public sealed class PatchForwardingCoordinator : IDisposable, IAsyncDisposable
                 dmrPrivacy,
                 nxdnPrivacy);
             createdVocoderSession = null;
-            pump = new PatchTransmitPump(session, startAfter, timeProvider: timeProvider,
-                maximumQueuedAge: MaximumQueuedAudioAge);
-            session = null;
-            var activeTarget = new ActiveTarget(member, channel.Id, streamId, pump);
+            ActiveTarget activeTarget;
             lock (sync)
             {
                 ObjectDisposedException.ThrowIf(disposed, this);
+                if (!forwardingEnabled || generation != forwardingGeneration)
+                    throw new OperationCanceledException("Patch startup was interrupted.");
+                pump = new PatchTransmitPump(session, startAfter, timeProvider: timeProvider,
+                    maximumQueuedAge: MaximumQueuedAudioAge);
+                session = null;
+                activeTarget = new ActiveTarget(member, channel.Id, streamId, pump);
                 activeTargets[new TargetStreamKey(member.Identity, streamId)] = activeTarget;
                 if (!destinationPumps.TryGetValue(member.Identity, out HashSet<PatchTransmitPump>? owned))
                     destinationPumps.Add(member.Identity, owned = []);
@@ -483,7 +518,10 @@ public sealed class PatchForwardingCoordinator : IDisposable, IAsyncDisposable
     {
         ActiveTarget? target;
         lock (sync)
+        {
+            if (!forwardingEnabled) return;
             activeTargets.TryGetValue(new TargetStreamKey(member.Identity, streamId), out target);
+        }
         if (target is null)
             return;
 

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 using DvmConsole.Core.Runtime;
+using DvmConsole.Application;
 using DvmConsole.Core.Settings;
 using DvmConsole.Presentation;
 
@@ -12,38 +13,16 @@ namespace DvmConsole.Desktop;
 // channel; ambiguous legacy settings never choose a protocol arbitrarily.
 internal sealed class PatchMemberResolver
 {
-    private readonly Dictionary<string, ChannelViewModel> channelsByIdentity;
-    private readonly Dictionary<string, ChannelViewModel> unambiguousLegacyChannels;
+    private readonly IReadOnlyDictionary<ChannelId, ChannelViewModel> channels;
+    private readonly PatchTransmitChannelResolver resolver;
 
     public PatchMemberResolver(IEnumerable<ChannelViewModel> channels)
     {
         ArgumentNullException.ThrowIfNull(channels);
-        ChannelViewModel[] configuredChannels = channels.ToArray();
-        channelsByIdentity = configuredChannels
-            .GroupBy(channel => FromChannel(channel).Key, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                group => group.Key,
-                group => group.First(),
-                StringComparer.OrdinalIgnoreCase);
-        unambiguousLegacyChannels = configuredChannels
-            .GroupBy(
-                channel => BuildLegacyKey(
-                    channel.Definition.SystemName,
-                    channel.Definition.DestinationId),
-                StringComparer.OrdinalIgnoreCase)
-            .Select(group => new
-            {
-                group.Key,
-                DistinctMembers = group
-                    .GroupBy(channel => FromChannel(channel).Key, StringComparer.OrdinalIgnoreCase)
-                    .Select(memberCopies => memberCopies.First())
-                    .ToArray()
-            })
-            .Where(group => group.DistinctMembers.Length == 1)
-            .ToDictionary(
-                group => group.Key,
-                group => group.DistinctMembers[0],
-                StringComparer.OrdinalIgnoreCase);
+        ChannelViewModel[] configured = channels.ToArray();
+        this.channels = configured.GroupBy(channel => channel.Id)
+            .ToDictionary(group => group.Key, group => group.First());
+        resolver = new PatchTransmitChannelResolver(configured.Select(channel => channel.ToTransmitDescriptor()));
     }
 
     public static PatchMemberAddress FromChannel(ChannelViewModel channel)
@@ -78,10 +57,7 @@ internal sealed class PatchMemberResolver
     public ChannelViewModel? Resolve(PatchMemberAddress member)
     {
         ArgumentNullException.ThrowIfNull(member);
-        return member.HasConfiguredChannelIdentity
-            ? channelsByIdentity.GetValueOrDefault(member.Key)
-            : unambiguousLegacyChannels.GetValueOrDefault(
-                BuildLegacyKey(member.SystemName, member.DestinationId));
+        return resolver.Resolve(member) is { } channel ? channels[channel.Id] : null;
     }
 
     public ChannelViewModel? Resolve(PatchMemberSetting member)
@@ -96,6 +72,4 @@ internal sealed class PatchMemberResolver
             member.ChannelName));
     }
 
-    private static string BuildLegacyKey(string systemName, uint destinationId)
-        => $"{systemName.Trim().ToLowerInvariant()}|{destinationId}";
 }

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025-2026 RdWing
 // SPDX-License-Identifier: AGPL-3.0-only
 
+using System.Runtime.CompilerServices;
 using DvmConsole.Core.Runtime;
 using Xunit;
 
@@ -8,6 +9,39 @@ namespace DvmConsole.Core.Tests;
 
 public sealed class PatchRoutingTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RecoveryKeepsGroupsButOnlyForwardsNewSourceCalls(bool startsWhilePaused)
+    {
+        var clock = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        PatchMemberAddress source = new("Source", 100);
+        PatchMemberAddress target = new("Target", 200);
+        int starts = 0, stops = 0, frames = 0;
+        var router = new PatchRoutingTable((_, _) => (uint)++starts,
+            (_, _, _) => stops++, (_, _, _, _) => frames++, _ => 1001, clock);
+        router.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>> { ["Dispatch"] = [source, target] });
+        if (startsWhilePaused) router.SetForwardingEnabled(false);
+        router.HandleCallStart(source, 77, 42);
+        router.HandleAudio(source, 77, 42, new short[] { 1 });
+        router.SetForwardingEnabled(false);
+        router.SetForwardingEnabled(false);
+        int priorStarts = starts, priorFrames = frames;
+        Assert.Equal(startsWhilePaused ? 0 : 1, stops);
+        Assert.Equal(["Dispatch"], router.GroupNames);
+        clock.Advance(TimeSpan.FromMinutes(5));
+        router.CleanupStaleSources();
+        router.SetForwardingEnabled(true);
+        router.HandleCallStart(source, 77, 42);
+        router.HandleAudio(source, 77, 42, new short[] { 2 });
+        Assert.Equal(priorStarts, starts);
+        Assert.Equal(priorFrames, frames);
+        router.HandleCallStart(source, 78, 42);
+        router.HandleAudio(source, 78, 42, new short[] { 3 });
+        Assert.Equal(priorStarts + 1, starts);
+        Assert.Equal(priorFrames + 1, frames);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -408,16 +442,25 @@ public sealed class PatchRoutingTests
         });
         router.HandleCallStart(source, streamId: 10, sourceId: 42);
         ReadOnlyMemory<short> samples = new short[160];
-        for (int index = 0; index < 100; index++)
-            router.HandleAudio(source, streamId: 10, sourceId: 42, samples);
+        // Warm the same batch method that is measured, including its loop.
+        ForwardAudioBatch(router, source, samples);
 
         long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int index = 0; index < 10_000; index++)
-            router.HandleAudio(source, streamId: 10, sourceId: 42, samples);
+        ForwardAudioBatch(router, source, samples);
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.Equal(0, allocated);
-        Assert.Equal(10_100, sink.FramesSent);
+        Assert.Equal(20_000, sink.FramesSent);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ForwardAudioBatch(
+        PatchRoutingTable router,
+        PatchMemberAddress source,
+        ReadOnlyMemory<short> samples)
+    {
+        for (int index = 0; index < 10_000; index++)
+            router.HandleAudio(source, streamId: 10, sourceId: 42, samples);
     }
 
     private sealed class RecordingPatchSink : IPatchForwardingSink

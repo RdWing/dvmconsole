@@ -13,6 +13,11 @@ public sealed partial class ConfigurationLibraryView : UserControl
         InitializeComponent();
     }
 
+    public event EventHandler<ConfigurationLibraryItemEventArgs>? ExportBundleRequested;
+
+    private void HandleExportBundleClick(object? sender, RoutedEventArgs e)
+        => RaiseItemEvent(sender, ExportBundleRequested);
+
     public event EventHandler? RefreshRequested;
     public event EventHandler<ConfigurationLibraryItemEventArgs>? ActivateRequested;
     public event EventHandler<ConfigurationLibraryItemEventArgs>? TrashRequested;

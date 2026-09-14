@@ -11,7 +11,7 @@ using YamlDotNet.RepresentationModel;
 
 namespace DvmConsole.Configuration.Yaml;
 
-public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActiveConfigurationService
+public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActiveConfigurationService, IConfigurationDraftExporter, IConfigurationDraftCopyService
 {
     private const string EmptyConfiguration = "systems: []\nzones: []\ngroups: []\n";
     private readonly SerializedWorkerExecutor executor;
@@ -230,12 +230,18 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         {
             workerToken.ThrowIfCancellationRequested();
             DraftState? activeDraft = TryReadDraftState();
-            if (activeDraft is not null && activeDraft.Id == id.Value)
+            if (activeDraft is not null && activeDraft.Id == id.Value &&
+                (activeDraft.IsDirty || activeDraft.BasedOnRevision is null))
                 return ReadDraft(activeDraft);
             EnsureDraftCanBeReplaced();
-            ClearDrafts();
 
             CatalogEntryState entry = GetEntry(LoadCatalog(), id);
+            if (activeDraft?.Id == id.Value && activeDraft.BasedOnRevision == entry.CurrentRevision)
+                return ReadDraft(activeDraft);
+            // Refresh a clean draft atomically. A failed write must retain its
+            // earlier complete generation, and dirty drafts keep their base.
+            if (activeDraft?.Id != id.Value)
+                ClearDrafts();
             string revisionRoot = RevisionRoot(entry.Id, entry.CurrentRevision);
             string yaml = ReadManagedYaml(Path.Combine(revisionRoot, "codeplug.yml"));
             RevisionMetadataState metadata = ReadRevisionMetadata(revisionRoot);
@@ -266,15 +272,20 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
             DraftState? activeDraft = TryReadDraftState();
             if (activeDraft is null || activeDraft.Id != draft.Id.Value)
                 throw new InvalidOperationException("The draft is no longer the active Configuration Studio draft.");
+            if (activeDraft.BasedOnRevision != draft.BasedOnRevision?.Value)
+                throw new ConfigurationDraftConflictException(ReadDraft(activeDraft));
             if (activeDraft.IsReadOnly && draft.IsDirty)
                 throw new InvalidOperationException("This configuration uses YAML constructs that cannot safely be rewritten.");
 
-            ConfigurationDocument document = ParseAndValidate(draft.Yaml, draft.Name);
+            // A checkpoint preserves work in progress; operational validation
+            // belongs to commit and session construction, not draft recovery.
+            ConfigurationDocument document = ParseDocument(draft.Yaml, draft.Name);
             activeDraft.Name = NormalizeDisplayName(draft.Name);
             activeDraft.IsDirty = draft.IsDirty;
+            activeDraft.EditorState = draft.EditorState;
             activeDraft.IsReadOnly = document.IsReadOnly;
             activeDraft.Warnings = draft.Warnings.ToList();
-            Dictionary<string, byte[]> stagedCompanions = ReadDraftCompanions(activeDraft.Id);
+            Dictionary<string, byte[]> stagedCompanions = ReadDraftCompanions(activeDraft);
             foreach ((string name, ReadOnlyMemory<byte> content) in companions)
                 stagedCompanions[EnsureSafeCompanionName(name)] = content.ToArray();
             WriteDraft(activeDraft, draft.Yaml, stagedCompanions);
@@ -293,6 +304,8 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
             DraftState? activeDraft = TryReadDraftState();
             if (activeDraft is null || activeDraft.Id != draft.Id.Value)
                 throw new InvalidOperationException("The draft is no longer the active Configuration Studio draft.");
+            if (activeDraft.BasedOnRevision != draft.BasedOnRevision?.Value)
+                throw new ConfigurationDraftConflictException(ReadDraft(activeDraft));
             if (activeDraft.IsReadOnly && draft.IsDirty)
                 throw new InvalidOperationException("This configuration uses YAML constructs that cannot safely be rewritten.");
 
@@ -300,9 +313,11 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
             string yaml = document.IsReadOnly ? document.SourceText : document.Serialize();
             CatalogState catalog = LoadCatalog();
             CatalogEntryState? existing = catalog.Entries.FirstOrDefault(entry => entry.Id == draft.Id.Value);
+            if (existing is not null && existing.CurrentRevision != draft.BasedOnRevision?.Value)
+                throw new ConfigurationRevisionConflictException(ToReference(existing));
             CatalogEntryState target = existing ?? NewEntry(draft.Name, document.IsReadOnly, origin: null, draft.Id.Value);
             target.Name = draft.Name.Trim();
-            Dictionary<string, byte[]> companions = ReadDraftCompanions(activeDraft.Id);
+            Dictionary<string, byte[]> companions = ReadDraftCompanions(activeDraft);
             ConfigurationCommit commit = CommitRevision(
                 catalog,
                 target,
@@ -313,6 +328,41 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
                 fingerprint: target.OriginFingerprint,
                 document.IsReadOnly,
                 draft.Warnings);
+            ClearDrafts();
+            return commit;
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<ConfigurationCommit> CommitDraftCopyAsync(ConfigurationDraft draft,
+        IReadOnlyDictionary<string, ReadOnlyMemory<byte>> companions, string copyName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(draft);
+        ArgumentNullException.ThrowIfNull(companions);
+        ArgumentException.ThrowIfNullOrWhiteSpace(copyName);
+        return await executor.RunAsync(workerToken =>
+        {
+            workerToken.ThrowIfCancellationRequested();
+            DraftState active = TryReadDraftState()
+                ?? throw new InvalidOperationException("The source draft is no longer available.");
+            if (active.Id != draft.Id.Value || active.BasedOnRevision != draft.BasedOnRevision?.Value)
+                throw new ConfigurationDraftConflictException(ReadDraft(active));
+            if (active.IsReadOnly && draft.IsDirty)
+                throw new InvalidOperationException("This configuration uses YAML constructs that cannot safely be rewritten.");
+
+            CatalogState catalog = LoadCatalog();
+            _ = GetEntry(catalog, draft.Id);
+            string yaml = ConfigurationCopyPolicy.RemoveTrustScopedWebAuthorization(draft.Yaml);
+            ConfigurationDocument document = ParseAndValidate(yaml, copyName);
+            Dictionary<string, byte[]> copiedCompanions = ReadDraftCompanions(active);
+            foreach ((string name, ReadOnlyMemory<byte> content) in companions)
+                copiedCompanions[EnsureSafeCompanionName(name)] = content.ToArray();
+            CatalogEntryState target = NewEntry(copyName, document.IsReadOnly, origin: null);
+            ConfigurationCommit commit = CommitRevision(catalog, target,
+                document.IsReadOnly ? document.SourceText : document.Serialize(), copiedCompanions,
+                imported: false, origin: null, fingerprint: null, document.IsReadOnly, draft.Warnings);
+            // The source's unsaved content is now durable under the new identity.
+            // Validation and commit failures above leave the source draft untouched.
             ClearDrafts();
             return commit;
         }, cancellationToken).ConfigureAwait(false);
@@ -371,80 +421,116 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(options);
-        await executor.RunAsync(async workerToken =>
+        await executor.RunAsync(workerToken => ExportContentAsync(destination, options, () =>
         {
-            IExportDocumentTransaction? transaction = null;
-            IExportDocumentSet exportDestination = destination;
-            if (destination is ITransactionalExportDocumentSet transactional)
+            CatalogEntryState entry = GetEntry(LoadCatalog(), configuration.Id);
+            EnsureRevisionExists(entry.Id, configuration.Revision.Value);
+            string revisionRoot = RevisionRoot(entry.Id, configuration.Revision.Value);
+            RevisionMetadataState metadata = ReadRevisionMetadata(revisionRoot);
+            return new(ReadManagedYaml(Path.Combine(revisionRoot, "codeplug.yml")), metadata.CompanionNames,
+                name => ReadManagedCompanion(Path.Combine(revisionRoot, "companions", name)));
+        }, validateConfiguration: true, workerToken), cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<ConfigurationDraft> ExportDraftAsync(ConfigurationId id,
+        IExportDocumentSet destination, ConfigurationExportOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        ArgumentNullException.ThrowIfNull(options);
+        return await executor.RunAsync(async workerToken =>
+        {
+            ConfigurationDraft? draft = null;
+            await ExportContentAsync(destination, options, () =>
             {
-                transaction = await transactional.BeginTransactionAsync(workerToken).ConfigureAwait(false);
-                exportDestination = transaction;
+                DraftState active = TryReadDraftState()
+                    ?? throw new InvalidOperationException("No managed draft is available to recover.");
+                if (active.Id != id.Value)
+                    throw new ConfigurationDraftConflictException(ReadDraft(active));
+                draft = ReadDraft(active);
+                Dictionary<string, byte[]> companions = !options.Sanitized && options.IncludeCompanions
+                    ? ReadDraftCompanions(active) : new(StringComparer.OrdinalIgnoreCase);
+                return new(draft.Yaml, companions.Keys.ToArray(), name => companions[name]);
+            }, validateConfiguration: false, workerToken).ConfigureAwait(false);
+            return draft!;
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private sealed record ExportContent(string Yaml, IReadOnlyList<string> CompanionNames,
+        Func<string, byte[]> ReadCompanion);
+
+    private async Task ExportContentAsync(IExportDocumentSet destination,
+        ConfigurationExportOptions options, Func<ExportContent> load, bool validateConfiguration,
+        CancellationToken workerToken)
+    {
+        IExportDocumentTransaction? transaction = null;
+        IExportDocumentSet exportDestination = destination;
+        if (destination is ITransactionalExportDocumentSet transactional)
+        {
+            transaction = await transactional.BeginTransactionAsync(workerToken).ConfigureAwait(false);
+            exportDestination = transaction;
+        }
+
+        try
+        {
+            ExportContent content = load();
+            ConfigurationDocument document = ConfigurationDocument.Parse(content.Yaml);
+            string exportYaml;
+            if (options.Sanitized)
+            {
+                exportYaml = document.SerializeSanitized();
+            }
+            else if (document.IsReadOnly)
+            {
+                exportYaml = document.SourceText;
+            }
+            else
+            {
+                RewriteCompanionReferencesForExport(document);
+                document.MarkDirty();
+                exportYaml = document.Serialize();
             }
 
-            try
-            {
-                CatalogState catalog = LoadCatalog();
-                CatalogEntryState entry = GetEntry(catalog, configuration.Id);
-                EnsureRevisionExists(entry.Id, configuration.Revision.Value);
-                string revisionRoot = RevisionRoot(entry.Id, configuration.Revision.Value);
-                RevisionMetadataState metadata = ReadRevisionMetadata(revisionRoot);
-                string storedYaml = ReadManagedYaml(Path.Combine(revisionRoot, "codeplug.yml"));
-                ConfigurationDocument document = ConfigurationDocument.Parse(storedYaml);
-                string exportYaml;
-                if (options.Sanitized)
-                {
-                    exportYaml = document.SerializeSanitized();
-                }
-                else if (document.IsReadOnly)
-                {
-                    exportYaml = document.SourceText;
-                }
-                else
-                {
-                    RewriteCompanionReferencesForExport(document);
-                    document.MarkDirty();
-                    exportYaml = document.Serialize();
-                }
-
+            // Editing and recovery must accept incomplete drafts. Saved-revision
+            // exports still require an operationally valid configuration.
+            if (validateConfiguration)
                 _ = ParseAndValidate(exportYaml, exportDestination.Primary.DisplayName);
 
-                await WriteTextAsync(exportDestination.Primary, exportYaml, workerToken).ConfigureAwait(false);
-                var expectedCompanions = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
-                if (!options.Sanitized && options.IncludeCompanions)
+            await WriteTextAsync(exportDestination.Primary, exportYaml, workerToken).ConfigureAwait(false);
+            var expectedCompanions = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            if (!options.Sanitized && options.IncludeCompanions)
+            {
+                foreach (string companionName in content.CompanionNames)
                 {
-                    foreach (string companionName in metadata.CompanionNames)
-                    {
-                        IWritableDocument target = await exportDestination
-                            .CreateCompanionAsync(companionName, workerToken)
-                            .ConfigureAwait(false);
-                        byte[] content = ReadManagedCompanion(
-                            Path.Combine(revisionRoot, "companions", companionName));
-                        expectedCompanions[companionName] = content;
-                        await WriteBytesAsync(target, content, workerToken).ConfigureAwait(false);
-                    }
+                    IWritableDocument target = await exportDestination
+                        .CreateCompanionAsync(companionName, workerToken)
+                        .ConfigureAwait(false);
+                    byte[] bytes = content.ReadCompanion(companionName);
+                    expectedCompanions[companionName] = bytes;
+                    await WriteBytesAsync(target, bytes, workerToken).ConfigureAwait(false);
                 }
+            }
 
-                await ValidateExportReadbackAsync(
-                        exportDestination,
-                        exportYaml,
-                        expectedCompanions,
-                        workerToken)
-                    .ConfigureAwait(false);
-                if (transaction is not null)
-                    await transaction.CommitAsync(workerToken).ConfigureAwait(false);
-            }
-            catch
-            {
-                if (transaction is not null)
-                    await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
-                throw;
-            }
-            finally
-            {
-                if (transaction is not null)
-                    await transaction.DisposeAsync().ConfigureAwait(false);
-            }
-        }, cancellationToken).ConfigureAwait(false);
+            await ValidateExportReadbackAsync(
+                    exportDestination,
+                    exportYaml,
+                    expectedCompanions,
+                    validateConfiguration, workerToken)
+                .ConfigureAwait(false);
+            if (transaction is not null)
+                await transaction.CommitAsync(workerToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            if (transaction is not null)
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+        finally
+        {
+            if (transaction is not null)
+                await transaction.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     public async ValueTask MoveToTrashAsync(
@@ -736,20 +822,20 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
 
     private static ConfigurationDocument ParseAndValidate(string yaml, string displayName)
     {
-        ConfigurationDocument document;
-        try
-        {
-            document = ConfigurationDocument.Parse(yaml);
-        }
-        catch (Exception exception) when (exception is InvalidDataException or FormatException or YamlDotNet.Core.YamlException)
-        {
-            throw new InvalidDataException($"Configuration '{displayName}' could not be parsed: {exception.Message}", exception);
-        }
-
+        ConfigurationDocument document = ParseDocument(yaml, displayName);
         ConfigurationValidationIssue? error = document.Validate().FirstOrDefault(issue => issue.IsError);
         if (error is not null)
             throw new InvalidDataException($"Configuration '{displayName}' is invalid: {error.Message}");
         return document;
+    }
+
+    private static ConfigurationDocument ParseDocument(string yaml, string displayName)
+    {
+        try { return ConfigurationDocument.Parse(yaml); }
+        catch (Exception exception) when (exception is InvalidDataException or FormatException or YamlDotNet.Core.YamlException)
+        {
+            throw new InvalidDataException($"Configuration '{displayName}' could not be parsed: {exception.Message}", exception);
+        }
     }
 
     private static (string Yaml, string? Warning) RepairMisplacedZoneEntries(string yaml)
@@ -831,7 +917,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         IExportDocumentSet destination,
         string expectedYaml,
         IReadOnlyDictionary<string, byte[]> expectedCompanions,
-        CancellationToken cancellationToken)
+        bool validateConfiguration, CancellationToken cancellationToken)
     {
         byte[] primary = await ReadAllBytesAsync(
             destination.Primary,
@@ -840,7 +926,10 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
         string readbackYaml = DecodeYaml(primary);
         if (!string.Equals(readbackYaml, expectedYaml, StringComparison.Ordinal))
             throw new IOException("The exported codeplug did not match the bytes written to the destination.");
-        _ = ParseAndValidate(readbackYaml, destination.Primary.DisplayName);
+        if (validateConfiguration)
+            _ = ParseAndValidate(readbackYaml, destination.Primary.DisplayName);
+        else
+            _ = ConfigurationDocument.Parse(readbackYaml);
         foreach ((string name, byte[] expectedContent) in expectedCompanions)
         {
             IReadableDocument? companion = await destination.ResolveExportedCompanionAsync(name, cancellationToken)
@@ -968,7 +1057,7 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
     }
 
     private ConfigurationDraft ReadDraft(DraftState state)
-        => ToDraft(state, ReadManagedYaml(Path.Combine(DraftRoot(state.Id), "codeplug.yml")));
+        => ToDraft(state, ReadManagedYaml(Path.Combine(DraftContentRoot(state), "codeplug.yml")));
 
     private static ConfigurationDraft ToDraft(DraftState state, string yaml)
         => new(
@@ -978,43 +1067,75 @@ public sealed class ManagedConfigurationLibrary : IConfigurationLibrary, IActive
             yaml,
             state.IsDirty,
             state.IsReadOnly,
-            state.Warnings.ToArray());
+            state.Warnings.ToArray(),
+            state.EditorState);
 
     private void WriteDraft(
         DraftState state,
         string yaml,
         IReadOnlyDictionary<string, byte[]> companions)
     {
-        string draftRoot = DraftRoot(state.Id);
+        // Publish one complete immutable set. Until active.json is replaced,
+        // recovery continues to read the previous YAML and companions together.
+        Guid contentRevision = Guid.NewGuid();
+        string draftRoot = Path.Combine(DraftRoot(state.Id), contentRevision.ToString("N"));
         AppDataFileProtection.EnsureDirectory(Path.Combine(draftRoot, "companions"));
-        File.WriteAllText(Path.Combine(draftRoot, "codeplug.yml"), yaml, new UTF8Encoding(false));
-        AppDataFileProtection.EnsureFile(Path.Combine(draftRoot, "codeplug.yml"));
+        WriteDraftContent(Path.Combine(draftRoot, "codeplug.yml"), Encoding.UTF8.GetBytes(yaml));
         foreach ((string name, byte[] content) in companions)
         {
             string companionPath = Path.Combine(
                 draftRoot,
                 "companions",
                 EnsureSafeCompanionName(name));
-            File.WriteAllBytes(companionPath, content);
-            AppDataFileProtection.EnsureFile(companionPath);
+            WriteDraftContent(companionPath, content);
         }
+        state.ContentRevision = contentRevision;
         AtomicLibraryFile.Write(
             DraftStatePath,
             state,
             ConfigurationLibraryJsonContext.Default.DraftState);
+        try
+        {
+            foreach (string previous in Directory.EnumerateDirectories(DraftRoot(state.Id)))
+            {
+                if (Guid.TryParseExact(Path.GetFileName(previous), "N", out Guid revision) && revision != contentRevision)
+                    Directory.Delete(previous, recursive: true);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Committed content is already durable. Retry orphan cleanup on
+            // the next checkpoint without reporting this save as failed.
+            System.Diagnostics.Trace.TraceWarning("Retired configuration draft cleanup failed: {0}", exception.Message);
+        }
     }
+
+    private static void WriteDraftContent(string path, ReadOnlySpan<byte> content)
+    {
+        using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+            4096, FileOptions.WriteThrough))
+        {
+            stream.Write(content);
+            stream.Flush(flushToDisk: true);
+        }
+        AppDataFileProtection.EnsureFile(path);
+    }
+
+    private string DraftContentRoot(DraftState state)
+        => state.ContentRevision is Guid revision
+            ? Path.Combine(DraftRoot(state.Id), revision.ToString("N"))
+            : DraftRoot(state.Id); // Existing drafts migrate on their next write.
 
     private DraftState? TryReadDraftState()
     {
-        if (!File.Exists(DraftStatePath))
-            return null;
         AtomicLibraryFile.Recover(DraftStatePath, ConfigurationLibraryJsonContext.Default.DraftState);
-        return AtomicLibraryFile.Read(DraftStatePath, ConfigurationLibraryJsonContext.Default.DraftState);
+        return File.Exists(DraftStatePath)
+            ? AtomicLibraryFile.Read(DraftStatePath, ConfigurationLibraryJsonContext.Default.DraftState) : null;
     }
 
-    private Dictionary<string, byte[]> ReadDraftCompanions(Guid id)
+    private Dictionary<string, byte[]> ReadDraftCompanions(DraftState state)
     {
-        string directory = Path.Combine(DraftRoot(id), "companions");
+        string directory = Path.Combine(DraftContentRoot(state), "companions");
         return Directory.Exists(directory)
             ? Directory.EnumerateFiles(directory)
                 .ToDictionary(

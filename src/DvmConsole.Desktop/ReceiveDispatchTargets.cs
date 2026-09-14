@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 using System.Collections;
+using DvmConsole.Application;
 
 namespace DvmConsole.Desktop;
 
@@ -17,6 +18,13 @@ internal readonly struct ReceiveDispatchTargets : IReadOnlyList<ChannelViewModel
 
     private ReceiveDispatchTargets(ChannelViewModel[] multiple)
         => this.multiple = multiple;
+
+    public ReceiveStateTargets ToShared() => Count switch
+    {
+        0 => ReceiveStateTargets.Empty,
+        1 => ReceiveStateTargets.One(this[0].SessionState),
+        _ => ReceiveStateTargets.FromArray(this.Select(channel => channel.SessionState).ToArray())
+    };
 
     public static ReceiveDispatchTargets Empty => default;
 

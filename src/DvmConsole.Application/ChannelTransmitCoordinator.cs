@@ -434,6 +434,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 $"Transmit microphone cannot be released while {health.State.ToString().ToLowerInvariant()}: {detail}.");
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         SetMicrophoneAudioSuppressed(false);
         return recovery;
     }
@@ -451,6 +452,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         try
         {
             ThrowIfDisposingOrDisposed();
+            cancellationToken.ThrowIfCancellationRequested();
             if (active.Count == 0)
                 throw new InvalidOperationException("No transmit call is prepared for activation.");
 
@@ -463,9 +465,10 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
         }
     }
 
-    public async Task StartAsync(IEnumerable<TransmitTarget> targets)
+    public async Task StartAsync(IEnumerable<TransmitTarget> targets, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(targets);
+        cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposingOrDisposed();
         TransmitTarget[] requested = targets
             .Where(target => target.Channel is not null && target.System is not null)
@@ -476,7 +479,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
             throw new InvalidOperationException("Select at least one transmit-capable channel.");
 
         var stateChanges = new List<ActiveChannelsChangedEventArgs>(2);
-        await gate.WaitAsync().ConfigureAwait(false);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             ThrowIfDisposingOrDisposed();
@@ -486,6 +489,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 forceDispose: false,
                 stateChanges.Add).ConfigureAwait(false);
 
+            cancellationToken.ThrowIfCancellationRequested();
             IAudioBackend? createdAudioBackend = null;
             IVocoderBackend? createdVocoderBackend = null;
             SharedAudioCapture? createdSharedCapture = null;
@@ -509,6 +513,7 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
 
                 foreach (TransmitTarget target in requested)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     ChannelProtocol protocol = target.Channel.Definition.Protocol;
                     uint sourceId = target.System.SourceId!.Value;
                     uint streamId = target.System.CreateStreamId();
@@ -583,8 +588,9 @@ public sealed class ChannelTransmitCoordinator : IAsyncDisposable
                 }
 
                 foreach (ActiveTransmit entry in created)
-                    await entry.Session.StartAsync().ConfigureAwait(false);
+                    await entry.Session.StartAsync(cancellationToken).ConfigureAwait(false);
 
+                cancellationToken.ThrowIfCancellationRequested();
                 audioBackend ??= createdAudioBackend;
                 vocoderBackend = createdVocoderBackend;
                 sharedCapture ??= createdSharedCapture;

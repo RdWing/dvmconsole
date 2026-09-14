@@ -285,6 +285,34 @@ public sealed class CallRecordingService : IAsyncDisposable
             return new ValueTask(disposalTask ??= DisposeCoreAsync());
     }
 
+    public async ValueTask CheckpointAsync(CancellationToken cancellationToken = default)
+    {
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            var failures = new List<Exception>();
+            foreach (ActiveRecording recording in receive.Values.Concat(transmit.Values))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    recording.Writer.Checkpoint();
+                    await recording.Handle.CheckpointAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch (Exception exception)
+                {
+                    Publish(recording, isFinalizing: false, exception.Message);
+                    failures.Add(exception);
+                }
+            }
+            if (failures.Count > 0)
+                throw new AggregateException("One or more active recordings could not be checkpointed.", failures);
+        }
+        finally { gate.Release(); }
+    }
+
     private async Task DisposeCoreAsync()
     {
         Interlocked.Exchange(ref disposed, 1);

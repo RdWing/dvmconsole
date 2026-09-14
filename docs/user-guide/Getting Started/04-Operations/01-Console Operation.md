@@ -1,6 +1,8 @@
 # Console operation
 
-This page describes the main console and its common operator workflows.
+Use this guide to arrange your desktop console, choose listening channels, and
+set up transmit controls. For touch navigation, saved mobile layouts and
+background audio, see [iOS and iPadOS](05-iOS%20and%20iPadOS.md).
 
 ---
 
@@ -31,10 +33,10 @@ Each collapsed List row shows RX state, channel/talkgroup/protocol, current
 state, last caller, the same threshold-colored RMS/peak meter, and fail-safe
 PTT. RX, PTT, and selector controls do not also expand the row.
 
-Select the row title to expand or collapse it. You can also Tab to the title
-and press Enter; the focused title has a visible outline. The expanded area
-provides the channel volume control and compact operational state. Channels
-with selectable encryption use the same **SECURE/CLEAR** transmit choice as Cards. Balance and
+Select the row title to expand or collapse it. You can also Tab to the title and
+press Enter; the focused title has a visible outline. The expanded area shows
+the channel volume control and detailed status. Channels with selectable
+encryption use the same **SECURE/CLEAR** transmit choice as Cards. Balance and
 output route remain in Audio settings so the line layout stays compact.
 
 The volume slider defaults to its center position and uses the same slightly

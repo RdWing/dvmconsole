@@ -7,6 +7,15 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Using Include="DvmConsole.Threading" />
+    <Using Include="DvmConsole.Application" />
+    <Using Include="DvmConsole.Core.Configuration" />
+    <InternalsVisibleTo Include="DvmConsole" />
+    <InternalsVisibleTo Include="DvmConsole.Desktop.Tests" />
+    <InternalsVisibleTo Include="DvmConsole.Desktop.RenderTests" />
+    <InternalsVisibleTo Include="DvmConsole.Storage.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../DvmConsole.Application/DvmConsole.Application.csproj" />
     <ProjectReference Include="../DvmConsole.Core/DvmConsole.Core.csproj" />
   </ItemGroup>

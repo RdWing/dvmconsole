@@ -33,7 +33,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="../Shared/TaskObservation.cs" Link="Threading/TaskObservation.cs" />
     <Using Include="DvmConsole.Threading" />
   </ItemGroup>
 
@@ -52,6 +51,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../DvmConsole.FneIntegration/DvmConsole.FneIntegration.csproj" />
     <ProjectReference Include="../DvmConsole.Application/DvmConsole.Application.csproj" />
     <ProjectReference Include="../DvmConsole.Audio.Abstractions/DvmConsole.Audio.Abstractions.csproj" />
     <ProjectReference Include="../DvmConsole.Audio.Core/DvmConsole.Audio.Core.csproj" />
@@ -105,5 +105,8 @@
           Link="Demo/aliases.yml"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../SharedHost/TonePatternFilePicker.cs" Link="Host/TonePatternFilePicker.cs" />
   </ItemGroup>
 </Project>

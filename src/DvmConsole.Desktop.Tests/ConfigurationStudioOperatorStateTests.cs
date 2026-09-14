@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025-2026 RdWing
 // SPDX-License-Identifier: AGPL-3.0-only
 
+using DvmConsole.Storage;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
 using DvmConsole.Presentation;
@@ -29,7 +30,7 @@ public sealed class ConfigurationStudioOperatorStateTests
                 runtime.ConfigurationReference?.Id,
                 codeplugPath,
                 runtime,
-                new DesktopConfigurationStudioCompanionSource(),
+                new MaterializedConfigurationStudioCompanionSource(),
                 new DesktopConfigurationStudioPreviewFactory(),
                 new ConfigurationStudioInitialState(
                     new Dictionary<string, ConfigurationStudioPosition>(),
@@ -103,7 +104,7 @@ public sealed class ConfigurationStudioOperatorStateTests
                 runtime.ConfigurationReference?.Id,
                 codeplugPath,
                 runtime,
-                new DesktopConfigurationStudioCompanionSource(),
+                new MaterializedConfigurationStudioCompanionSource(),
                 new DesktopConfigurationStudioPreviewFactory(),
                 new ConfigurationStudioInitialState(
                     new Dictionary<string, ConfigurationStudioPosition>(),

@@ -4,6 +4,7 @@
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Diagnostics;
+using DvmConsole.Core.Runtime;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
 using DvmConsole.Operations;
@@ -12,6 +13,49 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class ReceiveOutputRecoveryTests
 {
+    [Fact]
+    public void ReceivePreferencesAndRecordingStopWorkBeforeChannelViewsExist()
+    {
+        var state = new ConsoleChannelState(DvmConsole.Core.Runtime.ChannelRuntimeDefinition.FromConfiguration(
+            new ChannelConfiguration { Name = "Dispatch", System = "Audit", Tgid = "100", Mode = "dmr", Slot = 1 }));
+        var channels = new ConsoleChannelMediaDirectory([(state, RadioAliasIndex.Empty)]);
+        var settings = new DvmConsole.Core.Settings.UserSettings
+        { ReceiveEnabledChannelKeys = ["audit\u001fdispatch", "Other\u001fChannel"] };
+        var recordings = new RecordingSink();
+        int saves = 0;
+        var port = new ReceiveOutputPresentationPort(settings, recordings, channels, (_, _, _) => { },
+            action => { action(); return Task.CompletedTask; }, () => saves++, () => { }, _ => { });
+
+        port.SetSelectionPreference(state.Id, true);
+        Assert.Equal(0, saves);
+        port.SetSelectionPreference(state.Id, false);
+        Assert.Equal(["Other\u001fChannel"], settings.ReceiveEnabledChannelKeys);
+        port.SetSelectionPreference(state.Id, true);
+        Assert.Equal(["Audit\u001fDispatch", "Other\u001fChannel"], settings.ReceiveEnabledChannelKeys);
+        Assert.Equal(2, saves);
+
+        state.Operator.SetRecordingEnabled(true);
+        state.Operator.SetTransmitEncrypted(true);
+        port.StopRecording(state.Id);
+        Assert.NotNull(recordings.Stopped);
+        Assert.Equal(state.Id, recordings.Stopped.Id);
+        Assert.True(recordings.Stopped.RecordingEnabled);
+        Assert.True(recordings.Stopped.TransmitEncrypted);
+    }
+
+    private sealed class RecordingSink : IReceiveRecordingSink
+    {
+        public ChannelRecordingDescriptor? Stopped { get; private set; }
+        public void StopChannel(ChannelRecordingDescriptor channel) => Stopped = channel;
+        public void StopEpisode(ChannelRecordingDescriptor channel, long episode) { }
+        public void WriteEpisodeSamples(ChannelRecordingDescriptor channel, uint episode, uint stream,
+            uint source, ReadOnlyMemory<short> samples, long? receiveEpisodeId = null)
+        { }
+        public void ObserveEpisodeTraffic(ChannelRecordingDescriptor channel, uint episode, uint stream,
+            IRadioMediaFrame traffic, long? receiveEpisodeId = null)
+        { }
+    }
+
     private static ChannelViewModel Channel(string name, string id) => new(new ChannelConfiguration
     { Name = name, System = "Audit", Tgid = id, Mode = "dmr", Slot = 1 });
     [Fact]
@@ -20,7 +64,7 @@ public sealed class ReceiveOutputRecoveryTests
         var channel = Channel("Dispatch", "100"); channel.SetAudioEnabled(true);
         var ports = new Ports(channel) { FailStart = true };
         await using var controller = new ReceiveOutputController(ports, ports, ports, ports);
-        await controller.StartAsync(channel, persistSelection: false);
+        await controller.StartAsync(channel.Id, persistSelection: false);
         Assert.True(channel.IsAudioEnabled);
     }
     [Fact]
@@ -36,7 +80,7 @@ public sealed class ReceiveOutputRecoveryTests
         {
             if (frame.PacketSequence == ushort.MaxValue) { terminated = true; return; }
             entered.SetResult(); await fail.Task;
-            controller.RequestRecovery(channel, new IOException("device failed"));
+            controller.RequestRecovery(channel.Id, new IOException("device failed"));
         }, shutdownDrainTimeout: TimeSpan.FromMilliseconds(750),
            cancellationAcknowledgementTimeout: TimeSpan.FromMilliseconds(750));
         FneTrafficFrame Frame(bool end) => new(FneTrafficProtocol.Dmr, 1, 2, 100, 1, "GROUP",
@@ -50,7 +94,7 @@ public sealed class ReceiveOutputRecoveryTests
             var stop = work.StopAsync(channel.Id); fail.SetResult();
             await stop.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.True(terminated);
-            Assert.True(controller.IsRecoveryRunning(channel));
+            Assert.True(controller.IsRecoveryRunning(channel.Id));
         }
         finally { ports.Gate.Release(); }
     }
@@ -62,7 +106,7 @@ public sealed class ReceiveOutputRecoveryTests
         await using var controller = new ReceiveOutputController(ports, ports, ports, ports);
         object failedSession = ports.SessionIdentity;
         await ports.Gate.WaitAsync();
-        Task<ReceiveRouteRecoveryResult> recovery = controller.RecoverSelectedAsync(channel, expectedSession: failedSession);
+        Task<ReceiveRouteRecoveryResult> recovery = controller.RecoverSelectedAsync(channel.Id, expectedSession: failedSession);
         ports.SessionIdentity = new object();
         ports.Gate.Release();
         await recovery;
@@ -135,6 +179,14 @@ public sealed class ReceiveOutputRecoveryTests
         public SemaphoreSlim Gate { get; } = new(1, 1);
         public bool FailStart { get; init; }
         public ChannelId? FailMute { get; init; }
+        public DateTimeOffset Now => DateTimeOffset.UtcNow;
+        public DateTimeOffset UtcNow => Now;
+        public long GetTimestamp() => System.Diagnostics.Stopwatch.GetTimestamp();
+        public TimeSpan GetElapsedTime(long started) => System.Diagnostics.Stopwatch.GetElapsedTime(started);
+        public ReceiveOutputChannelState Capture(ChannelId id) => new(Resolve(id), Resolve(id).IsAudioEnabled,
+            Resolve(id).IsRecordingEnabled, Resolve(id).IsAudioSuspended);
+        public void SetAudioEnabled(ChannelId id, bool value) => Resolve(id).SetAudioEnabled(value);
+        public void SetAudioSuspended(ChannelId id, bool value) => Resolve(id).SetAudioSuspended(value);
         public bool IsDisposing => false;
         public IReadOnlyList<ChannelId> LivePlaybackChannels => live.ToArray();
         public object SessionIdentity { get; set; } = new();
@@ -144,7 +196,7 @@ public sealed class ReceiveOutputRecoveryTests
         public Task StartAsync(ReceiveChannelDescriptor channel, CancellationToken ct) => FailStart
             ? Task.FromException(new IOException("output device absent")) : Task.CompletedTask;
         public int Starts { get; private set; }
-        public Task StartAsync(ChannelViewModel channel) { Starts++; return Task.CompletedTask; }
+        public Task StartAsync(ChannelId channel) { Starts++; return Task.CompletedTask; }
         public Task StopAsync(ChannelId id, CancellationToken ct) => Task.CompletedTask;
         public Task SetLivePlaybackEnabledAsync(ChannelId id, bool enabled, CancellationToken ct)
         {
@@ -164,23 +216,23 @@ public sealed class ReceiveOutputRecoveryTests
         public void RecordFailure(ChannelId id, DateTimeOffset at) { }
         public Task ReconcileAsync(CancellationToken ct) => Task.CompletedTask;
         public Task ApplyPlaybackPolicyAsync(IReadOnlyList<(ChannelId ChannelId, bool Enabled)> changes, CancellationToken ct) => Task.CompletedTask;
-        public bool IsMuted(ChannelViewModel c) => false;
-        public bool ShouldEnableLivePlayback(ChannelViewModel c, bool isTemporarilySuspended) => c.IsAudioEnabled && !isTemporarilySuspended;
-        public string? GetEffectiveReason(ChannelViewModel c, bool outputMuted) => null;
+        public bool IsMuted(ChannelId c) => false;
+        public bool ShouldEnableLivePlayback(ChannelId c, bool isTemporarilySuspended) => Resolve(c).IsAudioEnabled && !isTemporarilySuspended;
+        public string? GetEffectiveReason(ChannelId c, bool outputMuted) => null;
         public bool Toggle(SystemViewModel s) => false;
         public bool Toggle(ZoneViewModel z) => false;
         public ChannelViewModel Resolve(ChannelId id) => channels.Single(c => c.Id == id);
         public ChannelViewModel[] Resolve(IEnumerable<ChannelId> ids) => ids.Select(Resolve).ToArray();
         public Task RunAsync(Action action) { action(); return Task.CompletedTask; }
         public Task RunAsync(Func<Task> operation) => operation();
-        public void SetSelectionPreference(ChannelViewModel c, bool enabled) { }
-        public void StopRecording(ChannelViewModel c) { }
+        public void SetSelectionPreference(ChannelId c, bool enabled) { }
+        public void StopRecording(ChannelId c) { }
         public void NotifyMuteChanged() { }
         public void PublishStatus(string text) { }
         public void ObserveRecovery(TimeSpan elapsed, string result) { }
         public long SetLivePlaybackDiscarded(bool discarded) => 0;
         public Task SetGainAsync(ChannelId id, double gain) => Task.CompletedTask;
-        public double GetVolume(ChannelViewModel c) => 1;
+        public double GetVolume(ChannelId c) => 1;
         public void Log(DateTimeOffset at, string source, DebugLogSeverity severity, string text) { }
         public Task<LocalTonePlaybackResult> PlayAsync(LocalTonePlaybackRequest request) => throw new NotSupportedException();
         public Task<LocalTonePlaybackResult> PlayTalkPermitAsync(bool microphoneStartedCold, bool? microphoneIsBluetooth) => throw new NotSupportedException();

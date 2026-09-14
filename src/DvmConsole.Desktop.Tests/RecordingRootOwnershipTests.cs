@@ -15,8 +15,8 @@ public sealed class RecordingRootOwnershipTests
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-root-replacement-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var outgoing = new DesktopRecordingStore(root, null, 0);
-            await using var replacement = new DesktopRecordingStore(root, null, 0);
+            var outgoing = new OpusRecordingStore(root, null, 0);
+            await using var replacement = new OpusRecordingStore(root, null, 0);
             Assert.False(replacement.CanWriteRecordings);
             await Assert.ThrowsAsync<IOException>(() => replacement.CreateAsync(
                 CallId.New(), default, DateTimeOffset.UtcNow, "audio/wav").AsTask());
@@ -43,7 +43,7 @@ public sealed class RecordingRootOwnershipTests
         File.SetUnixFileMode(root, original);
         try
         {
-            await using var store = new DesktopRecordingStore(root, null, 0);
+            await using var store = new OpusRecordingStore(root, null, 0);
             await using IRecordingWriteHandle handle = await store.CreateAsync(CallId.New(), default, DateTimeOffset.UtcNow, "audio/wav");
             string wave = Assert.Single(store.ActivePaths);
             Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(wave));
@@ -58,8 +58,8 @@ public sealed class RecordingRootOwnershipTests
         string root = Path.Combine(Path.GetTempPath(), "dvmconsole-root-owner-" + Guid.NewGuid().ToString("N"));
         try
         {
-            var owner = new DesktopRecordingStore(root, null, 0);
-            await using (var reader = new DesktopRecordingStore(root, null, 0))
+            var owner = new OpusRecordingStore(root, null, 0);
+            await using (var reader = new OpusRecordingStore(root, null, 0))
             {
                 Assert.True(owner.CanWriteRecordings);
                 Assert.False(reader.CanWriteRecordings);
@@ -71,7 +71,7 @@ public sealed class RecordingRootOwnershipTests
                 Assert.True(reader.TrySetRootPath(root, out error), error);
                 Assert.True(reader.CanWriteRecordings);
             }
-            await using var recovered = new DesktopRecordingStore(root, null, 0);
+            await using var recovered = new OpusRecordingStore(root, null, 0);
             Assert.True(recovered.CanWriteRecordings);
         }
         finally { Directory.Delete(root, true); }

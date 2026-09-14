@@ -14,6 +14,126 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class WebStreamPlaybackCoordinatorTests
 {
     [Fact]
+    public async Task StalledUiDoesNotBlockPlaybackOrRetirementAndCoalescesStatus()
+    {
+        var backend = new FakeAudioBackend();
+        var dispatcher = new HeldUiDispatcher();
+        var stream = CreateStream("Held UI", 1.0);
+        var coordinator = new WebStreamPlaybackCoordinator(() => backend, () => "output",
+            (_, _) => Task.FromResult<Stream>(new MemoryStream()),
+            (_, _) => Task.FromResult<IAudioPcmStreamReader>(new WaitingPcmReader()),
+            null, dispatcher);
+        try
+        {
+            await coordinator.StartAsync(stream).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(coordinator.IsActive(stream));
+            Assert.Equal(1, dispatcher.PendingCount);
+            await coordinator.StopAsync(stream).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(coordinator.IsActive(stream));
+            Assert.Equal(1, dispatcher.PendingCount);
+            dispatcher.RunPending();
+            Assert.Equal("Off", stream.StatusText);
+
+            await coordinator.StartAsync(stream).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(coordinator.IsActive(stream));
+            await coordinator.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(backend.IsDisposed);
+            dispatcher.RunPending();
+            Assert.Equal("Off", stream.StatusText); // Retired callbacks cannot reapply Connecting.
+        }
+        finally { dispatcher.RunPending(); await coordinator.DisposeAsync(); }
+    }
+
+    private sealed class HeldUiDispatcher : IUiDispatcher
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<Action> pending = new();
+        public int PendingCount => pending.Count;
+        public bool CheckAccess() => false;
+        public void Post(Action action, bool background = false) => pending.Enqueue(action);
+        public ValueTask InvokeAsync(Action action)
+        {
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            pending.Enqueue(() =>
+            {
+                try { action(); completion.TrySetResult(); }
+                catch (Exception exception) { completion.TrySetException(exception); }
+            });
+            return new(completion.Task);
+        }
+        public void RunPending() { while (pending.TryDequeue(out Action? action)) action(); }
+    }
+
+    [Fact]
+    public async Task SharedOutputAvoidsOpeningAnotherBackendAndRetiresOnlyItsLane()
+    {
+        var stream = new WebStreamPlaybackDescriptor(WebStreamId.New(), "Shared", "https://example.invalid/feed", "", "", 0.5, "desktop-route");
+        var physical = new FakePlayback();
+        await using var mixer = new DvmConsole.Media.AudioMixer(physical);
+        await using var coordinator = new DvmConsole.Application.WebStreamPlaybackCoordinator(
+            () => throw new InvalidOperationException("A shared output must not construct another backend."),
+            () => throw new InvalidOperationException("A shared output must not resolve a physical route."),
+            (_, _) => Task.FromResult<Stream>(CreateWav(1600, 10000)),
+            openSharedOutput: _ => ValueTask.FromResult(mixer.OpenChannel("web fixture")));
+        await coordinator.StartAsync(stream);
+        await WaitForAsync(() => physical.ContainsSample(5000));
+        await coordinator.StopAsync(stream.Id);
+        Assert.False(physical.IsDisposed);
+        await coordinator.ResetAudioBackendAsync();
+        Assert.False(physical.IsDisposed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SharedSessionCancelsPendingOpenAndOnlyRestoresRetainedListening(bool manualStop)
+    {
+        var descriptor = new WebStreamPlaybackDescriptor(WebStreamId.New(), "Feed", "https://example.invalid/feed",
+            "", "", 0.5, "desktop-only-output");
+        var opened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var backends = new List<FakeAudioBackend>();
+        int attempts = 0;
+        bool openCancelled = false;
+        await using var owner = new ConsoleWebStreamSession([descriptor], () =>
+        {
+            var backend = new FakeAudioBackend();
+            backends.Add(backend);
+            return backend;
+        }, null, async (_, token) =>
+        {
+            if (Interlocked.Increment(ref attempts) == 1)
+            {
+                opened.SetResult();
+                try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                { openCancelled = true; throw; }
+            }
+            return new MemoryStream();
+        }, (_, _) => Task.FromResult<IAudioPcmStreamReader>(new WaitingPcmReader()));
+        await owner.ResumeAsync(default);
+        Task starting = owner.SetWebStreamPlayingAsync(descriptor.Id, true);
+        await opened.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        if (manualStop) await owner.SetWebStreamPlayingAsync(descriptor.Id, false).WaitAsync(TimeSpan.FromSeconds(2));
+        else await owner.PauseAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        await starting;
+        Assert.True(openCancelled);
+        Assert.Equal(!manualStop, Assert.Single(owner.WebStreams).Selected);
+        Assert.False(Assert.Single(owner.WebStreams).Playback.IsActive);
+        if (!manualStop)
+        {
+            Assert.True(backends[0].IsDisposed);
+            await owner.ResumeAsync(default);
+            Assert.Equal(2, attempts);
+            Assert.True(Assert.Single(owner.WebStreams).Playback.IsActive);
+            Assert.Equal("output", backends[1].LastOutputDeviceId);
+            await owner.SetWebStreamPlayingAsync(descriptor.Id, false);
+        }
+        await owner.PauseAsync();
+        await owner.ResumeAsync(default);
+        Assert.Equal(manualStop ? 1 : 2, attempts);
+        Assert.False(Assert.Single(owner.WebStreams).Selected);
+    }
+
+    [Fact]
     public async Task DecodesPcmWavAppliesSavedVolumeAndRoutesToOutput()
     {
         var backend = new FakeAudioBackend();
@@ -351,7 +471,7 @@ public sealed class WebStreamPlaybackCoordinatorTests
     [Fact]
     public async Task SynchronousNativePlaybackStartupDoesNotBlockTheCallingThread()
     {
-        using var entered = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var release = new ManualResetEventSlim();
         var backend = new BlockingOpenAudioBackend(entered, release);
         WebStreamViewModel stream = CreateStream("Blocking native open", 1.0);
@@ -360,24 +480,20 @@ public sealed class WebStreamPlaybackCoordinatorTests
             () => "output",
             (_, _) => Task.FromResult<Stream>(Stream.Null),
             (_, _) => Task.FromResult<IAudioPcmStreamReader>(new WaitingPcmReader()));
-        Task releaseNativeOpen = Task.Run(() =>
+        // An independent caller lets a broken synchronous open fail without
+        // blocking this test's ability to release the fake native endpoint.
+        Task<Task> caller = Task.Factory.StartNew(() => coordinator.StartAsync(stream),
+            CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        Task start;
+        try
         {
-            entered.Wait(TimeSpan.FromSeconds(1));
-            Thread.Sleep(500);
-            release.Set();
-        });
-
-        long started = System.Diagnostics.Stopwatch.GetTimestamp();
-        Task start = coordinator.StartAsync(stream);
-        TimeSpan callDuration = System.Diagnostics.Stopwatch.GetElapsedTime(started);
-
-        Assert.True(entered.Wait(TimeSpan.FromSeconds(1)));
-        Assert.True(
-            callDuration < TimeSpan.FromMilliseconds(250),
-            $"StartAsync held its caller for {callDuration.TotalMilliseconds:0} ms.");
-        await start.WaitAsync(TimeSpan.FromSeconds(2));
-        await coordinator.StopAsync(stream).WaitAsync(TimeSpan.FromSeconds(1));
-        await releaseNativeOpen;
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            start = await caller.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(start.IsCompleted);
+        }
+        finally { release.Set(); }
+        await start.WaitAsync(TimeSpan.FromSeconds(5));
+        await coordinator.StopAsync(stream).WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
@@ -553,7 +669,7 @@ public sealed class WebStreamPlaybackCoordinatorTests
     }
 
     private sealed class BlockingOpenAudioBackend(
-        ManualResetEventSlim entered,
+        TaskCompletionSource entered,
         ManualResetEventSlim release) : IAudioBackend
     {
         private readonly FakePlayback playback = new();
@@ -570,8 +686,8 @@ public sealed class WebStreamPlaybackCoordinatorTests
 
         public IAudioPlayback OpenPlayback(AudioDeviceInfo device, PcmAudioFormat format)
         {
-            entered.Set();
-            release.Wait(TimeSpan.FromSeconds(2));
+            entered.TrySetResult();
+            release.Wait();
             return playback;
         }
 

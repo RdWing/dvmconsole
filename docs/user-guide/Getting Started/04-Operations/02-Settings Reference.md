@@ -1,6 +1,11 @@
 # Settings reference
 
-This page describes the settings available to operators.
+Adjust audio routes, PTT, saved layouts and recording preferences to suit your
+setup. The menu paths below are for desktop. On iPhone and iPad, open the
+console gear for Connections, Audio, Push to Talk, Tones and Paging, Groups and
+Patches, Web Streams, Subscriber Commands, History, Retention, Diagnostics, Help
+and About. See the [mobile guide](05-iOS%20and%20iPadOS.md) for their touch
+navigation.
 
 ---
 
@@ -316,7 +321,13 @@ Console recycles only that FNE's session.
 
 ### Per-connection RX network jitter buffer
 
-Each FNE connection has separate P25, DMR, and NXDN jitter settings. Choose
+On iPhone and iPad, open the settings gear and choose **Connections → Receive Buffering**.
+Select the FNE connection, choose adaptive or fixed buffering for each protocol,
+then select **Apply receive buffering**. Fixed **0 ms** disables buffering.
+Mobile changes apply to new receive streams without restarting current calls.
+Unsaved values stay in the editor when you switch between connections.
+
+Each FNE connection has separate P25, DMR, and NXDN jitter settings. On desktop, choose
 **Off**, a fixed packet-aligned delay, or **Adaptive** beside that connection's
 Connect/Disconnect and Restart controls. The buffer holds complete network
 packets before decoding. If a packet arrives out of order but before its
@@ -345,7 +356,7 @@ jitter target plus about 80 to 110 ms. The audio device can add a route-dependen
 delay that DVM Console cannot measure. Turning the jitter buffer off minimizes
 latency but removes the chance to reorder packets.
 
-Changing a selection saves that FNE's settings and recreates its active
+On desktop, changing a selection saves that FNE's settings and recreates its active
 listening and patch-source decode sessions.
 
 Below the selectors, **Adaptive learned** shows each protocol's current adaptive

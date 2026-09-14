@@ -9,7 +9,6 @@ using DvmConsole.FneClient;
 using DvmConsole.Media;
 using DvmConsole.Operations;
 using DvmConsole.Presentation;
-using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -27,7 +26,7 @@ public sealed class WidgetPositionChangedEventArgs(
     public bool IsFinal { get; } = isFinal;
 }
 
-public sealed class ChannelViewModel :
+public sealed partial class ChannelViewModel :
     IChannelCardViewModel,
     IChannelAudioRouteViewModel,
     IRecorderChannelViewModel,
@@ -45,13 +44,7 @@ public sealed class ChannelViewModel :
         ChannelViewModel channel)
     {
         ArgumentNullException.ThrowIfNull(channel);
-        return new DvmConsole.Application.ChannelRecordingDescriptor(
-            new DvmConsole.Application.ChannelId(channel.SessionId),
-            channel.Definition,
-            channel.IsRecordingEnabled,
-            channel.IsTransmitEncrypted,
-            channel.StreamId,
-            channel.SourceId);
+        return channel.SessionState.CaptureRecordingDescriptor();
     }
 
     public static implicit operator DvmConsole.Application.ReceiveChannelDescriptor(
@@ -65,45 +58,38 @@ public sealed class ChannelViewModel :
 
     private readonly ChannelConfiguration configuration;
     private readonly ChannelRuntime runtime;
+    internal ConsoleChannelState SessionState { get; }
+    internal ChannelOperatorState OperatorState { get; }
     private readonly ChannelDefinition sessionDefinition;
-    private readonly IP25KeyResolver? p25KeyResolver;
-    private readonly IDmrKeyResolver? dmrKeyResolver;
-    private readonly INxdnKeyResolver? nxdnKeyResolver;
+    private readonly ChannelConfigurationAccess configurationAccess;
     private readonly RadioAliasIndex aliases;
-    private ImmutableHashSet<uint> projectedReceiveStreams = ImmutableHashSet<uint>.Empty;
     private Func<ChannelViewModel, Task>? startAudio;
     private Func<ChannelViewModel, Task>? stopAudio;
     private Func<ChannelViewModel, Task>? startTransmit;
     private Func<ChannelViewModel, Task>? stopTransmit;
-    private Func<ChannelViewModel?>? receivePresentationOwnerResolver;
-    private bool audioEnabled;
-    private bool audioSuspended;
+    private bool audioEnabled => OperatorState.Snapshot.AudioEnabled;
+    private bool audioSuspended => OperatorState.Snapshot.AudioSuspended;
     private bool audioBusy;
-    private bool transmitEnabled;
-    private bool transmitStarting;
-    private bool transmitStopping;
-    private bool transmitSelected;
-    private bool pageSelected;
-    private bool alertSelected;
+    private bool transmitEnabled => OperatorState.Snapshot.TransmitEnabled;
+    private bool transmitStarting => OperatorState.Snapshot.TransmitStarting;
+    private bool transmitStopping => OperatorState.Snapshot.TransmitStopping;
+    private bool transmitSelected => OperatorState.Snapshot.TransmitSelected;
+    private bool pageSelected => OperatorState.Snapshot.PageSelected;
+    private bool alertSelected => OperatorState.Snapshot.AlertSelected;
     private bool transmitBusy;
-    private bool transmitEncrypted;
-    private bool hasCallPriority;
-    private FneTalkgroupAvailability talkgroupAvailability = FneTalkgroupAvailability.Pending;
-    private bool recordingEnabled;
-    private string lastCallerText = "--";
-    private double audioLevel;
-    private double audioPeakLevel;
-    private double volume = 1.0;
-    private double stereoBalance;
-    private long ignoredLatePacketCount;
-    private long droppedReceiveFrameCount;
-    private long receiveAudioMeterStreamId;
-    private uint? receivePlaybackSourceId;
-    private uint? receivePlaybackStreamId;
-    private uint receiveEncryptionStreamId;
-    private TrafficEncryptionObservationState receiveEncryptionState = new();
+    private bool transmitEncrypted => OperatorState.Snapshot.TransmitEncrypted;
+    private bool hasCallPriority => OperatorState.Snapshot.HasCallPriority;
+    private FneTalkgroupAvailability talkgroupAvailability => SessionState.Authority switch
+    {
+        TargetAuthorityState.Available => FneTalkgroupAvailability.Available,
+        TargetAuthorityState.Unavailable => FneTalkgroupAvailability.Unavailable,
+        _ => FneTalkgroupAvailability.Pending
+    };
+    private bool recordingEnabled => OperatorState.Snapshot.RecordingEnabled;
+    private double volume => OperatorState.Snapshot.Gain;
+    private double stereoBalance => OperatorState.Snapshot.Balance;
     private string ignoredSubscriberIdsText = string.Empty;
-    private string outputDeviceIdText = string.Empty;
+    private string outputDeviceIdText => OperatorState.Snapshot.OutputRoute;
     private IReadOnlyList<AudioDeviceOptionViewModel> outputDeviceOptions = [];
     private double widgetX;
     private double widgetY;
@@ -114,24 +100,34 @@ public sealed class ChannelViewModel :
         IP25KeyResolver? p25KeyResolver = null,
         IEnumerable<RadioAlias>? aliases = null,
         IDmrKeyResolver? dmrKeyResolver = null,
-        INxdnKeyResolver? nxdnKeyResolver = null)
+        INxdnKeyResolver? nxdnKeyResolver = null,
+        ConsoleChannelState? sessionState = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         this.configuration = configuration;
-        this.p25KeyResolver = p25KeyResolver;
-        this.dmrKeyResolver = dmrKeyResolver;
-        this.nxdnKeyResolver = nxdnKeyResolver;
         this.aliases = aliases as RadioAliasIndex ?? new RadioAliasIndex(aliases);
-        runtime = new ChannelRuntime(ChannelRuntimeDefinition.FromConfiguration(configuration));
-        sessionDefinition = ChannelDefinition.FromRuntime(
-            runtime.Definition,
-            $"{runtime.Definition.SystemName}\u001F{runtime.Definition.Name}");
-        transmitEncrypted = runtime.Definition.IsEncrypted;
+        ChannelRuntimeDefinition definition = ChannelRuntimeDefinition.FromConfiguration(configuration);
+        sessionState ??= new ConsoleChannelState(definition);
+        if (sessionState.Runtime.Definition != definition)
+            throw new ArgumentException("The channel state does not match its configuration.", nameof(sessionState));
+        SessionState = sessionState;
+        runtime = sessionState.Runtime;
+        configurationAccess = new ChannelConfigurationAccess(definition, p25KeyResolver, dmrKeyResolver, nxdnKeyResolver);
+        sessionDefinition = sessionState.Identity;
+        OperatorState = sessionState.Operator;
+        presentedOperator = OperatorState.Snapshot;
+        presentedAuthority = SessionState.Authority;
+        presentedPlayback = SessionState.Receive.Playback;
+        presentedReceiveEncrypted = SessionState.Receive.ObservedEncrypted;
         runtime.PropertyChanged += HandleRuntimePropertyChanged;
         AudioCommand = new AsyncRelayCommand(() => Task.CompletedTask, () => false);
         PttCommand = new AsyncRelayCommand(() => Task.CompletedTask, () => false);
         EncryptionCommand = new AsyncRelayCommand(ToggleEncryptionAsync, () => CanToggleEncryption && !transmitBusy && !audioBusy);
         RecordingCommand = new AsyncRelayCommand(ToggleRecordingAsync, () => CanRecord);
+        SessionState.Meter.Changed += HandleMeterChanged;
+        OperatorState.Changed += HandleOperatorStateChanged;
+        SessionState.AuthorityChanged += HandleAuthorityChanged;
+        SessionState.Receive.Changed += HandleReceiveStateChanged;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -144,78 +140,44 @@ public sealed class ChannelViewModel :
     public string Name => runtime.Definition.Name;
     public DvmConsole.Application.ChannelId Id => new(SessionId);
     public string RoutingKey => PatchMemberResolver.FromChannel(this).Key;
-    public string SettingsKey => $"{runtime.Definition.SystemName}\u001F{runtime.Definition.Name}";
+    public string SettingsKey => SessionState.SettingsKey;
     public string SystemName => runtime.Definition.SystemName;
     public uint DestinationId => runtime.Definition.DestinationId;
     public string ModeText => runtime.Definition.Mode.ToUpperInvariant();
     public string TalkgroupText => $"TG {runtime.Definition.DestinationId} - {ModeText}";
     public string DestinationText => $"{runtime.Definition.SystemName} / TGID {runtime.Definition.DestinationId}";
-    public string LastCallerText => lastCallerText;
-    public string LastCallerDisplayText => $"Last: {lastCallerText}";
-    public double AudioLevel => audioLevel;
-    public AudioMeterState AudioMeter => new(audioLevel, audioPeakLevel);
-    public double AudioPeakLevel => audioPeakLevel;
-    public double CardWidth => ResolveCardWidth(configuration.CardSize);
-    internal static double ResolveCardWidth(string? cardSize)
-        => (cardSize ?? "normal").Trim().ToLowerInvariant() switch
-        {
-            "small" => 180,
-            "large" => 330,
-            _ => 235
-        };
-    public double CardContentWidth => CardWidth - 12;
-    public double AudioMeterWidth => CardWidth - (CardWidth == 180 ? 20 : 12);
-    public double WidgetX => widgetX;
-    public double WidgetY => widgetY;
-    public IBrush CardBackgroundBrush => transmitStarting || runtime.State == ChannelRuntimeState.Transmitting
-        ? SolidBrushCache.Get("#0B6B9C")
-        : IsReceivePresentationActive
-            ? SolidBrushCache.Get("#008A3A")
-            : audioEnabled
-                ? SolidBrushCache.Get(darkMode ? "#1B2B22" : "#E2F3E8")
-                : SolidBrushCache.Get(darkMode ? "#151D26" : "#FFFFFF");
-    public IBrush CardBorderBrush => transmitStarting
-        ? SolidBrushCache.Get("#D99920")
-        : runtime.State == ChannelRuntimeState.Transmitting
-        ? SolidBrushCache.Get("#2497D3")
-        : IsReceivePresentationActive
-            ? SolidBrushCache.Get("#00C86A")
-            : audioEnabled
-                ? SolidBrushCache.Get("#4E8060")
-                : CreateBrush(configuration.ResourceColor, darkMode ? "#2A3A4B" : "#9BA8B5");
-    public IBrush CardTextBrush => SolidBrushCache.Get(
-        IsReceivePresentationActive || transmitStarting || runtime.State == ChannelRuntimeState.Transmitting
-            ? "#FFFFFF"
-            : darkMode ? "#DCE3EB" : "#18212B");
-    public string StateText
+    internal RadioAliasIndex AliasIndex => aliases;
+    internal ChannelConfigurationAccess ConfigurationAccess => configurationAccess;
+    public string LastCallerText => ConsoleChannelSnapshotProjector.LastCallerText(SessionState, aliases);
+    public string LastCallerDisplayText => $"Last: {LastCallerText}";
+    public double AudioLevel => SessionState.Meter.Snapshot.Rms;
+    public AudioMeterState AudioMeter
     {
         get
         {
-            if (transmitStarting)
-                return "Starting PTT…";
-            if (transmitStopping)
-                return "Releasing PTT…";
-            if (runtime.State == ChannelRuntimeState.Transmitting)
-                return runtime.StateText;
-
-            if (audioSuspended)
-                return "RX muted during console transmit";
-
-            ChannelViewModel? owner = ReceivePresentationOwner;
-            if (owner?.PresentationSourceId is uint sourceId)
-            {
-                string alias = AliasFileLoader.FindAlias(aliases, sourceId);
-                if (!string.IsNullOrWhiteSpace(alias))
-                    return $"Receiving from {alias} ({sourceId}) (stream {owner.PresentationStreamId})";
-                return $"Receiving from {sourceId} (stream {owner.PresentationStreamId})";
-            }
-
-            if (!audioEnabled && runtime.State == ChannelRuntimeState.Receiving)
-                return "Receive disabled";
-
-            return runtime.StateText;
+            var meter = SessionState.Meter.Snapshot;
+            return new(meter.Rms, meter.Peak);
         }
     }
+    public double AudioPeakLevel => SessionState.Meter.Snapshot.Peak;
+    public double CardWidth => ResolveCardWidth(configuration.CardSize);
+    internal string? ConfiguredCardSize => configuration.CardSize;
+    internal static double ResolveCardWidth(string? cardSize)
+        => DvmConsole.Presentation.ConsoleCardGeometry.ResolveWidth(cardSize);
+    public double CardContentWidth => CardWidth - 12;
+    public double AudioMeterWidth => DvmConsole.Presentation.ConsoleCardGeometry.MeterWidth(CardWidth);
+    public double WidgetX => widgetX;
+    public double WidgetY => widgetY;
+    private ConsoleCardActivity CardActivity => transmitStarting ? ConsoleCardActivity.TransmitStarting
+        : runtime.State == ChannelRuntimeState.Transmitting ? ConsoleCardActivity.Transmitting
+        : IsReceivePresentationActive ? ConsoleCardActivity.Receiving
+        : audioEnabled ? ConsoleCardActivity.Listening : ConsoleCardActivity.Idle;
+    public IBrush CardBackgroundBrush => ConsoleCardPalette.Background(darkMode, CardActivity);
+    public IBrush CardBorderBrush => CardActivity == ConsoleCardActivity.Idle
+        ? CreateBrush(configuration.ResourceColor, darkMode ? "#2A3A4B" : "#9BA8B5")
+        : ConsoleCardPalette.Border(darkMode, CardActivity);
+    public IBrush CardTextBrush => ConsoleCardPalette.Text(darkMode, CardActivity);
+    public string StateText => ConsoleChannelSnapshotProjector.StateText(SessionState, aliases);
     public ChannelRuntimeState State => runtime.State;
     public uint? SourceId => runtime.SourceId;
     public uint? StreamId => runtime.StreamId;
@@ -225,7 +187,7 @@ public sealed class ChannelViewModel :
     public bool IsAudioEnabled => audioEnabled;
     public string ReceiveAutomationName => $"{Name}; receive {(audioEnabled ? "enabled" : "disabled")}";
     public bool IsAudioSuspended => audioSuspended;
-    public bool IsReceivePresentationActive => ReceivePresentationOwner is not null;
+    public bool IsReceivePresentationActive => SessionState.ReceivePresentationOwner is not null;
     public string AudioButtonText => audioSuspended ? "RX muted" : audioEnabled ? "Stop audio" : "Listen";
     public bool IsTransmitting => transmitEnabled;
     public bool IsTransmitStarting => transmitStarting;
@@ -235,7 +197,7 @@ public sealed class ChannelViewModel :
     public bool IsAlertSelected => alertSelected;
     public bool IsTransmitEncrypted => transmitEncrypted;
     public bool HasCallPriority => hasCallPriority;
-    public bool ObservedReceiveEncrypted => receiveEncryptionState.Encryption.IsSecure;
+    public bool ObservedReceiveEncrypted => SessionState.Receive.ObservedEncrypted;
     public bool IsRecordingEnabled => recordingEnabled;
     public string RecordButtonText => "TAR";
     public string RecordingConfigurationButtonText => recordingEnabled ? "Disable TAR" : "Enable TAR";
@@ -255,37 +217,20 @@ public sealed class ChannelViewModel :
         get => stereoBalance;
         set => SetStereoBalance(value, raiseChanged: true);
     }
-    public long IgnoredLatePacketCount => Interlocked.Read(ref ignoredLatePacketCount);
-    public long DroppedReceiveFrameCount => Interlocked.Read(ref droppedReceiveFrameCount);
-
-    internal bool HasLocalReceivePresentation =>
-        audioEnabled &&
-        !audioSuspended &&
-        (runtime.State == ChannelRuntimeState.Receiving || receivePlaybackStreamId is not null);
-
-    private ChannelViewModel? ReceivePresentationOwner => !audioEnabled || audioSuspended
-        ? null
-        : HasLocalReceivePresentation
-            ? this
-            : receivePresentationOwnerResolver?.Invoke();
+    public long IgnoredLatePacketCount => SessionState.Receive.IgnoredLatePackets;
+    public long DroppedReceiveFrameCount => SessionState.Receive.DroppedFrames;
 
     internal bool IsTrackingReceiveStream(uint streamId)
-        => Volatile.Read(ref projectedReceiveStreams).Contains(streamId);
+        => SessionState.Receive.IsTracking(streamId);
 
     internal string ResolveSubscriberAlias(uint sourceId)
         => AliasFileLoader.FindAlias(aliases, sourceId);
 
-    private uint? PresentationSourceId => receivePlaybackStreamId is not null
-        ? receivePlaybackSourceId
-        : runtime.SourceId;
-
-    private uint? PresentationStreamId => receivePlaybackStreamId ?? runtime.StreamId;
-
     internal void RecordIgnoredLatePacket()
-        => Interlocked.Increment(ref ignoredLatePacketCount);
+        => SessionState.Receive.RecordIgnoredLatePacket();
 
     internal void RecordDroppedReceiveFrame()
-        => Interlocked.Increment(ref droppedReceiveFrameCount);
+        => SessionState.Receive.RecordDroppedFrame();
     public string StereoBalanceText => stereoBalance switch
     {
         <= -0.9999 => "Left",
@@ -299,11 +244,8 @@ public sealed class ChannelViewModel :
         get => outputDeviceIdText;
         set
         {
-            string normalized = value ?? string.Empty;
-            if (outputDeviceIdText == normalized)
+            if (!OperatorState.SetOutputRoute(value))
                 return;
-            outputDeviceIdText = normalized;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OutputDeviceIdText)));
         }
     }
     public IReadOnlyList<AudioDeviceOptionViewModel> OutputDeviceOptions => outputDeviceOptions;
@@ -335,13 +277,8 @@ public sealed class ChannelViewModel :
         }
     }
     public bool CanRecord => CanListen;
-    public bool CanToggleEncryption =>
-        ChannelProtocolMediaMapper.RequiresVocoder(runtime.Definition.Protocol) &&
-        runtime.Definition.IsEncrypted &&
-        runtime.Definition.SelectableEncryption &&
-        (transmitEncrypted || CanResolveConfiguredKey());
-    internal bool TransmitKeyAvailable =>
-        !runtime.Definition.IsEncrypted || CanResolveConfiguredKey();
+    public bool CanToggleEncryption => configurationAccess.CanToggleEncryption(transmitEncrypted);
+    internal bool TransmitKeyAvailable => configurationAccess.TransmitKeyAvailable;
     public string EncryptionStatusText => !runtime.Definition.IsEncrypted
         ? "Clear"
         : CanResolveConfiguredKey()
@@ -354,21 +291,8 @@ public sealed class ChannelViewModel :
     public string EncryptionAutomationHelpText => CanToggleEncryption
         ? $"Current transmit mode is {EncryptionButtonText.ToLowerInvariant()}."
         : $"Encryption selection is unavailable. {EncryptionStatusText}.";
-    public bool CanListen => runtime.Definition.Protocol switch
-    {
-        ChannelProtocol.Dmr or ChannelProtocol.P25 or ChannelProtocol.Nxdn => true,
-        ChannelProtocol.Analog => !runtime.Definition.IsEncrypted,
-        _ => false
-    };
-    internal bool CanTransmitByConfiguration =>
-        !runtime.Definition.RxOnly &&
-        runtime.Definition.Protocol switch
-        {
-            ChannelProtocol.Dmr or ChannelProtocol.P25 or ChannelProtocol.Nxdn =>
-                !transmitEncrypted || CanResolveConfiguredKey(),
-            ChannelProtocol.Analog => !runtime.Definition.IsEncrypted,
-            _ => false
-        };
+    public bool CanListen => configurationAccess.CanListen;
+    internal bool CanTransmitByConfiguration => configurationAccess.CanTransmit(transmitEncrypted);
     public bool CanTransmit =>
         CanTransmitByConfiguration &&
         talkgroupAvailability != FneTalkgroupAvailability.Unavailable;
@@ -378,14 +302,8 @@ public sealed class ChannelViewModel :
     public FneTalkgroupAvailability TalkgroupAvailability => talkgroupAvailability;
     public bool IsTalkgroupUnavailable =>
         talkgroupAvailability == FneTalkgroupAvailability.Unavailable;
-    public string TalkgroupUnavailableReason => runtime.Definition.Protocol == ChannelProtocol.Dmr
-        ? $"the FNE does not allow TG {runtime.Definition.DestinationId} on TS{runtime.Definition.Slot + 1}"
-        : $"the FNE does not allow TG {runtime.Definition.DestinationId}";
-    internal string ConfigurationTransmitUnavailableReason => runtime.Definition.RxOnly
-        ? "the channel is receive-only"
-        : transmitEncrypted && !CanResolveConfiguredKey()
-            ? "its encryption key is unavailable"
-            : "the channel is not available for transmit";
+    public string TalkgroupUnavailableReason => configurationAccess.AuthorityUnavailableReason;
+    internal string ConfigurationTransmitUnavailableReason => configurationAccess.TransmitUnavailableReason(transmitEncrypted);
     public string TransmitUnavailableReason => IsTalkgroupUnavailable
         ? TalkgroupUnavailableReason
         : ConfigurationTransmitUnavailableReason;
@@ -397,25 +315,7 @@ public sealed class ChannelViewModel :
         ? transmitEnabled ? "Stop the active transmission." : "Start transmitting on this channel."
         : $"Push to talk is unavailable because {TransmitUnavailableReason}.";
 
-    private bool CanResolveConfiguredKey()
-    {
-        return runtime.Definition.Protocol switch
-        {
-            ChannelProtocol.P25 => p25KeyResolver?.CanResolve(
-                runtime.Definition.SystemName,
-                runtime.Definition.EncryptionAlgorithm,
-                runtime.Definition.EncryptionKeyId) == true,
-            ChannelProtocol.Dmr => dmrKeyResolver?.CanResolve(
-                runtime.Definition.SystemName,
-                runtime.Definition.EncryptionAlgorithm,
-                runtime.Definition.EncryptionKeyId) == true,
-            ChannelProtocol.Nxdn => nxdnKeyResolver?.CanResolve(
-                runtime.Definition.SystemName,
-                runtime.Definition.EncryptionAlgorithm,
-                runtime.Definition.EncryptionKeyId) == true,
-            _ => false
-        };
-    }
+    private bool CanResolveConfiguredKey() => configurationAccess.ConfiguredKeyAvailable;
 
     public string TransmitSelectionText => "TX";
     public string TransmitSelectionAutomationName => IsTransmitSelected
@@ -435,50 +335,17 @@ public sealed class ChannelViewModel :
     public string RecordingAutomationHelpText => CanRecord
         ? "Toggle recording for this channel."
         : "Recording is unavailable for this channel.";
-    public IBrush TransmitSelectionBrush => SolidBrushCache.Get(
-        transmitSelected
-            ? darkMode ? "#694BB0" : "#D7C9F2"
-            : darkMode ? "#242938" : "#E8EDF3");
-    public IBrush TransmitSelectionBorderBrush => SolidBrushCache.Get(
-        transmitSelected
-            ? darkMode ? "#B69AF4" : "#7655B8"
-            : darkMode ? "#3A4555" : "#8996A3");
-    public IBrush PageSelectionBrush => SolidBrushCache.Get(
-        pageSelected
-            ? darkMode ? "#A15B2A" : "#F2D1B8"
-            : darkMode ? "#242938" : "#E8EDF3");
-    public IBrush PageSelectionBorderBrush => SolidBrushCache.Get(
-        pageSelected
-            ? darkMode ? "#F0A15C" : "#A95C26"
-            : darkMode ? "#3A4555" : "#8996A3");
-    public IBrush AlertSelectionBrush => SolidBrushCache.Get(
-        alertSelected
-            ? darkMode ? "#8A3D68" : "#F0C7DE"
-            : darkMode ? "#242938" : "#E8EDF3");
-    public IBrush AlertSelectionBorderBrush => SolidBrushCache.Get(
-        alertSelected
-            ? darkMode ? "#E58BBC" : "#A84479"
-            : darkMode ? "#3A4555" : "#8996A3");
-    public IBrush RecordingSelectionBrush => SolidBrushCache.Get(
-        recordingEnabled
-            ? darkMode ? "#8A3A3A" : "#F2CCCC"
-            : darkMode ? "#242938" : "#E8EDF3");
-    public IBrush RecordingSelectionBorderBrush => SolidBrushCache.Get(
-        recordingEnabled
-            ? darkMode ? "#E58A8A" : "#A84343"
-            : darkMode ? "#3A4555" : "#8996A3");
-    public IBrush EncryptionSelectionBrush => SolidBrushCache.Get(
-        transmitEncrypted
-            ? "#B45309"
-            : darkMode ? "#242938" : "#E8EDF3");
-    public IBrush EncryptionSelectionBorderBrush => SolidBrushCache.Get(
-        transmitEncrypted
-            ? "#F59E0B"
-            : darkMode ? "#3A4555" : "#8996A3");
-    public IBrush EncryptionSelectionTextBrush => SolidBrushCache.Get(
-        transmitEncrypted
-            ? "#FFFFFF"
-            : darkMode ? "#DCE3EB" : "#18212B");
+    public IBrush TransmitSelectionBrush => ConsoleCardPalette.Selection(darkMode, ConsoleCardSelection.Transmit, transmitSelected);
+    public IBrush TransmitSelectionBorderBrush => ConsoleCardPalette.Selection(darkMode, ConsoleCardSelection.Transmit, transmitSelected, border: true);
+    public IBrush PageSelectionBrush => ConsoleCardPalette.Selection(darkMode, ConsoleCardSelection.Page, pageSelected);
+    public IBrush PageSelectionBorderBrush => ConsoleCardPalette.Selection(darkMode, ConsoleCardSelection.Page, pageSelected, border: true);
+    public IBrush AlertSelectionBrush => ConsoleCardPalette.Selection(darkMode, ConsoleCardSelection.Alert, alertSelected);
+    public IBrush AlertSelectionBorderBrush => ConsoleCardPalette.Selection(darkMode, ConsoleCardSelection.Alert, alertSelected, border: true);
+    public IBrush RecordingSelectionBrush => ConsoleCardPalette.Selection(darkMode, ConsoleCardSelection.Recording, recordingEnabled);
+    public IBrush RecordingSelectionBorderBrush => ConsoleCardPalette.Selection(darkMode, ConsoleCardSelection.Recording, recordingEnabled, border: true);
+    public IBrush EncryptionSelectionBrush => ConsoleCardPalette.Selection(darkMode, ConsoleCardSelection.Encryption, transmitEncrypted);
+    public IBrush EncryptionSelectionBorderBrush => ConsoleCardPalette.Selection(darkMode, ConsoleCardSelection.Encryption, transmitEncrypted, border: true);
+    public IBrush EncryptionSelectionTextBrush => ConsoleCardPalette.EncryptionText(darkMode, transmitEncrypted);
     public ICommand AudioCommand { get; private set; }
     public ICommand PttCommand { get; private set; }
     public ICommand EncryptionCommand { get; }
@@ -526,14 +393,12 @@ public sealed class ChannelViewModel :
         if (talkgroupAvailability == availability)
             return;
 
-        talkgroupAvailability = availability;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TalkgroupAvailability)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTalkgroupUnavailable)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitUnavailableReason)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanTransmit)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttAutomationHelpText)));
-        (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        SessionState.SetAuthority(availability switch
+        {
+            FneTalkgroupAvailability.Available => TargetAuthorityState.Available,
+            FneTalkgroupAvailability.Unavailable => TargetAuthorityState.Unavailable,
+            _ => TargetAuthorityState.Pending
+        });
     }
 
     public void RestoreTransmitEncryption(bool encrypted)
@@ -541,8 +406,7 @@ public sealed class ChannelViewModel :
         if (!runtime.Definition.IsEncrypted || !runtime.Definition.SelectableEncryption)
             return;
 
-        transmitEncrypted = encrypted;
-        NotifySelectableEncryptionStateChanged();
+        OperatorState.SetTransmitEncrypted(encrypted);
     }
 
     public void SetRecordingEnabled(bool enabled, [CallerMemberName] string origin = "")
@@ -556,19 +420,11 @@ public sealed class ChannelViewModel :
         if (recordingEnabled == enabled)
             return;
 
-        bool previous = recordingEnabled;
-        recordingEnabled = enabled;
+        bool previous = OperatorState.Snapshot.RecordingEnabled;
+        OperatorState.SetRecordingEnabled(enabled);
         ObserveSelectionChange(ChannelSelectionKind.Recording, previous, enabled, origin);
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRecordingEnabled)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordButtonText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingAutomationName)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingAutomationHelpText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingConfigurationButtonText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBrush)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RecordingSelectionBorderBrush)));
         if (raiseStateChanged)
             RecordingStateChanged?.Invoke(this, enabled);
-        (RecordingCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
     public void RestoreVolume(double value)
@@ -601,28 +457,20 @@ public sealed class ChannelViewModel :
 
     private void SetVolume(double value, bool raiseChanged)
     {
-        double normalized = double.IsFinite(value) ? Math.Clamp(value, 0, 4) : 1.0;
-        if (Math.Abs(volume - normalized) < 0.0001)
+        if (!OperatorState.SetGain(value))
             return;
-
-        volume = normalized;
+        double normalized = volume;
         if (raiseChanged)
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Volume)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(VolumeSliderValue)));
             VolumeChanged?.Invoke(this, normalized);
         }
     }
 
     private void SetStereoBalance(double value, bool raiseChanged)
     {
-        double normalized = double.IsFinite(value) ? Math.Clamp(value, -1, 1) : 0;
-        if (Math.Abs(stereoBalance - normalized) < 0.0001)
+        if (!OperatorState.SetBalance(value))
             return;
-
-        stereoBalance = normalized;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StereoBalance)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StereoBalanceText)));
+        double normalized = stereoBalance;
         if (raiseChanged)
             StereoBalanceChanged?.Invoke(this, normalized);
     }
@@ -630,58 +478,25 @@ public sealed class ChannelViewModel :
     public void SetIgnoredSubscriberIds(IEnumerable<uint> subscriberIds)
     {
         ArgumentNullException.ThrowIfNull(subscriberIds);
-        IgnoredSubscriberIdsText = string.Join(", ", subscriberIds.Where(id => id != 0).Distinct().OrderBy(id => id));
-    }
-
-    internal void SetReceivePresentationOwnerResolver(Func<ChannelViewModel?> resolver)
-    {
-        receivePresentationOwnerResolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
-        RefreshReceivePresentation();
+        SessionState.RecordingSubscribers.Replace(subscriberIds);
+        IgnoredSubscriberIdsText = string.Join(", ", SessionState.RecordingSubscribers.IgnoredSubscribers);
     }
 
     internal void MarkReceivePlaybackActive(uint sourceId, uint streamId)
-    {
-        if (!audioEnabled || audioSuspended || streamId == 0)
-            return;
-        MarkReceiveAudioMeterActive(streamId);
-        if (receivePlaybackSourceId == sourceId && receivePlaybackStreamId == streamId)
-            return;
-        if (receivePlaybackStreamId is not null)
-            return;
-
-        receivePlaybackSourceId = sourceId;
-        receivePlaybackStreamId = streamId;
-        NotifyReceivePresentationChanged();
-    }
+        => SessionState.TryBeginReceivePlayback(sourceId, streamId);
 
     internal void MarkReceivePlaybackEnded(uint streamId)
-    {
-        MarkReceiveAudioMeterEnded(streamId);
-        if (receivePlaybackStreamId != streamId)
-            return;
-
-        receivePlaybackSourceId = null;
-        receivePlaybackStreamId = null;
-        NotifyReceivePresentationChanged();
-    }
+        => SessionState.EndReceivePlayback(streamId);
 
     // The decoder path can lead the UI-thread lifecycle pass during a traffic
     // burst. Track its first audible stream without raising properties from a
     // worker thread so early meter samples remain eligible for the next UI
     // refresh instead of being discarded.
     internal void MarkReceiveAudioMeterActive(uint streamId)
-    {
-        if (streamId == 0)
-            return;
-        Interlocked.CompareExchange(ref receiveAudioMeterStreamId, streamId, 0);
-    }
+        => SessionState.MarkReceiveMeter(streamId, ended: false);
 
     internal void MarkReceiveAudioMeterEnded(uint streamId)
-    {
-        if (streamId == 0)
-            return;
-        Interlocked.CompareExchange(ref receiveAudioMeterStreamId, 0, streamId);
-    }
+        => SessionState.MarkReceiveMeter(streamId, ended: true);
 
     internal void RefreshReceivePresentation()
     {
@@ -699,34 +514,18 @@ public sealed class ChannelViewModel :
         RefreshReceivePresentation();
     }
 
-    private void ClearReceivePlayback()
-    {
-        Interlocked.Exchange(ref receiveAudioMeterStreamId, 0);
-        if (receivePlaybackStreamId is null)
-            return;
-        receivePlaybackSourceId = null;
-        receivePlaybackStreamId = null;
-    }
 
     public void SetAudioEnabled(bool enabled, [CallerMemberName] string origin = "")
     {
-        bool suspensionChanged = audioSuspended;
-        audioSuspended = false;
-        if (audioEnabled == enabled && !suspensionChanged)
-            return;
-        bool previous = audioEnabled;
-        audioEnabled = enabled;
+        bool previous = IsAudioEnabled;
+        if (!SessionState.SetReceiveEnabled(enabled)) return;
+        PresentReceiveSelection(previous, enabled, origin);
+    }
+
+    internal void PresentReceiveSelection(bool previous, bool enabled, string origin)
+    {
         if (previous != enabled)
             ObserveSelectionChange(ChannelSelectionKind.Receive, previous, enabled, origin);
-        if (!enabled)
-            ClearReceivePlayback();
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioEnabled)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ReceiveAutomationName)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioSuspended)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioButtonText)));
-        NotifyReceivePresentationChanged();
-        if (!enabled)
-            SetAudioLevel(0);
     }
 
     private void ObserveSelectionChange(ChannelSelectionKind kind, bool previous, bool current, string origin)
@@ -742,18 +541,7 @@ public sealed class ChannelViewModel :
     }
 
     public void SetAudioSuspended(bool suspended)
-    {
-        if (!audioEnabled || audioSuspended == suspended)
-            return;
-        audioSuspended = suspended;
-        if (suspended)
-            ClearReceivePlayback();
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAudioSuspended)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioButtonText)));
-        NotifyReceivePresentationChanged();
-        if (suspended)
-            SetAudioLevel(0);
-    }
+        => SessionState.SetAudioSuspended(suspended);
 
     public void SetAudioLevel(
         double value,
@@ -761,100 +549,27 @@ public sealed class ChannelViewModel :
         uint? streamId = null,
         double? peakValue = null)
     {
-        double normalized = double.IsFinite(value) ? Math.Clamp(value, 0, 100) : 0;
-        double normalizedPeak = peakValue is double peak && double.IsFinite(peak)
-            ? Math.Clamp(peak, 0, 100)
-            : normalized;
-        long fastReceiveStreamId = Interlocked.Read(ref receiveAudioMeterStreamId);
-        if (streamId is uint expectedStreamId)
-        {
-            bool streamMatches = PresentationStreamId == expectedStreamId ||
-                (direction == ChannelAudioDirection.Receive &&
-                 fastReceiveStreamId == expectedStreamId);
-            if (!streamMatches)
-                return;
-        }
-        bool fastReceiveActive = direction == ChannelAudioDirection.Receive &&
-            streamId is uint receiveStreamId &&
-            fastReceiveStreamId == receiveStreamId;
-        if ((direction == ChannelAudioDirection.Receive &&
-             (!audioEnabled || audioSuspended ||
-              (!IsReceivePresentationActive && !fastReceiveActive))) ||
-            (direction == ChannelAudioDirection.Transmit && runtime.State != ChannelRuntimeState.Transmitting))
-        {
-            normalized = 0;
-            normalizedPeak = 0;
-        }
-        ApplyAudioLevel(normalized, normalizedPeak);
+        if (ChannelAudioMeterProjection.Project(SessionState, value, peakValue, direction, streamId) is { } levels)
+            ApplyAudioLevel(levels.Rms, levels.Peak);
     }
 
-    // Receive meter samples observed at the mixer boundary are already known
-    // to be audible on this channel. Their logical episode lane can outlive
-    // the physical stream ID currently projected by the card, so applying the
-    // physical-ID filter again would hide valid presented audio after a stream
-    // handoff.
     internal void SetPresentedReceiveAudioLevel(double value, double? peakValue = null)
     {
-        double normalized = double.IsFinite(value) ? Math.Clamp(value, 0, 100) : 0;
-        double normalizedPeak = peakValue is double peak && double.IsFinite(peak)
-            ? Math.Clamp(peak, 0, 100)
-            : normalized;
-        bool receiveActive = IsReceivePresentationActive ||
-            Interlocked.Read(ref receiveAudioMeterStreamId) != 0;
-        if (!audioEnabled || audioSuspended || !receiveActive)
-        {
-            normalized = 0;
-            normalizedPeak = 0;
-        }
-        ApplyAudioLevel(normalized, normalizedPeak);
+        var levels = ChannelAudioMeterProjection.ProjectPresentedReceive(SessionState, value, peakValue);
+        ApplyAudioLevel(levels.Rms, levels.Peak);
     }
 
     private void ApplyAudioLevel(double normalized, double normalizedPeak)
-    {
-        bool levelChanged = normalized == 0
-            ? audioLevel != 0
-            : Math.Abs(audioLevel - normalized) >= 0.25;
-        bool peakChanged = normalizedPeak == 0
-            ? audioPeakLevel != 0
-            : Math.Abs(audioPeakLevel - normalizedPeak) >= 0.25;
-        if (!levelChanged && !peakChanged)
-            return;
-
-        if (levelChanged)
-            audioLevel = normalized;
-
-        if (peakChanged)
-            audioPeakLevel = normalizedPeak;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AudioMeter)));
-    }
+        => SessionState.Meter.Update(normalized, normalizedPeak, minimumChange: 0.25);
 
     public void SetTransmitEnabled(bool enabled, uint streamId = 0)
     {
         SetTransmitTransition(starting: false, stopping: false);
-        if (enabled)
-        {
-            if (streamId == 0)
-                throw new ArgumentOutOfRangeException(nameof(streamId));
-            runtime.MarkTransmitting(streamId);
-        }
-        else
-        {
-            runtime.MarkIdle();
-        }
-
-        if (transmitEnabled == enabled)
+        if (!SessionState.SetTransmitEnabled(enabled, streamId))
         {
             (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
             return;
         }
-        transmitEnabled = enabled;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitting)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttButtonText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttAutomationName)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PttAutomationHelpText)));
-        (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
-        (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
     internal void SetTransmitStarting(bool starting)
@@ -864,60 +579,27 @@ public sealed class ChannelViewModel :
         => SetTransmitTransition(starting: false, stopping);
 
     private void SetTransmitTransition(bool starting, bool stopping)
-    {
-        bool startingChanged = transmitStarting != starting;
-        bool stoppingChanged = transmitStopping != stopping;
-        if (!startingChanged && !stoppingChanged)
-            return;
-
-        transmitStarting = starting;
-        transmitStopping = stopping;
-        if (startingChanged)
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitStarting)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBackgroundBrush)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardTextBrush)));
-        }
-        if (stoppingChanged)
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitStopping)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StateText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CardBorderBrush)));
-    }
+        => OperatorState.SetTransmitTransition(starting, stopping);
 
     public void SetTransmitSelected(bool selected)
     {
         if (transmitSelected == selected)
             return;
-        transmitSelected = selected;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransmitSelected)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionAutomationName)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBrush)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TransmitSelectionBorderBrush)));
+        OperatorState.SetTransmitSelected(selected);
     }
 
     public void SetPageSelected(bool selected)
     {
         if (pageSelected == selected)
             return;
-        pageSelected = selected;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPageSelected)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionAutomationName)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBrush)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(PageSelectionBorderBrush)));
+        OperatorState.SetPageSelected(selected);
     }
 
     public void SetAlertSelected(bool selected)
     {
         if (alertSelected == selected)
             return;
-        alertSelected = selected;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsAlertSelected)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionAutomationName)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionText)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBrush)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AlertSelectionBorderBrush)));
+        OperatorState.SetAlertSelected(selected);
     }
 
     public void RestoreTransmitSelection(bool selected) => SetTransmitSelected(selected);
@@ -997,102 +679,18 @@ public sealed class ChannelViewModel :
         FneTrafficFrame traffic,
         DateTimeOffset now,
         ReceiveIngressRouteDecision ingressDecision)
-    {
-        if (!CanProjectTraffic(
-                systemName,
-                traffic,
-                ingressDecision.ActiveStreamIds.Contains(traffic.StreamId)) ||
-            ingressDecision.RouteKey != SessionDefinition.RouteKey)
-        {
-            return ChannelTrafficApplyResult.NoMatch;
-        }
+        => PresentReceiveProjection(ChannelReceiveProjection.Apply(
+            SessionState, systemName, traffic, now, ingressDecision));
 
-        return ProjectTraffic(traffic, now, ingressDecision.PacketDecision);
-    }
-
-    private bool CanProjectTraffic(
-        string systemName,
-        FneTrafficFrame traffic,
-        bool isTrackedReceiveStream)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(systemName);
-        ArgumentNullException.ThrowIfNull(traffic);
-
-        if (!runtime.Definition.SystemName.Equals(systemName, StringComparison.OrdinalIgnoreCase) ||
-            !MatchesProtocol(traffic.Protocol) ||
-            traffic.StreamId == 0)
-        {
-            return false;
-        }
-
-        if (runtime.State == ChannelRuntimeState.Transmitting)
-            return false;
-
-        if (ReceiveTrafficClassifier.IsTerminator(traffic))
-            return true;
-
-        if (ReceiveTrafficClassifier.IsDmrPrivacyHeader(traffic))
-        {
-            return isTrackedReceiveStream &&
-                   runtime.Definition.DestinationId == traffic.DestinationId &&
-                   runtime.Definition.Slot == traffic.Slot;
-        }
-
-        if (traffic.DestinationId != runtime.Definition.DestinationId)
-            return false;
-
-        bool isDmrVoiceLcHeader = ReceiveTrafficClassifier.IsDefinitiveStart(traffic);
-        return (MatchesVoiceTraffic(traffic) || isDmrVoiceLcHeader) &&
-               traffic.SourceId != 0;
-    }
+    private bool CanProjectTraffic(string systemName, FneTrafficFrame traffic, bool isTrackedReceiveStream)
+        => SessionState.Receive.CanProjectTraffic(systemName, traffic, isTrackedReceiveStream);
 
     private ChannelTrafficApplyResult ProjectTraffic(
-        FneTrafficFrame traffic,
-        DateTimeOffset now,
-        ReceiveRouteProjectionDecision projection)
-    {
-        if (!ReceiveTrafficClassifier.IsTerminator(traffic) && receiveEncryptionStreamId != traffic.StreamId)
-        {
-            receiveEncryptionStreamId = traffic.StreamId;
-            receiveEncryptionState = new TrafficEncryptionObservationState();
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ObservedReceiveEncrypted)));
-        }
-        if (receiveEncryptionState.Observe(traffic))
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ObservedReceiveEncrypted)));
+        FneTrafficFrame traffic, DateTimeOffset now, ReceiveRouteProjectionDecision projection)
+        => PresentReceiveProjection(ChannelReceiveProjection.Apply(SessionState, traffic, now, projection));
 
-        Volatile.Write(ref projectedReceiveStreams, projection.ActiveStreamIds);
-        ReceiveStreamDecision decision = projection.StreamDecision;
-
-        if (ReceiveTrafficClassifier.IsTerminator(traffic))
-        {
-            if (decision.Transition != ReceiveStreamTransition.TerminationPending)
-                return decision.Transition == ReceiveStreamTransition.IgnoredLate
-                    ? ToApplyResult(decision)
-                    : ChannelTrafficApplyResult.NoMatch;
-
-            if (runtime.StreamId == traffic.StreamId)
-                runtime.MarkIdle(now);
-            return ToApplyResult(decision);
-        }
-
-        if (ReceiveTrafficClassifier.IsDmrPrivacyHeader(traffic))
-        {
-            if (decision.Transition is (ReceiveStreamTransition.Continued or ReceiveStreamTransition.Resumed) &&
-                runtime.StreamId == traffic.StreamId)
-            {
-                runtime.MarkReceiving(traffic.SourceId, traffic.StreamId, now);
-            }
-            return ToApplyResult(decision);
-        }
-
-        if (decision.Transition != ReceiveStreamTransition.IgnoredLate &&
-            (decision.Transition != ReceiveStreamTransition.Colliding ||
-             runtime.State != ChannelRuntimeState.Receiving))
-        {
-            runtime.MarkReceiving(traffic.SourceId, traffic.StreamId, now);
-        }
-        return ToApplyResult(decision);
-    }
+    internal ChannelTrafficApplyResult PresentReceiveProjection(ChannelReceiveProjectionResult result)
+        => result.Decision is { } matched ? ToApplyResult(matched) : ChannelTrafficApplyResult.NoMatch;
 
     public bool TryExpireReceiveState(DateTimeOffset now, TimeSpan timeout)
     {
@@ -1113,22 +711,7 @@ public sealed class ChannelViewModel :
     internal ChannelTrafficApplyResult ProjectReceiveLifecycleDecision(
         ReceiveRouteProjectionDecision projection,
         DateTimeOffset now)
-    {
-        Volatile.Write(ref projectedReceiveStreams, projection.ActiveStreamIds);
-        ReceiveStreamDecision decision = projection.StreamDecision;
-        if (decision.Transition is
-            ReceiveStreamTransition.GraceExpired or
-            ReceiveStreamTransition.TerminationExpired)
-        {
-            if (decision.EndedStreamId is uint endedStreamId)
-            {
-                if (runtime.StreamId == endedStreamId)
-                    runtime.MarkIdle(now);
-                MarkReceivePlaybackEnded(endedStreamId);
-            }
-        }
-        return ToApplyResult(decision);
-    }
+        => PresentReceiveProjection(ChannelReceiveProjection.Advance(SessionState, projection, now));
 
     private static ChannelTrafficApplyResult ToApplyResult(ReceiveStreamDecision decision)
         => new(
@@ -1137,15 +720,6 @@ public sealed class ChannelViewModel :
             decision.ActiveStreamId,
             decision.EndedStreamId,
             decision.EndedAt);
-
-    private bool MatchesVoiceTraffic(FneTrafficFrame traffic)
-    {
-        return ReceiveTrafficClassifier.CarriesVoicePayload(traffic) &&
-               (runtime.Definition.Protocol != ChannelProtocol.Dmr || traffic.Slot == runtime.Definition.Slot);
-    }
-
-    private bool MatchesProtocol(FneTrafficProtocol protocol)
-        => protocol == FneTrafficProtocolMapper.FromChannelProtocol(runtime.Definition.Protocol);
 
     private async Task ToggleAudioAsync()
     {
@@ -1193,19 +767,24 @@ public sealed class ChannelViewModel :
         }
     }
 
+    private Func<bool, Task>? setTransmitEncryption;
+
+    internal void ConfigureEncryptionCommand(Func<bool, Task> setEncryption)
+        => setTransmitEncryption = setEncryption ?? throw new ArgumentNullException(nameof(setEncryption));
+
     private Task ToggleEncryptionAsync()
     {
+        if (setTransmitEncryption is not null) return setTransmitEncryption(!transmitEncrypted);
         SetTransmitEncrypted(!transmitEncrypted);
         return Task.CompletedTask;
     }
 
     internal void SetTransmitEncrypted(bool encrypted)
     {
-        if (transmitEncrypted == encrypted || !CanToggleEncryption || transmitEnabled)
+        if (!configurationAccess.CanChangeEncryption(OperatorState.Snapshot, encrypted))
             return;
 
-        transmitEncrypted = encrypted;
-        NotifySelectableEncryptionStateChanged();
+        OperatorState.SetTransmitEncrypted(encrypted);
         TransmitEncryptionChanged?.Invoke(this, transmitEncrypted);
     }
 
@@ -1214,10 +793,7 @@ public sealed class ChannelViewModel :
         if (hasCallPriority == enabled)
             return;
 
-        hasCallPriority = enabled;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasCallPriority)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPttControlEnabled)));
-        (PttCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        OperatorState.SetHasCallPriority(enabled);
     }
 
     private void NotifySelectableEncryptionStateChanged()
@@ -1235,8 +811,14 @@ public sealed class ChannelViewModel :
         (EncryptionCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
+    private Func<bool, Task>? setRecordingEnabled;
+
+    internal void ConfigureRecordingCommand(Func<bool, Task> setRecording)
+        => setRecordingEnabled = setRecording ?? throw new ArgumentNullException(nameof(setRecording));
+
     private Task ToggleRecordingAsync()
     {
+        if (setRecordingEnabled is not null) return setRecordingEnabled(!recordingEnabled);
         if (!CanRecord && !recordingEnabled)
             return Task.CompletedTask;
 
@@ -1246,19 +828,23 @@ public sealed class ChannelViewModel :
 
     private void HandleRuntimePropertyChanged(object? sender, PropertyChangedEventArgs args)
     {
-        if (args.PropertyName == nameof(ChannelRuntime.LastActivity))
+        if (args.PropertyName == nameof(ChannelRuntime.LastActivity) || Volatile.Read(ref statePresentationDetached) != 0) return;
+        if (stateDispatcher is null || stateDispatcher.CheckAccess()) PresentRuntimeProperty(args);
+        else
+        {
+            Interlocked.Exchange(ref runtimePresentationPending, 1);
+            RequestStatePresentation();
+        }
+    }
+
+    private void PresentRuntimeProperty(PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName == nameof(ChannelRuntime.LastActivity) || Volatile.Read(ref statePresentationDetached) != 0)
             return;
         PropertyChanged?.Invoke(this, args);
 
         bool callerChanged = args.PropertyName is nameof(ChannelRuntime.State) or nameof(ChannelRuntime.SourceId);
-        if (callerChanged && runtime.State == ChannelRuntimeState.Receiving && runtime.SourceId is uint sourceId)
-        {
-            string alias = AliasFileLoader.FindAlias(aliases, sourceId).Trim();
-            lastCallerText = string.IsNullOrWhiteSpace(alias)
-                ? sourceId.ToString(CultureInfo.InvariantCulture)
-                : alias;
-        }
-        else if (args.PropertyName == nameof(ChannelRuntime.State) &&
+        if (args.PropertyName == nameof(ChannelRuntime.State) &&
             runtime.State is not (ChannelRuntimeState.Receiving or ChannelRuntimeState.Transmitting))
         {
             SetAudioLevel(0);

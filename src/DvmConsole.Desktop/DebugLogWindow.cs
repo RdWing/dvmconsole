@@ -67,7 +67,9 @@ public sealed class DebugLogWindow : Window
             () => logs.GetVisualDescendants().OfType<ListBoxItem>(),
             control => control is ListBoxItem item
                 ? item.DataContext as DebugLogEntry ?? item.Content as DebugLogEntry
-                : null);
+                : null,
+            itemExists: item => logs.Items.Contains(item),
+            realizeItem: item => logs.ScrollIntoView(item));
 
         var closeButton = new Button { Content = "Close", MinWidth = 88 };
         var clearTextButton = new Button { Content = "Clear Text", MinWidth = 100 };

@@ -265,13 +265,13 @@
       "dvmconsole.application": {
         "type": "Project",
         "dependencies": {
-          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
-          "DvmConsole.Audio.Core": "[0.7.0, )",
-          "DvmConsole.Core": "[0.7.0, )",
-          "DvmConsole.Media": "[0.7.0, )",
-          "DvmConsole.Operations": "[0.7.0, )",
-          "DvmConsole.Ptt.Abstractions": "[0.7.0, )",
-          "DvmConsole.Vocoder.Abstractions": "[0.7.0, )"
+          "DvmConsole.Audio.Abstractions": "[0.8.0, )",
+          "DvmConsole.Audio.Core": "[0.8.0, )",
+          "DvmConsole.Core": "[0.8.0, )",
+          "DvmConsole.Media": "[0.8.0, )",
+          "DvmConsole.Operations": "[0.8.0, )",
+          "DvmConsole.Ptt.Abstractions": "[0.8.0, )",
+          "DvmConsole.Vocoder.Abstractions": "[0.8.0, )"
         }
       },
       "dvmconsole.audio.abstractions": {
@@ -281,30 +281,30 @@
         "type": "Project",
         "dependencies": {
           "Concentus.Oggfile": "[1.0.7, )",
-          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Abstractions": "[0.8.0, )",
           "NLayer": "[3.0.0, )"
         }
       },
       "dvmconsole.audio.desktop": {
         "type": "Project",
         "dependencies": {
-          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
-          "DvmConsole.Audio.Core": "[0.7.0, )",
-          "DvmConsole.Audio.Windows": "[0.7.0, )"
+          "DvmConsole.Audio.Abstractions": "[0.8.0, )",
+          "DvmConsole.Audio.Core": "[0.8.0, )",
+          "DvmConsole.Audio.Windows": "[0.8.0, )"
         }
       },
       "dvmconsole.audio.windows": {
         "type": "Project",
         "dependencies": {
-          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Abstractions": "[0.8.0, )",
           "NAudio.Wasapi": "[3.0.1, )"
         }
       },
       "dvmconsole.configuration.yaml": {
         "type": "Project",
         "dependencies": {
-          "DvmConsole.Application": "[0.7.0, )",
-          "DvmConsole.Core": "[0.7.0, )"
+          "DvmConsole.Application": "[0.8.0, )",
+          "DvmConsole.Core": "[0.8.0, )"
         }
       },
       "dvmconsole.core": {
@@ -322,24 +322,31 @@
       "dvmconsole.fneclient": {
         "type": "Project",
         "dependencies": {
-          "DvmConsole.Core": "[0.7.0, )",
-          "DvmConsole.Fne": "[0.7.0, )"
+          "DvmConsole.Core": "[0.8.0, )",
+          "DvmConsole.Fne": "[0.8.0, )"
+        }
+      },
+      "dvmconsole.fneintegration": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Application": "[0.8.0, )",
+          "DvmConsole.FneClient": "[0.8.0, )"
         }
       },
       "dvmconsole.media": {
         "type": "Project",
         "dependencies": {
-          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
-          "DvmConsole.Audio.Core": "[0.7.0, )",
-          "DvmConsole.Core": "[0.7.0, )",
-          "DvmConsole.Fne": "[0.7.0, )",
-          "DvmConsole.Vocoder.Abstractions": "[0.7.0, )"
+          "DvmConsole.Audio.Abstractions": "[0.8.0, )",
+          "DvmConsole.Audio.Core": "[0.8.0, )",
+          "DvmConsole.Core": "[0.8.0, )",
+          "DvmConsole.Fne": "[0.8.0, )",
+          "DvmConsole.Vocoder.Abstractions": "[0.8.0, )"
         }
       },
       "dvmconsole.operations": {
         "type": "Project",
         "dependencies": {
-          "DvmConsole.Core": "[0.7.0, )"
+          "DvmConsole.Core": "[0.8.0, )"
         }
       },
       "dvmconsole.presentation": {
@@ -347,7 +354,7 @@
         "dependencies": {
           "Avalonia": "[11.3.18, )",
           "Avalonia.Themes.Fluent": "[11.3.18, )",
-          "DvmConsole.Application": "[0.7.0, )"
+          "DvmConsole.Application": "[0.8.0, )"
         }
       },
       "dvmconsole.ptt.abstractions": {
@@ -356,7 +363,7 @@
       "dvmconsole.ptt.desktop": {
         "type": "Project",
         "dependencies": {
-          "DvmConsole.Ptt.Abstractions": "[0.7.0, )",
+          "DvmConsole.Ptt.Abstractions": "[0.8.0, )",
           "System.IO.Ports": "[8.0.0, )",
           "Tmds.DBus.Protocol": "[0.21.3, )"
         }
@@ -364,8 +371,8 @@
       "dvmconsole.storage": {
         "type": "Project",
         "dependencies": {
-          "DvmConsole.Application": "[0.7.0, )",
-          "DvmConsole.Core": "[0.7.0, )"
+          "DvmConsole.Application": "[0.8.0, )",
+          "DvmConsole.Core": "[0.8.0, )"
         }
       },
       "dvmconsole.vocoder.abstractions": {
@@ -374,7 +381,7 @@
       "dvmconsole.vocoder.native": {
         "type": "Project",
         "dependencies": {
-          "DvmConsole.Vocoder.Abstractions": "[0.7.0, )"
+          "DvmConsole.Vocoder.Abstractions": "[0.8.0, )"
         }
       }
     },

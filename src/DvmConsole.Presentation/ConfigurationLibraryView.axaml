@@ -55,6 +55,9 @@
                             Content="{Binding ActivateText}" IsEnabled="{Binding CanActivate}"
                             Tag="{Binding}" Click="HandleActivateClick"
                             AutomationProperties.Name="{Binding ActivateText}" />
+                    <Button Classes="library-action" Content="Export Bundle…" Margin="0,0,8,0"
+                            Tag="{Binding}" Click="HandleExportBundleClick"
+                            AutomationProperties.Name="Export configuration bundle" />
                     <Button Classes="library-action" Content="Move to Trash"
                             IsEnabled="{Binding CanMoveToTrash}" Tag="{Binding}"
                             Click="HandleTrashClick"

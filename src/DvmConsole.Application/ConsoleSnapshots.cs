@@ -12,12 +12,15 @@ public sealed record ConfigurationReference(
 public sealed record SystemDescriptor(
     SystemId Id,
     string Name,
-    string Protocol);
+    string Protocol,
+    string? Color = null);
 
 public sealed record ZoneDescriptor(
     ZoneId Id,
     string Name,
-    IReadOnlyList<ChannelId> Channels);
+    IReadOnlyList<ChannelId> Channels,
+    string? Color = null,
+    string? TextColor = null);
 
 public sealed record ChannelDescriptor(
     ChannelId Id,
@@ -28,7 +31,8 @@ public sealed record ChannelDescriptor(
     string Protocol,
     byte Slot,
     bool ReceiveOnly,
-    bool AllowsTransmitDuringReceive = false);
+    bool AllowsTransmitDuringReceive = false,
+    string? CardSize = "normal");
 
 /// <summary>
 /// Immutable media-session identity and configuration used by receive
@@ -90,11 +94,17 @@ public sealed record ChannelControlSnapshot(
     string? Fault,
     bool RecordingPlayback = false,
     bool TransmitEncryptionConfigured = false,
-    bool TransmitEncryptionSelectable = false)
+    bool TransmitEncryptionSelectable = false,
+    bool TransmitStarting = false,
+    bool TransmitStopping = false,
+    uint? ReceiveSourceId = null,
+    uint? LastCallerSourceId = null)
 {
     public bool HasSameContent(ChannelControlSnapshot? other)
         => ReferenceEquals(this, other) || (other is not null &&
            Id == other.Id &&
+           ReceiveSourceId == other.ReceiveSourceId &&
+           LastCallerSourceId == other.LastCallerSourceId &&
            RuntimeState == other.RuntimeState &&
            string.Equals(StateText, other.StateText, StringComparison.Ordinal) &&
            string.Equals(LastCaller, other.LastCaller, StringComparison.Ordinal) &&
@@ -122,7 +132,9 @@ public sealed record ChannelControlSnapshot(
            string.Equals(Fault, other.Fault, StringComparison.Ordinal) &&
            RecordingPlayback == other.RecordingPlayback &&
            TransmitEncryptionConfigured == other.TransmitEncryptionConfigured &&
-           TransmitEncryptionSelectable == other.TransmitEncryptionSelectable);
+           TransmitEncryptionSelectable == other.TransmitEncryptionSelectable &&
+           TransmitStarting == other.TransmitStarting &&
+           TransmitStopping == other.TransmitStopping);
 }
 
 public sealed record ConsoleRuntimeSnapshot(

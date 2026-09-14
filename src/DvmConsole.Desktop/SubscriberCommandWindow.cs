@@ -120,7 +120,7 @@ public sealed class SubscriberCommandWindow : Window
     private static string CommandDescription(P25SubscriberCommand command) => command switch
     {
         P25SubscriberCommand.CallAlert => "Send a P25 call-alert page to one subscriber through the selected connected FNE system.",
-        P25SubscriberCommand.RadioCheck => "Send a P25 radio-check request. Acknowledgement decoding remains future work.",
+        P25SubscriberCommand.RadioCheck => "Send a P25 radio-check request. Matching subscriber acknowledgements appear in Recent commands.",
         P25SubscriberCommand.Inhibit => "Send a P25 inhibit command. Verify the destination RID carefully before continuing.",
         P25SubscriberCommand.Uninhibit => "Send a P25 uninhibit command to a previously inhibited subscriber.",
         _ => string.Empty

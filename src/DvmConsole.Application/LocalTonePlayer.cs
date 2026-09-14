@@ -253,6 +253,7 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
 {
     private readonly Func<IAudioBackend> createAudioBackend;
     private readonly Func<string?> getOutputDeviceId;
+    private readonly Func<CancellationToken, ValueTask<IAudioPlayback>>? openSharedOutput;
     private readonly IAudioOutputRouteResolver outputRouteResolver;
     private readonly Func<TimeSpan, CancellationToken, Task> delayAsync;
     private readonly IMonotonicTimeSource monotonicTimeSource;
@@ -264,8 +265,10 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
         Func<string?> getOutputDeviceId,
         IAudioOutputRouteResolver? outputRouteResolver = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
-        IMonotonicTimeSource? monotonicTimeSource = null)
+        IMonotonicTimeSource? monotonicTimeSource = null,
+        Func<CancellationToken, ValueTask<IAudioPlayback>>? openSharedOutput = null)
     {
+        this.openSharedOutput = openSharedOutput;
         this.createAudioBackend = createAudioBackend ?? throw new ArgumentNullException(nameof(createAudioBackend));
         this.getOutputDeviceId = getOutputDeviceId ?? throw new ArgumentNullException(nameof(getOutputDeviceId));
         this.outputRouteResolver = outputRouteResolver ?? new AudioOutputRouteResolver();
@@ -405,9 +408,7 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
         TimeSpan initialRouteResolved = timing.Elapsed;
         LocalTonePlaybackRequest request = selectRequest(output) ??
             throw new InvalidOperationException("The local cue route did not select a playback request.");
-        IAudioPlayback? playback = backend.OpenPlayback(
-            output,
-            PcmAudioFormat.Voice8KhzMono16Bit);
+        IAudioPlayback? playback = await OpenOutputAsync(backend, output, cancellationToken).ConfigureAwait(false);
         TimeSpan initialPlaybackOpened = timing.Elapsed;
         try
         {
@@ -435,9 +436,7 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
                     routeRequest.RoutePolicy,
                     cancellationToken).ConfigureAwait(false);
                 outputRouteConfirmed = timing.Elapsed;
-                playback = backend.OpenPlayback(
-                    finalOutput,
-                    PcmAudioFormat.Voice8KhzMono16Bit);
+                playback = await OpenOutputAsync(backend, finalOutput, cancellationToken).ConfigureAwait(false);
                 finalPlaybackOpened = timing.Elapsed;
             }
             else
@@ -634,8 +633,14 @@ internal sealed class LocalTonePlayer : IAsyncDisposable
         }
     }
 
+    private ValueTask<IAudioPlayback> OpenOutputAsync(IAudioBackend backend, AudioDeviceInfo output,
+        CancellationToken cancellationToken)
+        => openSharedOutput is not null ? openSharedOutput(cancellationToken)
+            : ValueTask.FromResult(backend.OpenPlayback(output, PcmAudioFormat.Voice8KhzMono16Bit));
+
     private static long? GetOutputCallbackCount(IAudioPlayback playback)
-        => (playback as IAudioPlaybackCallbackDiagnostics)?.OutputCallbackCount;
+        => (playback as IAudioPlaybackCallbackDiagnostics)?.OutputCallbackCount
+            ?? (playback as IPhysicalAudioOutputDiagnosticsSource)?.GetPhysicalOutputDiagnostics().OutputCallbackCount;
 
     private static TimeSpan? GetMeasuredPresentationLatency(
         LocalTonePlaybackRequest request,

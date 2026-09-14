@@ -24,23 +24,9 @@
     <Style Selector="TextBlock.eyebrow"><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" /><Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" /></Style>
     <Style Selector="Button"><Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" /><Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" /><Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" /><Setter Property="Padding" Value="10,6" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" /></Style>
     <Style Selector="Button:not(.tx-select):not(.channel-action):not(.list-control):pointerover"><Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}" /></Style>
-    <Style Selector="Button.ptt"><Setter Property="Height" Value="24" /><Setter Property="HorizontalAlignment" Value="Stretch" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="Padding" Value="3,0" /><Setter Property="FontWeight" Value="SemiBold" /><Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}" /></Style>
-    <Style Selector="Button.ptt:pointerover"><Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}" /></Style>
-    <Style Selector="Button.ptt:pointerover /template/ ContentPresenter#PART_ContentPresenter"><Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}" /></Style>
-    <Style Selector="Button.ptt:pressed"><Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}" /></Style>
-    <Style Selector="Button.ptt:pressed /template/ ContentPresenter#PART_ContentPresenter"><Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}" /></Style>
+    <StyleInclude Source="avares://DvmConsole.Presentation/ConsoleChannelButtonStyles.axaml" />
     <Style Selector="Button.card-action"><Setter Property="Padding" Value="5,2" /><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" /></Style>
     <Style Selector="Button.tx-select"><Setter Property="Height" Value="24" /><Setter Property="Padding" Value="2,0" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="FontSize" Value="{Binding $parent[Window].((local:MainWindowViewModel)DataContext).UiCompactFontSize}" /><Setter Property="Background" Value="{DynamicResource SelectorBackgroundBrush}" /></Style>
-    <Style Selector="Button.channel-action">
-      <Setter Property="Template">
-        <ControlTemplate>
-          <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="3" Padding="{TemplateBinding Padding}">
-            <ContentPresenter Content="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}" HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
-          </Border>
-        </ControlTemplate>
-      </Setter>
-    </Style>
-    <Style Selector="Button.channel-action:disabled"><Setter Property="Opacity" Value="0.55" /></Style>
     <Style Selector="Button.status-card"><Setter Property="HorizontalAlignment" Value="Left" /><Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" /><Setter Property="BorderThickness" Value="2" /><Setter Property="CornerRadius" Value="7" /><Setter Property="Padding" Value="8,4" /></Style>
     <Style Selector="Button.status-card:pointerover" x:DataType="local:SystemViewModel"><Setter Property="Background" Value="{DynamicResource ButtonHoverBrush}" /><Setter Property="BorderBrush" Value="{Binding ConnectionBrush}" /></Style>
     <Style Selector="Button.status-card:pointerover /template/ ContentPresenter#PART_ContentPresenter" x:DataType="local:SystemViewModel"><Setter Property="BorderBrush" Value="{Binding ConnectionBrush}" /><Setter Property="BorderThickness" Value="2" /></Style>
@@ -215,7 +201,7 @@
                           ItemsSource="{Binding BuiltInAlertTones}"
                           AutomationProperties.Name="Alert tone shortcuts">
               <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal" Spacing="4" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
-              <ItemsControl.ItemTemplate><DataTemplate x:DataType="local:BuiltInAlertToneViewModel"><Button Width="70" HorizontalContentAlignment="Stretch" Tag="{Binding}" ToolTip.Tip="{Binding Description}" Padding="6,3" AutomationProperties.Name="{Binding Description}" Click="HandleToolbarAlertToneClick" ContextRequested="HandleToolbarToneContextRequested"><TextBlock Text="{Binding DisplayName}" TextAlignment="Center" /></Button></DataTemplate></ItemsControl.ItemTemplate>
+              <ItemsControl.ItemTemplate><DataTemplate x:DataType="presentation:BuiltInAlertToneViewModel"><Button Width="70" HorizontalContentAlignment="Stretch" Tag="{Binding}" ToolTip.Tip="{Binding Description}" Padding="6,3" AutomationProperties.Name="{Binding Description}" Click="HandleToolbarAlertToneClick" ContextRequested="HandleToolbarToneContextRequested"><TextBlock Text="{Binding DisplayName}" TextAlignment="Center" /></Button></DataTemplate></ItemsControl.ItemTemplate>
             </ItemsControl>
             <Button x:Name="toolbarTonesLauncher" Content="TONES" Tag="settings.tones" ToolTip.Tip="Open Console Settings directly to Tones and DTMF" Padding="6,3" AutomationProperties.Name="Open Tones and DTMF" Click="HandleOperatorCommandClick" />
           </StackPanel>

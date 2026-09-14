@@ -8,7 +8,28 @@ public sealed record RadioConnectionEndpoint(
     string Name,
     Func<bool> IsActive,
     Func<CancellationToken, ValueTask> StartAsync,
-    Func<CancellationToken, ValueTask> StopAsync);
+    Func<CancellationToken, ValueTask> StopAsync,
+    Action? Abort = null)
+{
+    /// <summary>Uses radio-owned activity and lifecycle, with an optional host presentation reset.</summary>
+    public static RadioConnectionEndpoint FromSession(SystemId id, string name, IRadioSession session,
+        P25KeyRequestState? keyRequests = null, Action? beforeStart = null)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return new(id, name, () => session.IsConnectionActive,
+            async token =>
+            {
+                beforeStart?.Invoke();
+                await session.StartAsync(token).ConfigureAwait(false);
+            },
+            async token =>
+            {
+                await session.QuiesceAsync(token).ConfigureAwait(false);
+                keyRequests?.Clear();
+            },
+            session is IRadioSessionAbort emergency ? emergency.Abort : null);
+    }
+}
 
 public enum RadioConnectionTransitionKind
 {
@@ -33,7 +54,7 @@ public sealed record RadioConnectionTransition(
 /// Owns serialized radio connection transitions without depending on a radio
 /// protocol implementation or presentation object.
 /// </summary>
-public sealed class RadioConnectionCoordinator
+public sealed class RadioConnectionCoordinator : IConsoleConnectionCommands
 {
     private readonly SemaphoreSlim transitionGate = new(1, 1);
     private readonly object startupCancellationSync = new();
@@ -44,6 +65,7 @@ public sealed class RadioConnectionCoordinator
     private readonly Action stopForwarding;
     private readonly Action<bool> setBusy;
     private readonly Action<RadioConnectionTransition> publishTransition;
+    private readonly Func<bool>? isStopping;
 
     public RadioConnectionCoordinator(
         IEnumerable<RadioConnectionEndpoint> endpoints,
@@ -51,8 +73,10 @@ public sealed class RadioConnectionCoordinator
         Func<CancellationToken, ValueTask> stopDependentSources,
         Action stopForwarding,
         Action<bool> setBusy,
-        Action<RadioConnectionTransition> publishTransition)
+        Action<RadioConnectionTransition> publishTransition,
+        Func<bool>? isStopping = null)
     {
+        this.isStopping = isStopping;
         ArgumentNullException.ThrowIfNull(endpoints);
         this.endpoints = endpoints.ToDictionary(endpoint => endpoint.Id);
         this.synchronizeDependentSources = synchronizeDependentSources ??
@@ -63,6 +87,25 @@ public sealed class RadioConnectionCoordinator
         this.setBusy = setBusy ?? throw new ArgumentNullException(nameof(setBusy));
         this.publishTransition = publishTransition ?? throw new ArgumentNullException(nameof(publishTransition));
     }
+
+    /// <summary>Attempts every available emergency close without waiting for the transition gate.</summary>
+    public IReadOnlyList<RadioConnectionTransition> Abort()
+    {
+        var failures = new List<RadioConnectionTransition>();
+        foreach (RadioConnectionEndpoint endpoint in endpoints.Values)
+        {
+            try { endpoint.Abort?.Invoke(); }
+            catch (Exception exception)
+            {
+                failures.Add(new(RadioConnectionTransitionKind.SystemStopFaulted,
+                    endpoint.Id, endpoint.Name, exception));
+            }
+        }
+        return failures;
+    }
+
+    public IReadOnlyList<SystemId> CaptureActiveSystemIds()
+        => endpoints.Values.Where(endpoint => endpoint.IsActive()).Select(endpoint => endpoint.Id).ToArray();
 
     public Task ConnectAsync(CancellationToken cancellationToken = default)
         => RunStartupTransitionAsync(ConnectCoreAsync, cancellationToken);
@@ -218,6 +261,8 @@ public sealed class RadioConnectionCoordinator
         RadioConnectionEndpoint endpoint,
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(isStopping?.Invoke() == true, this);
         try
         {
             await endpoint.StartAsync(cancellationToken).ConfigureAwait(false);

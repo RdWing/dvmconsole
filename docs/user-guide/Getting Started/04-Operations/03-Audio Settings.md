@@ -1,6 +1,12 @@
 # Audio settings
 
-Open Audio Settings from:
+Choose your microphone and speakers, then adjust the audio to suit your setup.
+The menu paths and physical output assignments below describe desktop. On iPhone
+and iPad, open **Settings → Audio** for the system output picker, microphone
+selection and processing controls. Mobile uses one physical output mix. See [iOS and iPadOS](05-iOS%20and%20iPadOS.md) for input selection, permissions and
+interruption recovery.
+
+Open desktop Audio Settings from:
 
 ```
 Audio > Audio settings
@@ -133,8 +139,8 @@ definition stable to retain all saved behavior.
 
 # Microphone processing
 
-DVM Console processing is the standard microphone path on macOS and Linux, and
-the default path on Windows. After capture, it applies console gain,
+DVM Console processing is the standard microphone path on macOS, Linux, iOS
+and iPadOS, and the default path on Windows. After capture, it applies console gain,
 equalization, and optional automatic gain control.
 
 On Windows, the mode selector also offers **Windows communications processing**.
@@ -145,7 +151,7 @@ Console bypasses its gain, equalizer, and AGC to avoid processing the signal
 twice. Endpoint effects depend on the device and are not guaranteed when the
 mode is selected.
 
-Applying a different main input or output route, or a different Windows
+On desktop, applying a different main input or output route, or a different Windows
 processing mode, restarts active listening channels and web streams around the
 change. Active recording playback stops so it does not keep the old audio
 backend. You do not need to cycle each channel card manually. Stop transmitting

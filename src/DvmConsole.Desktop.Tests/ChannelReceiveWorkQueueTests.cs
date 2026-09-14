@@ -284,7 +284,7 @@ public sealed class ChannelReceiveWorkQueueTests
         var episode = new ReceiveCallEpisodeSnapshot(
             900,
             "Test",
-            FneTrafficProtocol.P25,
+            DvmConsole.Core.Runtime.RadioMediaProtocol.P25,
             42,
             100,
             null,
@@ -759,22 +759,30 @@ public sealed class ChannelReceiveWorkQueueTests
     {
         var continuationEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
         var channel = CreateChannel("Dispatch", "100");
-        await using var queue = new ChannelReceiveWorkQueue(static (_, _) => Task.CompletedTask);
+        await using var queue = new ChannelReceiveWorkQueue(
+            static (_, _) => Task.CompletedTask, shutdownDrainTimeout: TimeSpan.FromSeconds(5));
 
         Task continuation = queue.RunAfterStreamAsync(channel, 99, () =>
         {
             continuationEntered.TrySetResult();
-            release.Wait(TimeSpan.FromSeconds(2));
+            release.Wait();
             return Task.CompletedTask;
         });
-        await continuationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
-
-        Task queueOperation = Task.Run(() => queue.Start(channel));
-        await queueOperation.WaitAsync(TimeSpan.FromMilliseconds(500));
-        release.Set();
-        await continuation.WaitAsync(TimeSpan.FromSeconds(2));
+        try
+        {
+            await continuationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Task queueOperation = Task.Factory.StartNew(() => queue.Start(channel),
+                CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            await queueOperation.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(continuation.IsCompleted);
+        }
+        finally
+        {
+            release.Set();
+        }
+        await continuation.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]

@@ -10,6 +10,51 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class RecordingPlaybackCoordinatorTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SharedOutputBypassesPhysicalBackendAndReleasesAtEndOrCancellation(bool cancel)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "neo-shared-playback-" + Guid.NewGuid().ToString("N"));
+        string path = Path.Combine(directory, "call.wav");
+        var output = new FakePlayback { BlockWrites = cancel };
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            using (var writer = PcmWavTestFile.Create(path, PcmAudioFormat.Voice8KhzMono16Bit))
+                writer.Write(Enumerable.Repeat((short)1200, 1600).ToArray());
+            await using var coordinator = new DvmConsole.Application.RecordingPlaybackCoordinator(new SharedOutputStore(path),
+                () => throw new InvalidOperationException("Must not open a second physical backend"), () => null,
+                openSharedOutput: _ => ValueTask.FromResult<IAudioPlayback>(output));
+            coordinator.PlaybackStateChanged += (_, state) => { if (!state.IsPlaying) stopped.TrySetResult(); };
+            var id = new DvmConsole.Application.RecordingId(Guid.NewGuid());
+            await coordinator.StartAsync(id);
+            await output.WriteEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            if (cancel)
+            {
+                coordinator.RequestStop();
+                await coordinator.StopAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            await stopped.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(coordinator.IsPlaying());
+            Assert.True(output.IsDisposed);
+            Assert.Equal(!cancel, output.DrainCalled);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+    }
+
+    private sealed class SharedOutputStore(string path) : DvmConsole.Application.IRecordingStore
+    {
+        public ValueTask<DvmConsole.Application.IRecordingWriteHandle> CreateAsync(DvmConsole.Application.CallId call,
+            DvmConsole.Application.ChannelId channel, DateTimeOffset start, string type, CancellationToken token = default)
+            => throw new NotSupportedException();
+        public ValueTask<Stream> OpenReadAsync(DvmConsole.Application.RecordingId id, CancellationToken token = default)
+            => ValueTask.FromResult<Stream>(File.OpenRead(path));
+        public async IAsyncEnumerable<DvmConsole.Application.RecordingDescriptor> ListAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token = default)
+        { await Task.CompletedTask; yield break; }
+    }
+
     [Fact]
     public async Task PlaysLocalWavThroughSelectedOutputAndStopsAtEnd()
     {
@@ -28,8 +73,15 @@ public sealed class RecordingPlaybackCoordinatorTests
                              () => backend,
                              () => "alternate"))
             {
-                await coordinator.StartAsync(path);
+                var identity = new RecordingCallIdentity(DateTimeOffset.UtcNow, "System", "Dispatch", "RX", "P25", 42, 100, 10, null);
+                RecordingCallIdentity? publishedIdentity = null;
+                coordinator.PlaybackStateChanged += (_, state) =>
+                {
+                    if (state.IsPlaying) publishedIdentity = state.Identity;
+                };
+                await coordinator.StartAsync(path, identity: identity);
                 await WaitForAsync(() => !coordinator.IsPlaying());
+                Assert.Equal(identity, publishedIdentity);
 
                 Assert.Equal("alternate", backend.LastOutputDeviceId);
                 Assert.Single(backend.AlternatePlayback.Frames);
@@ -545,6 +597,7 @@ public sealed class RecordingPlaybackCoordinatorTests
 
     private sealed class FakePlayback : IAudioPlayback
     {
+        public TaskCompletionSource WriteEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public List<short[]> Frames { get; } = [];
         public bool IsDisposed { get; private set; }
         public bool BlockWrites { get; set; }
@@ -555,6 +608,7 @@ public sealed class RecordingPlaybackCoordinatorTests
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            WriteEntered.TrySetResult();
             if (BlockWrites)
                 return new ValueTask(Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
             if (WriteFailure is not null)

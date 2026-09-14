@@ -1,14 +1,13 @@
 // SPDX-FileCopyrightText: 2025-2026 RdWing
 // SPDX-License-Identifier: AGPL-3.0-only
 
+using DvmConsole.Application;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
-using System.ComponentModel;
-using System.Runtime.CompilerServices;
 
 namespace DvmConsole.Desktop;
 
-internal sealed class HistoryRecordingController : INotifyPropertyChanged
+internal sealed class HistoryRecordingController : DvmConsole.Presentation.CallHistoryFilterViewModel
 {
     internal const int MaximumActivityEntries = 100;
     private readonly object recordingCatalogScanSync = new();
@@ -17,17 +16,6 @@ internal sealed class HistoryRecordingController : INotifyPropertyChanged
     private readonly ResettableObservableCollection<CallRecordingMetadata> recordingEntries = [];
     private string recordingRetentionDaysText;
     private string recordingRootPathText;
-    private string callHistoryFilterText = string.Empty;
-    private string recordingDirectionFilter = "All";
-    private string recordingProtocolFilter = "All";
-    private string recordingEncryptionFilter = "All";
-    private string recordingSystemFilterText = string.Empty;
-    private string recordingChannelFilterText = string.Empty;
-    private string recordingTalkgroupFilterText = string.Empty;
-    private string recordingSubscriberFilterText = string.Empty;
-    private string recordingAliasFilterText = string.Empty;
-    private DateTimeOffset? recordingStartDateFilter;
-    private DateTimeOffset? recordingEndDateFilter;
     private bool activityCurrentZoneOnly;
     private bool activityReceiveEnabledOnly = true;
     private CancellationTokenSource? recordingCatalogScanCancellation;
@@ -37,8 +25,10 @@ internal sealed class HistoryRecordingController : INotifyPropertyChanged
 
     public HistoryRecordingController(
         string recordingRetentionDaysText,
-        string recordingRootPathText)
+        string recordingRootPathText,
+        ConsoleCallHistory? history = null)
     {
+        History = history is null ? new() : new(history);
         this.recordingRetentionDaysText = recordingRetentionDaysText;
         this.recordingRootPathText = recordingRootPathText;
         CallHistory = new ReadOnlyObservableCollection<CallHistoryEntry>(History.Entries);
@@ -47,11 +37,10 @@ internal sealed class HistoryRecordingController : INotifyPropertyChanged
         Recordings = new ReadOnlyObservableCollection<CallRecordingMetadata>(recordingEntries);
     }
 
-    public event PropertyChangedEventHandler? PropertyChanged;
     internal event NotifyCollectionChangedEventHandler? FilteredCallHistoryChanging;
     internal event NotifyCollectionChangedEventHandler? ActivityCallHistoryChanging;
 
-    internal CallHistoryStore History { get; } = new();
+    internal CallHistoryStore History { get; }
     internal ObservableCollection<CallRecordingMetadata> RecordingEntries => recordingEntries;
 
     internal void ReplaceRecordingEntries(IEnumerable<CallRecordingMetadata> recordings)
@@ -78,136 +67,7 @@ internal sealed class HistoryRecordingController : INotifyPropertyChanged
         set => SetField(ref recordingRootPathText, value ?? string.Empty);
     }
 
-    public string CallHistoryFilterText
-    {
-        get => callHistoryFilterText;
-        set
-        {
-            string normalized = value ?? string.Empty;
-            if (callHistoryFilterText == normalized)
-                return;
-            callHistoryFilterText = normalized;
-            NotifyPropertyChanged();
-            RefreshFilteredCallHistory();
-        }
-    }
-
-    public IReadOnlyList<string> RecordingDirectionFilters { get; } = ["All", "RX", "TX"];
-    public IReadOnlyList<string> RecordingProtocolFilters { get; } = ["All", "DMR", "P25", "ANALOG", "NXDN"];
-    public IReadOnlyList<string> RecordingEncryptionFilters { get; } = ["All", "Clear", "Encrypted"];
-
-    public string RecordingDirectionFilter
-    {
-        get => recordingDirectionFilter;
-        set => SetRecordingFilter(ref recordingDirectionFilter, value);
-    }
-
-    public string RecordingProtocolFilter
-    {
-        get => recordingProtocolFilter;
-        set => SetRecordingFilter(ref recordingProtocolFilter, value);
-    }
-
-    public string RecordingEncryptionFilter
-    {
-        get => recordingEncryptionFilter;
-        set => SetRecordingFilter(ref recordingEncryptionFilter, value);
-    }
-
-    public string RecordingSystemFilterText
-    {
-        get => recordingSystemFilterText;
-        set => SetRecordingFilter(ref recordingSystemFilterText, value, allowEmpty: true);
-    }
-
-    public string RecordingChannelFilterText
-    {
-        get => recordingChannelFilterText;
-        set => SetRecordingFilter(ref recordingChannelFilterText, value, allowEmpty: true);
-    }
-
-    public string RecordingTalkgroupFilterText
-    {
-        get => recordingTalkgroupFilterText;
-        set => SetRecordingFilter(ref recordingTalkgroupFilterText, value, allowEmpty: true);
-    }
-
-    public string RecordingSubscriberFilterText
-    {
-        get => recordingSubscriberFilterText;
-        set => SetRecordingFilter(ref recordingSubscriberFilterText, value, allowEmpty: true);
-    }
-
-    public string RecordingAliasFilterText
-    {
-        get => recordingAliasFilterText;
-        set => SetRecordingFilter(ref recordingAliasFilterText, value, allowEmpty: true);
-    }
-
-    public DateTimeOffset? RecordingStartDateFilter
-    {
-        get => recordingStartDateFilter;
-        set => SetRecordingDateFilter(ref recordingStartDateFilter, value);
-    }
-
-    public DateTimeOffset? RecordingEndDateFilter
-    {
-        get => recordingEndDateFilter;
-        set => SetRecordingDateFilter(ref recordingEndDateFilter, value);
-    }
-
-    public bool HasAdvancedHistoryFilters =>
-        RecordingDirectionFilter != "All" ||
-        RecordingProtocolFilter != "All" ||
-        RecordingEncryptionFilter != "All" ||
-        !string.IsNullOrWhiteSpace(RecordingSystemFilterText) ||
-        !string.IsNullOrWhiteSpace(RecordingChannelFilterText) ||
-        !string.IsNullOrWhiteSpace(RecordingTalkgroupFilterText) ||
-        !string.IsNullOrWhiteSpace(RecordingSubscriberFilterText) ||
-        !string.IsNullOrWhiteSpace(RecordingAliasFilterText) ||
-        RecordingStartDateFilter is not null ||
-        RecordingEndDateFilter is not null;
-
-    public string HistoryFilterSummary
-    {
-        get
-        {
-            var filters = new List<string>();
-            if (RecordingDirectionFilter != "All") filters.Add(RecordingDirectionFilter);
-            if (RecordingProtocolFilter != "All") filters.Add(RecordingProtocolFilter);
-            if (RecordingEncryptionFilter != "All") filters.Add(RecordingEncryptionFilter);
-            if (!string.IsNullOrWhiteSpace(RecordingSystemFilterText)) filters.Add($"system {RecordingSystemFilterText}");
-            if (!string.IsNullOrWhiteSpace(RecordingChannelFilterText)) filters.Add($"channel {RecordingChannelFilterText}");
-            if (!string.IsNullOrWhiteSpace(RecordingTalkgroupFilterText)) filters.Add($"TG {RecordingTalkgroupFilterText}");
-            if (!string.IsNullOrWhiteSpace(RecordingSubscriberFilterText)) filters.Add($"RID {RecordingSubscriberFilterText}");
-            if (!string.IsNullOrWhiteSpace(RecordingAliasFilterText)) filters.Add($"alias {RecordingAliasFilterText}");
-            if (RecordingStartDateFilter is DateTimeOffset start) filters.Add($"from {start:yyyy-MM-dd}");
-            if (RecordingEndDateFilter is DateTimeOffset end) filters.Add($"to {end:yyyy-MM-dd}");
-            return string.Join(" · ", filters);
-        }
-    }
-
-    private void ClearAdvancedHistoryFilters()
-    {
-        RecordingDirectionFilter = "All";
-        RecordingProtocolFilter = "All";
-        RecordingEncryptionFilter = "All";
-        RecordingSystemFilterText = string.Empty;
-        RecordingChannelFilterText = string.Empty;
-        RecordingTalkgroupFilterText = string.Empty;
-        RecordingSubscriberFilterText = string.Empty;
-        RecordingAliasFilterText = string.Empty;
-        RecordingStartDateFilter = null;
-        RecordingEndDateFilter = null;
-    }
-
-    public void ClearHistoryFilters()
-    {
-        CallHistoryFilterText = string.Empty;
-        ClearAdvancedHistoryFilters();
-    }
-
-    public void RefreshFilteredCallHistory()
+    public override void RefreshFilteredCallHistory()
     {
         HistoryCatalogFilter filter = CreateHistoryFilter();
         IEnumerable<CallHistoryEntry> desiredEntries = filter.IsUnfiltered
@@ -366,71 +226,7 @@ internal sealed class HistoryRecordingController : INotifyPropertyChanged
         }
     }
 
-    private void SetRecordingDateFilter(
-        ref DateTimeOffset? field,
-        DateTimeOffset? value,
-        [CallerMemberName] string? propertyName = null)
-    {
-        DateTimeOffset? normalized = value is DateTimeOffset date
-            ? new DateTimeOffset(date.Date, date.Offset)
-            : null;
-        if (field == normalized)
-            return;
-        field = normalized;
-        NotifyPropertyChanged(propertyName);
-        NotifyHistoryFilterChanged();
-    }
 
-    private void SetRecordingFilter(
-        ref string field,
-        string? value,
-        bool allowEmpty = false,
-        [CallerMemberName] string? propertyName = null)
-    {
-        string normalized = string.IsNullOrWhiteSpace(value)
-            ? (allowEmpty ? string.Empty : "All")
-            : value.Trim();
-        if (field.Equals(normalized, StringComparison.Ordinal))
-            return;
-        field = normalized;
-        NotifyPropertyChanged(propertyName);
-        NotifyHistoryFilterChanged();
-    }
-
-    private HistoryCatalogFilter CreateHistoryFilter()
-        => new(
-            CallHistoryFilterText,
-            RecordingDirectionFilter,
-            RecordingProtocolFilter,
-            RecordingEncryptionFilter,
-            RecordingSystemFilterText,
-            RecordingChannelFilterText,
-            RecordingTalkgroupFilterText,
-            RecordingSubscriberFilterText,
-            RecordingAliasFilterText,
-            RecordingStartDateFilter,
-            RecordingEndDateFilter);
-
-    private void NotifyHistoryFilterChanged()
-    {
-        RefreshFilteredCallHistory();
-        NotifyPropertyChanged(nameof(HasAdvancedHistoryFilters));
-        NotifyPropertyChanged(nameof(HistoryFilterSummary));
-    }
-
-    private void SetField<T>(
-        ref T field,
-        T value,
-        [CallerMemberName] string? propertyName = null)
-    {
-        if (EqualityComparer<T>.Default.Equals(field, value))
-            return;
-        field = value;
-        NotifyPropertyChanged(propertyName);
-    }
-
-    private void NotifyPropertyChanged([CallerMemberName] string? propertyName = null)
-        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
 
 internal sealed record RecordingCatalogScanSnapshot(
@@ -441,74 +237,3 @@ internal sealed record RecordingCatalogScanSnapshot(
 internal sealed record RecordingCatalogScanShutdown(
     Task Scan,
     CancellationTokenSource? Cancellation);
-
-internal static class HistoryViewSynchronizer
-{
-    public static void Synchronize(
-        ObservableCollection<CallHistoryEntry> target,
-        IEnumerable<CallHistoryEntry> desiredEntries,
-        Action<NotifyCollectionChangedEventArgs>? collectionChanging = null)
-    {
-        ArgumentNullException.ThrowIfNull(target);
-        ArgumentNullException.ThrowIfNull(desiredEntries);
-        CallHistoryEntry[] desired = desiredEntries as CallHistoryEntry[] ?? desiredEntries.ToArray();
-        lock (target)
-        {
-            if (HasSameEntries(target, desired))
-                return;
-
-            var desiredSet = new HashSet<CallHistoryEntry>(
-                desired,
-                ReferenceEqualityComparer.Instance);
-            for (int index = target.Count - 1; index >= 0; index--)
-            {
-                if (!desiredSet.Contains(target[index]))
-                {
-                    collectionChanging?.Invoke(new NotifyCollectionChangedEventArgs(
-                        NotifyCollectionChangedAction.Remove,
-                        target[index],
-                        index));
-                    target.RemoveAt(index);
-                }
-            }
-
-            for (int index = 0; index < desired.Length; index++)
-            {
-                if (index < target.Count && ReferenceEquals(target[index], desired[index]))
-                    continue;
-                int existingIndex = target.IndexOf(desired[index]);
-                if (existingIndex >= 0)
-                {
-                    collectionChanging?.Invoke(new NotifyCollectionChangedEventArgs(
-                        NotifyCollectionChangedAction.Move,
-                        desired[index],
-                        index,
-                        existingIndex));
-                    target.Move(existingIndex, index);
-                }
-                else
-                {
-                    collectionChanging?.Invoke(new NotifyCollectionChangedEventArgs(
-                        NotifyCollectionChangedAction.Add,
-                        desired[index],
-                        index));
-                    target.Insert(index, desired[index]);
-                }
-            }
-        }
-    }
-
-    private static bool HasSameEntries(
-        ObservableCollection<CallHistoryEntry> target,
-        IReadOnlyList<CallHistoryEntry> desired)
-    {
-        if (target.Count != desired.Count)
-            return false;
-        for (int index = 0; index < target.Count; index++)
-        {
-            if (!ReferenceEquals(target[index], desired[index]))
-                return false;
-        }
-        return true;
-    }
-}

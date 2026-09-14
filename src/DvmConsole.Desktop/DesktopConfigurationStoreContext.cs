@@ -13,7 +13,7 @@ namespace DvmConsole.Desktop;
 internal sealed record DesktopConfigurationStoreContext(
     ManagedConfigurationLibrary Library,
     ManagedConfigurationCommandController Commands,
-    DesktopConfigurationMaterializer Materializer)
+    ManagedConfigurationMaterializer Materializer)
 {
     public static DesktopConfigurationStoreContext Create(string appDataRoot)
     {
@@ -23,7 +23,7 @@ internal sealed record DesktopConfigurationStoreContext(
         return new DesktopConfigurationStoreContext(
             library,
             new ManagedConfigurationCommandController(library),
-            new DesktopConfigurationMaterializer(
+            new ManagedConfigurationMaterializer(
                 library,
                 Path.Combine(root, "ConfigurationRuntime")));
     }

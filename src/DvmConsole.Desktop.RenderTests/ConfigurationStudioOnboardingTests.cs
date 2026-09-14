@@ -22,7 +22,7 @@ public sealed class ConfigurationStudioOnboardingTests
     {
         const string mode = "p25";
         using DemoSessionState state = DemoSessionState.Create();
-        var main = new MainWindow(null, new UserSettingsStore(state.UserSettingsPath),
+        var main = await MainWindow.CreateAsync(null, new UserSettingsStore(state.UserSettingsPath),
             new OperatorViewStore(state.OperatorViewPath), demoMode: true);
         try
         {

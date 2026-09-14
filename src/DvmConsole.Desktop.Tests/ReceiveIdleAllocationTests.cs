@@ -21,8 +21,8 @@ public sealed class ReceiveIdleAllocationTests
         using var gate = new SemaphoreSlim(1);
 
         ReceiveSessionPort CreatePort(int count) => new(
-            audio, work, new ReceiveOutputMutePolicy(), gate,
-            () => CreateChannels(count), () => false, _ => { }, _ => { });
+            audio, work, new ReceiveMuteState(), gate,
+            () => CreateChannels(count).Select(channel => channel.SessionState), () => false, _ => { }, _ => { });
 
         long small = MeasureStateReads(CreatePort(25), 25);
         long large = MeasureStateReads(CreatePort(1000), 1000);
@@ -32,8 +32,22 @@ public sealed class ReceiveIdleAllocationTests
     }
 
     [Fact]
-    public void AdvancingIdleRoutesDoesNotAllocateProportionallyToRouteCount()
+    public async Task AdvancingIdleRoutesDoesNotAllocateProportionallyToRouteCount()
     {
+        // Keep the counter on an owned thread, outside the test runner's
+        // synchronization context and callbacks from other asynchronous tests.
+        var result = new TaskCompletionSource<(long Small, long Large)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try { result.SetResult((Measure(25), Measure(1000))); }
+            catch (Exception error) { result.SetException(error); }
+        })
+        { IsBackground = true };
+        thread.Start();
+        var (small, large) = await result.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(large <= small + 4096,
+            $"100 idle advances grew from {small} to {large} allocated bytes.");
+
         long Measure(int count)
         {
             var channels = CreateChannels(count);
@@ -52,12 +66,6 @@ public sealed class ReceiveIdleAllocationTests
             Assert.Equal(0, decisions);
             return allocated;
         }
-
-        long small = Measure(25);
-        long large = Measure(1000);
-
-        Assert.True(large <= small + 4096,
-            $"100 idle advances grew from {small} to {large} allocated bytes.");
     }
 
     private static long MeasureStateReads(ReceiveSessionPort port, int count)

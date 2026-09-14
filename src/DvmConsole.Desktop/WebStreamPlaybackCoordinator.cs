@@ -15,8 +15,13 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
 {
     private readonly object sync = new();
     private readonly Dictionary<WebStreamId, WebStreamViewModel> streams = [];
+    private readonly Dictionary<WebStreamId, WebStreamPlaybackState> pendingStates = [];
+    private readonly CoalescedUiAction presentation;
+    private readonly IUiDispatcher uiDispatcher;
     private readonly Func<WebStreamViewModel, string?>? getStreamOutputDeviceId;
     private readonly ApplicationWebStreamPlaybackCoordinator inner;
+    private bool disposed;
+    private readonly bool ownsPlayback;
 
     public WebStreamPlaybackCoordinator()
         : this(
@@ -52,19 +57,24 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
         Func<Stream, CancellationToken, Task<IAudioPcmStreamReader>>? createDecoder,
         Func<WebStreamViewModel, string?>? getStreamOutputDeviceId,
         IUiDispatcher uiDispatcher)
+        : this(observer => new ApplicationWebStreamPlaybackCoordinator(
+                createAudioBackend, getOutputDeviceId,
+                openStream is null ? null : (descriptor, token) => openStream(ToConfiguration(descriptor), token),
+                createDecoder, observer), getStreamOutputDeviceId, uiDispatcher, ownsPlayback: true)
+    {
+    }
+
+    internal WebStreamPlaybackCoordinator(
+        Func<Func<WebStreamPlaybackState, ValueTask>, ApplicationWebStreamPlaybackCoordinator> createRuntime,
+        Func<WebStreamViewModel, string?>? getStreamOutputDeviceId,
+        IUiDispatcher uiDispatcher, bool ownsPlayback = false)
     {
         ArgumentNullException.ThrowIfNull(uiDispatcher);
+        this.uiDispatcher = uiDispatcher;
         this.getStreamOutputDeviceId = getStreamOutputDeviceId;
-        inner = new ApplicationWebStreamPlaybackCoordinator(
-            createAudioBackend,
-            getOutputDeviceId,
-            openStream is null
-                ? null
-                : (descriptor, cancellationToken) => openStream(
-                    ToConfiguration(descriptor),
-                    cancellationToken),
-            createDecoder,
-            state => uiDispatcher.InvokeAsync(() => ApplyState(state)));
+        this.ownsPlayback = ownsPlayback;
+        presentation = new(uiDispatcher, ApplyPendingStates, ReportPresentationFailure);
+        inner = createRuntime(QueueState);
     }
 
     public IReadOnlyList<WebStreamViewModel> ActiveStreams
@@ -93,7 +103,10 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(stream);
         WebStreamId id = GetId(stream);
         lock (sync)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
             streams[id] = stream;
+        }
         await inner.StartAsync(ToDescriptor(stream, id), cancellationToken).ConfigureAwait(false);
     }
 
@@ -114,7 +127,69 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
     public Task ResetAudioBackendAsync(CancellationToken cancellationToken = default)
         => inner.ResetAudioBackendAsync(cancellationToken);
 
-    public ValueTask DisposeAsync() => inner.DisposeAsync();
+    public ValueTask DisposeAsync()
+    {
+        WebStreamViewModel[] retiring;
+        lock (sync)
+        {
+            if (disposed) return DisposePlaybackAsync();
+            disposed = true;
+            retiring = streams.Values.ToArray();
+            pendingStates.Clear();
+            streams.Clear();
+        }
+        presentation.Dispose();
+        void PublishRetired()
+        {
+            foreach (WebStreamViewModel stream in retiring)
+            {
+                try { stream.SetPlaybackState(false, false, false, false, "Off"); }
+                catch (Exception exception) { ReportPresentationFailure(exception); }
+            }
+        }
+        try
+        {
+            if (uiDispatcher.CheckAccess()) PublishRetired();
+            else uiDispatcher.Post(PublishRetired);
+        }
+        catch (Exception exception) { ReportPresentationFailure(exception); }
+        return DisposePlaybackAsync();
+    }
+
+    private ValueTask DisposePlaybackAsync() => ownsPlayback ? inner.DisposeAsync() : ValueTask.CompletedTask;
+
+    private ValueTask QueueState(WebStreamPlaybackState state)
+    {
+        lock (sync)
+        {
+            if (disposed) return ValueTask.CompletedTask;
+            pendingStates[state.Id] = state;
+        }
+        // Playback owns network/audio state. A stalled UI retains one latest
+        // update per stream without delaying startup, PCM work or retirement.
+        if (uiDispatcher.CheckAccess()) ApplyPendingStates();
+        else presentation.Schedule();
+        return ValueTask.CompletedTask;
+    }
+
+    private void ApplyPendingStates()
+    {
+        WebStreamPlaybackState[] updates;
+        lock (sync)
+        {
+            if (disposed) return;
+            updates = pendingStates.Values.ToArray();
+            pendingStates.Clear();
+        }
+        foreach (WebStreamPlaybackState state in updates)
+        {
+            try { ApplyState(state); }
+            catch (Exception exception) { ReportPresentationFailure(exception); }
+        }
+    }
+
+    private static void ReportPresentationFailure(Exception exception)
+        => System.Diagnostics.Trace.TraceError("Web-stream presentation failed: {0}", exception);
 
     private void ApplyState(WebStreamPlaybackState state)
     {

@@ -54,6 +54,23 @@ public sealed class PcmWavFileWriterTests
     }
 
     [Fact]
+    public void CheckpointPublishesLengthsAndAllowsFurtherSamples()
+    {
+        using var stream = new MemoryStream();
+        using var writer = new PcmWavFileWriter(stream, PcmAudioFormat.Voice8KhzMono16Bit, leaveOpen: true);
+        writer.Write(new short[] { 10, 20 });
+        writer.Checkpoint();
+        Assert.Equal(4u, BinaryPrimitives.ReadUInt32LittleEndian(stream.ToArray().AsSpan(40, 4)));
+        writer.Write(new short[] { 30 });
+        writer.Checkpoint();
+        byte[] bytes = stream.ToArray();
+        Assert.Equal(6u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(40, 4)));
+        Assert.Equal((short)10, BinaryPrimitives.ReadInt16LittleEndian(bytes.AsSpan(44, 2)));
+        Assert.Equal((short)30, BinaryPrimitives.ReadInt16LittleEndian(bytes.AsSpan(48, 2)));
+        Assert.Equal(3, writer.SamplesWritten);
+    }
+
+    [Fact]
     public void RejectsAReadOnlyStream()
     {
         using var stream = new MemoryStream([1, 2, 3], writable: false);

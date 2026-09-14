@@ -1,7 +1,8 @@
 # Talkgroup Audio Recorder
 
-Talkgroup Audio Recorder (TAR) saves selected calls as local `.opus` files. Each
-recording contains its catalog metadata, so new recordings do not need a
+Keep the calls you want to hear again with Talkgroup Audio Recorder (TAR).
+Choose which channels to record; TAR saves their calls locally as `.opus` files.
+Each recording carries its catalog metadata, so new recordings do not need a
 separate `.json` sidecar.
 
 TAR saves received audio before the optional RX filters and compressor. Those
@@ -21,6 +22,20 @@ Tools > Talkgroup Audio Recorder > Configuration
 **Viewer** opens Event History for search, playback, export, and file actions.
 **Configuration** opens the Recorder page, where you choose the recording
 location, retention period, channels, and ignored subscriber IDs.
+
+On iPhone and iPad, open the settings gear and choose **Retention** to change
+retention. Enter a whole number of days, then choose **Review retention**. Review
+shows how many completed recordings are eligible for deletion without deleting
+them. **Apply reviewed retention** saves the policy and removes expired recordings;
+the accepted policy also runs when opening a configuration. Enter **0** to keep
+recordings indefinitely. The policy applies to all recordings on this device.
+Editing the period requires a new review before Apply becomes available.
+
+Use **History** for playback and export, and each channel's **TAR** control to
+enable recording. Mobile recordings stay in app-owned storage; Files is an export
+destination rather than a live recording folder. Saved recordings can play while
+all FNEs and web streams are stopped. Playback activates audio when needed and
+releases it on completion or stop if no connected source still needs it.
 
 ---
 
@@ -72,7 +87,7 @@ not prevent cleanup of other calls or stop transmit audio.
 
 # Enabling recording
 
-The Recorder page groups channels by FNE system. For each channel:
+On desktop, the Recorder page groups channels by FNE system. For each channel:
 
 - Select the recording button to turn TAR on or off.
 - Enter radio IDs in **Ignored RIDs, comma separated** when calls from those
@@ -142,7 +157,7 @@ A recording marked Unknown does not appear in either result.
 
 # Retention
 
-**Retention days** applies to the recording catalog as a whole. Enter a whole
+On desktop, **Retention days** applies to the recording catalog as a whole. Enter a whole
 number from 0 to 3650 and select **Apply and prune**.
 
 - `0` disables automatic age-based pruning.

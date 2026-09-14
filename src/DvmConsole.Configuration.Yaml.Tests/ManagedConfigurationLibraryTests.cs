@@ -29,6 +29,155 @@ public sealed class ManagedConfigurationLibraryTests : IDisposable
         $"dvmconsole-configuration-library-tests-{Guid.NewGuid():N}");
 
     [Fact]
+    public async Task IncompleteCheckpointSurvivesReopenWithoutBecomingAValidRevision()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        ConfigurationDraft draft = await library.CreateDraftAsync("In progress");
+        string incomplete = ValidYaml.Replace("port: 62031", "port: 0");
+        draft = await library.StageDraftAsync(draft with { Yaml = incomplete },
+            new Dictionary<string, ReadOnlyMemory<byte>>
+            { ["alias.yml"] = Encoding.UTF8.GetBytes("- rid: 42\n  alias: Work in progress\n") });
+        var reopened = new ManagedConfigurationLibrary(root);
+        ConfigurationDraft recovered = await reopened.OpenDraftAsync(draft.Id);
+        Assert.Equal(incomplete, recovered.Yaml);
+        Assert.True(recovered.IsDirty);
+        Assert.Null(recovered.BasedOnRevision);
+        var destination = new MemoryDocumentSet("draft.yml", "incomplete-draft", string.Empty);
+        await reopened.ExportDraftAsync(draft.Id, destination, new(false));
+        Assert.Contains("Work in progress", destination.GetCompanion("alias.yml").Text);
+        await Assert.ThrowsAsync<InvalidDataException>(() => reopened.CommitAsync(recovered).AsTask());
+        await Assert.ThrowsAsync<InvalidDataException>(() => reopened.StageDraftAsync(
+            recovered with { Yaml = "systems: [" }, new Dictionary<string, ReadOnlyMemory<byte>>()).AsTask());
+        Assert.Equal(incomplete, (await reopened.OpenDraftAsync(draft.Id)).Yaml);
+        Assert.Null(reopened.Active);
+    }
+
+    [Fact]
+    public async Task BlankDraftCanBeMaterializedForEditingButCannotBeCommitted()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        ConfigurationDraft draft = await library.CreateDraftAsync("New configuration");
+        var destination = new MemoryDocumentSet("draft.yml", "blank-draft", string.Empty);
+        ConfigurationDraft exported = await library.ExportDraftAsync(draft.Id, destination, new(false));
+        Assert.Equal(draft.Id, exported.Id);
+        Assert.Null(exported.BasedOnRevision);
+        Assert.Empty(ConfigurationDocument.Parse(exported.Yaml).Configuration.Systems);
+        await Assert.ThrowsAsync<InvalidDataException>(() => library.CommitAsync(draft).AsTask());
+        Assert.True((await library.OpenDraftAsync(draft.Id)).IsDirty);
+        Assert.Null(library.Active);
+    }
+
+    [Fact]
+    public async Task EditorRecoveryStateIsAtomicWithYamlAndSurvivesLibraryReopen()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        var draft = await library.CreateDraftAsync("Editor recovery");
+        var editor = new ConfigurationDraftEditorState(
+            new Dictionary<string, ConfigurationDraftPosition> { ["System::Channel"] = new(12, 34) },
+            new Dictionary<string, string> { ["Zone"] = "System" }, ["System"]);
+        draft = await library.StageDraftAsync(draft with { Yaml = ValidYaml, IsDirty = true, EditorState = editor },
+            new Dictionary<string, ReadOnlyMemory<byte>>());
+        string pending = Path.Combine(root, "drafts", "active.json.pending");
+        Directory.CreateDirectory(pending);
+        try
+        {
+            Exception? failure = await Record.ExceptionAsync(() => library.StageDraftAsync(draft with
+            {
+                Yaml = ValidYaml.Replace("Console", "Uncommitted"),
+                EditorState = editor with { CallPrioritySystemNames = [] }
+            }, new Dictionary<string, ReadOnlyMemory<byte>>()).AsTask());
+            Assert.True(failure is IOException or UnauthorizedAccessException);
+        }
+        finally { Directory.Delete(pending); }
+        var recovered = await new ManagedConfigurationLibrary(root).OpenDraftAsync(draft.Id);
+        Assert.Equal(ValidYaml, recovered.Yaml);
+        Assert.NotNull(recovered.EditorState);
+        Assert.Equal(new ConfigurationDraftPosition(12, 34), recovered.EditorState.ChannelPositions["System::Channel"]);
+        Assert.Equal("System", recovered.EditorState.ZoneSystemAssignments["Zone"]);
+        Assert.Equal("System", Assert.Single(recovered.EditorState.CallPrioritySystemNames));
+    }
+
+    [Fact]
+    public async Task RetiredDraftCannotStageOrCommitIntoReopenedRevision()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        var initial = await library.CreateDraftAsync("Primary");
+        var first = await library.CommitAsync(initial with { Yaml = ValidYaml });
+        var retired = await library.OpenDraftAsync(first.Reference.Id);
+        await library.CommitAsync(retired with { Yaml = ValidYaml.Replace("Console", "Newer") });
+        var current = await library.OpenDraftAsync(first.Reference.Id);
+
+        await Assert.ThrowsAsync<ConfigurationDraftConflictException>(() =>
+            library.StageDraftAsync(retired, new Dictionary<string, ReadOnlyMemory<byte>>()).AsTask());
+        await Assert.ThrowsAsync<ConfigurationDraftConflictException>(() => library.CommitAsync(retired).AsTask());
+        var reopened = await library.OpenDraftAsync(first.Reference.Id);
+        Assert.Equal(current.BasedOnRevision, reopened.BasedOnRevision);
+        Assert.Equal(current.Yaml, reopened.Yaml);
+    }
+
+    [Fact]
+    public async Task CleanDraftRefreshesAfterImportedReplacementAndRejectsRetiredHandle()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        var imported = await library.ImportAsync(new MemoryDocumentSet("original.yml", "original", ValidYaml), new());
+        var retired = await library.OpenDraftAsync(imported.Reference.Id);
+        var replacement = await library.ImportAsync(new MemoryDocumentSet("new.yml", "replacement", ValidYaml.Replace("Console", "Replacement")),
+            new(ConfigurationConflictResolution.ReplaceExisting, imported.Reference.Id));
+        var refreshed = await library.OpenDraftAsync(imported.Reference.Id);
+        Assert.False(refreshed.IsDirty);
+        Assert.Equal(replacement.Reference.Revision, refreshed.BasedOnRevision);
+        Assert.Contains("Replacement", refreshed.Yaml);
+        await Assert.ThrowsAsync<ConfigurationDraftConflictException>(() =>
+            library.StageDraftAsync(retired, new Dictionary<string, ReadOnlyMemory<byte>>()).AsTask());
+    }
+
+    [Fact]
+    public async Task FailedCleanDraftRefreshPreservesPreviousGeneration()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        var imported = await library.ImportAsync(new MemoryDocumentSet("original.yml", "original", ValidYaml), new());
+        _ = await library.OpenDraftAsync(imported.Reference.Id);
+        string metadataPath = Path.Combine(root, "drafts", "active.json");
+        string previousMetadata = await File.ReadAllTextAsync(metadataPath);
+        var previousFiles = Directory.GetFiles(Path.Combine(root, "drafts"), "codeplug.yml", SearchOption.AllDirectories)
+            .ToDictionary(path => path, File.ReadAllText);
+        var replacement = await library.ImportAsync(new MemoryDocumentSet("new.yml", "replacement", ValidYaml.Replace("Console", "Replacement")),
+            new(ConfigurationConflictResolution.ReplaceExisting, imported.Reference.Id));
+        string pending = metadataPath + ".pending";
+        Directory.CreateDirectory(pending);
+        try
+        {
+            Exception? failure = await Record.ExceptionAsync(() => library.OpenDraftAsync(imported.Reference.Id).AsTask());
+            Assert.True(failure is IOException or UnauthorizedAccessException);
+            Assert.Equal(previousMetadata, await File.ReadAllTextAsync(metadataPath));
+            foreach (var file in previousFiles)
+                Assert.Equal(file.Value, await File.ReadAllTextAsync(file.Key));
+        }
+        finally { Directory.Delete(pending); }
+        var refreshed = await new ManagedConfigurationLibrary(root).OpenDraftAsync(imported.Reference.Id);
+        Assert.Equal(replacement.Reference.Revision, refreshed.BasedOnRevision);
+    }
+
+    [Fact]
+    public async Task ImportedRevisionPreventsStaleCommitButPreservesDraftForCopy()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        var imported = await library.ImportAsync(new MemoryDocumentSet("original.yml", "original", ValidYaml), new());
+        var draft = await library.OpenDraftAsync(imported.Reference.Id);
+        draft = await library.StageDraftAsync(draft with { Yaml = ValidYaml.Replace("Console", "Unsaved"), IsDirty = true },
+            new Dictionary<string, ReadOnlyMemory<byte>>());
+        var replacement = await library.ImportAsync(new MemoryDocumentSet("new.yml", "replacement", ValidYaml.Replace("Console", "Replacement")),
+            new(ConfigurationConflictResolution.ReplaceExisting, imported.Reference.Id));
+
+        await Assert.ThrowsAsync<ConfigurationRevisionConflictException>(() => library.CommitAsync(draft).AsTask());
+        Assert.Contains("Replacement", await File.ReadAllTextAsync(RevisionYaml(replacement.Reference)));
+        Assert.Contains("Unsaved", (await library.OpenDraftAsync(imported.Reference.Id)).Yaml);
+        var copy = await library.CommitDraftCopyAsync(draft, new Dictionary<string, ReadOnlyMemory<byte>>(), "Recovered copy");
+        Assert.NotEqual(imported.Reference.Id, copy.Reference.Id);
+        Assert.Contains("Unsaved", await File.ReadAllTextAsync(RevisionYaml(copy.Reference)));
+    }
+
+    [Fact]
     public async Task LegacySynchronousStartupBridgeDoesNotDependOnCallerSynchronizationContext()
     {
         var completion = new TaskCompletionSource<Exception?>(
@@ -303,6 +452,172 @@ public sealed class ManagedConfigurationLibraryTests : IDisposable
         Assert.Equal("keys: []\n", export.GetCompanion("keys.clear").Text);
         Assert.Equal("[]\n", export.GetCompanion("alias.yml").Text);
         Assert.Equal(yaml, source.PrimaryDocument.Text);
+    }
+
+    [Fact]
+    public async Task DraftRecoveryExportsPersistedEditsAndCompanionsWithoutCommitting()
+    {
+        var source = new MemoryDocumentSet("original.yml", "recovery-source", ValidYaml);
+        source.AddCompanion("./alias.yml", "- id: 1\n  name: Original\n");
+        var library = new ManagedConfigurationLibrary(root);
+        var imported = await library.ImportAsync(source, new());
+        await library.ActivateAsync(imported.Reference);
+        ConfigurationDraft draft = await library.OpenDraftAsync(imported.Reference.Id);
+        await library.StageDraftAsync(draft with { Yaml = draft.Yaml.Replace("Console", "Recovered"), IsDirty = true },
+            new Dictionary<string, ReadOnlyMemory<byte>> { ["alias.yml"] = Encoding.UTF8.GetBytes("- id: 1\n  name: Recovered\n") });
+
+        var restored = new ManagedConfigurationLibrary(root);
+        var recovered = new MemoryDocumentSet("recovered.yml", "recovered-export", string.Empty);
+        ConfigurationDraft exported = await restored.ExportDraftAsync(imported.Reference.Id, recovered, new(false));
+        Assert.True(exported.IsDirty);
+        Assert.Equal(imported.Reference.Revision, exported.BasedOnRevision);
+        Assert.Contains("Recovered", recovered.PrimaryDocument.Text);
+        Assert.Contains("Recovered", recovered.GetCompanion("alias.yml").Text);
+        Assert.Equal(imported.Reference, restored.Active);
+        Assert.Equal(imported.Reference.Revision, Assert.Single(await ReadAllAsync(restored.ListAsync())).CurrentRevision);
+        Assert.True((await restored.OpenDraftAsync(imported.Reference.Id)).IsDirty);
+
+        var committed = new MemoryDocumentSet("committed.yml", "committed-export", string.Empty);
+        await restored.ExportAsync(imported.Reference, committed, new(false));
+        Assert.Contains("Console", committed.PrimaryDocument.Text);
+        Assert.Contains("Original", committed.GetCompanion("alias.yml").Text);
+    }
+
+    [Fact]
+    public async Task FailedDraftMetadataWritePreservesThePreviousYamlAndCompanions()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        ConfigurationDraft draft = await library.CreateDraftAsync("Recoverable");
+        draft = await library.StageDraftAsync(draft with { Yaml = ValidYaml, IsDirty = true },
+            new Dictionary<string, ReadOnlyMemory<byte>> { ["alias.yml"] = Encoding.UTF8.GetBytes("old companion") });
+        string pending = Path.Combine(root, "drafts", "active.json.pending");
+        Directory.CreateDirectory(pending);
+        try
+        {
+            Exception? failure = await Record.ExceptionAsync(() => library.StageDraftAsync(
+                draft with { Yaml = ValidYaml.Replace("Console", "Uncommitted") },
+                new Dictionary<string, ReadOnlyMemory<byte>> { ["alias.yml"] = Encoding.UTF8.GetBytes("new companion") }).AsTask());
+            Assert.True(failure is IOException or UnauthorizedAccessException, failure?.ToString());
+        }
+        finally { Directory.Delete(pending); }
+
+        var restored = new ManagedConfigurationLibrary(root);
+        ConfigurationDraft recovered = await restored.OpenDraftAsync(draft.Id);
+        Assert.Equal(draft.Yaml, recovered.Yaml);
+        Assert.True(recovered.IsDirty);
+        var destination = new MemoryDocumentSet("recovered.yml", "failed-write-export", string.Empty);
+        await restored.ExportDraftAsync(draft.Id, destination, new(false));
+        Assert.Equal("old companion", destination.GetCompanion("alias.yml").Text);
+    }
+
+    [Fact]
+    public async Task PendingDraftMetadataRecoversACompleteContentGeneration()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        ConfigurationDraft draft = await library.CreateDraftAsync("Pending");
+        draft = await library.StageDraftAsync(draft with { Yaml = ValidYaml },
+            new Dictionary<string, ReadOnlyMemory<byte>> { ["alias.yml"] = Encoding.UTF8.GetBytes("pending companion") });
+        string active = Path.Combine(root, "drafts", "active.json");
+        File.Move(active, active + ".pending");
+        var restored = new ManagedConfigurationLibrary(root);
+        Assert.Equal(draft.Yaml, (await restored.OpenDraftAsync(draft.Id)).Yaml);
+        var destination = new MemoryDocumentSet("recovered.yml", "pending-export", string.Empty);
+        await restored.ExportDraftAsync(draft.Id, destination, new(false));
+        Assert.Equal("pending companion", destination.GetCompanion("alias.yml").Text);
+        Assert.False(File.Exists(active + ".pending"));
+    }
+
+    [Fact]
+    public async Task LegacyDraftMigratesWithoutLosingCompanionsAndRetiresOldGenerations()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        ConfigurationDraft draft = await library.CreateDraftAsync("Legacy");
+        draft = await library.StageDraftAsync(draft with { Yaml = ValidYaml },
+            new Dictionary<string, ReadOnlyMemory<byte>> { ["alias.yml"] = Encoding.UTF8.GetBytes("legacy companion") });
+        string active = Path.Combine(root, "drafts", "active.json");
+        var metadata = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(active))!.AsObject();
+        string content = metadata["ContentRevision"]!.GetValue<string>();
+        string draftRoot = Path.Combine(root, "drafts", draft.Id.Value.ToString("N"));
+        string generation = Path.Combine(draftRoot, Guid.Parse(content).ToString("N"));
+        File.Move(Path.Combine(generation, "codeplug.yml"), Path.Combine(draftRoot, "codeplug.yml"));
+        Directory.Move(Path.Combine(generation, "companions"), Path.Combine(draftRoot, "companions"));
+        Directory.Delete(generation);
+        metadata.Remove("ContentRevision");
+        File.WriteAllText(active, metadata.ToJsonString());
+
+        var restored = new ManagedConfigurationLibrary(root);
+        draft = await restored.OpenDraftAsync(draft.Id);
+        Assert.Equal(ValidYaml, draft.Yaml);
+        for (int revision = 0; revision < 3; revision++)
+            draft = await restored.StageDraftAsync(draft with { Name = $"Edit {revision}" },
+                new Dictionary<string, ReadOnlyMemory<byte>>());
+        Assert.Single(Directory.EnumerateDirectories(draftRoot),
+            path => Guid.TryParseExact(Path.GetFileName(path), "N", out _));
+        var destination = new MemoryDocumentSet("recovered.yml", "legacy-export", string.Empty);
+        await restored.ExportDraftAsync(draft.Id, destination, new(false));
+        Assert.Equal("legacy companion", destination.GetCompanion("alias.yml").Text);
+    }
+
+    [Fact]
+    public async Task CancelledDraftRecoveryPreservesTheDraft()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        ConfigurationDraft draft = await library.CreateDraftAsync("Recovery");
+        await library.StageDraftAsync(draft with { Yaml = ValidYaml, IsDirty = true }, new Dictionary<string, ReadOnlyMemory<byte>>());
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => library.ExportDraftAsync(draft.Id,
+            new MemoryDocumentSet("cancelled.yml", "cancelled-export", string.Empty), new(false), cancelled.Token).AsTask());
+        Assert.True((await library.OpenDraftAsync(draft.Id)).IsDirty);
+    }
+
+    [Fact]
+    public async Task CopyOfPersistedDirtyDraftPreservesOriginalRevisionAndCompanions()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        ConfigurationDraft draft = await library.CreateDraftAsync("Original");
+        draft = await library.StageDraftAsync(draft with { Yaml = ValidYaml, IsDirty = true },
+            new Dictionary<string, ReadOnlyMemory<byte>> { ["alias.yml"] = "[]\n"u8.ToArray() });
+        ConfigurationCommit original = await library.CommitAsync(draft);
+        await library.ActivateAsync(original.Reference);
+        draft = await library.OpenDraftAsync(original.Reference.Id);
+        draft = await library.StageDraftAsync(draft with { Yaml = draft.Yaml.Replace("Console", "Recovered"), IsDirty = true },
+            new Dictionary<string, ReadOnlyMemory<byte>> { ["alias.yml"] = "- rid: 42\n  alias: Recovered\n"u8.ToArray() });
+
+        ConfigurationCommit copy = await library.CommitDraftCopyAsync(draft,
+            new Dictionary<string, ReadOnlyMemory<byte>>(), "Saved copy");
+        Assert.NotEqual(original.Reference.Id, copy.Reference.Id);
+        Assert.Equal(original.Reference, library.Active);
+        var entries = await ReadAllAsync(library.ListAsync());
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(original.Reference.Revision, Assert.Single(entries, entry => entry.Id == original.Reference.Id).CurrentRevision);
+        Assert.Equal("Saved copy", Assert.Single(entries, entry => entry.Id == copy.Reference.Id).Name);
+        var exported = new MemoryDocumentSet("copy.yml", "dirty-copy-export", string.Empty);
+        await library.ExportAsync(copy.Reference, exported, new(false));
+        Assert.Contains("Recovered", exported.PrimaryDocument.Text);
+        Assert.Contains("Recovered", exported.GetCompanion("alias.yml").Text);
+        Assert.False((await library.OpenDraftAsync(copy.Reference.Id)).IsDirty);
+        await library.ExportAsync(original.Reference, exported, new(false));
+        Assert.Contains("Console", exported.PrimaryDocument.Text);
+        Assert.Equal("[]\n", exported.GetCompanion("alias.yml").Text);
+    }
+
+    [Fact]
+    public async Task InvalidCopyLeavesPersistedDirtyDraftRecoverable()
+    {
+        var library = new ManagedConfigurationLibrary(root);
+        ConfigurationDraft draft = await library.CreateDraftAsync("Original");
+        ConfigurationCommit original = await library.CommitAsync(draft with { Yaml = ValidYaml });
+        draft = await library.OpenDraftAsync(original.Reference.Id);
+        draft = await library.StageDraftAsync(draft with { Yaml = draft.Yaml.Replace("Console", "Recovered"), IsDirty = true },
+            new Dictionary<string, ReadOnlyMemory<byte>>());
+        await Assert.ThrowsAsync<InvalidDataException>(() => library.CommitDraftCopyAsync(
+            draft with { Yaml = draft.Yaml.Replace("62031", "70000") },
+            new Dictionary<string, ReadOnlyMemory<byte>>(), "Invalid copy").AsTask());
+        ConfigurationDraft recovered = await library.OpenDraftAsync(original.Reference.Id);
+        Assert.True(recovered.IsDirty);
+        Assert.Contains("Recovered", recovered.Yaml);
+        Assert.Single(await ReadAllAsync(library.ListAsync()));
     }
 
     [Fact]

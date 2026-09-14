@@ -47,55 +47,22 @@ public sealed partial class MainWindowViewModel
     {
         foreach (ChannelViewModel channel in Systems.SelectMany(system => system.Channels))
         {
+            channel.ConfigureStatePresentation(uiDispatcher);
             channel.SelectionChanged += HandleChannelSelectionChanged;
             channel.SetOutputDeviceOptions(AudioOutputDevices);
-            if (channel.Definition.SelectableEncryption &&
-                userSettings.TransmitEncryptionStates.TryGetValue(channel.SettingsKey, out bool savedEncryptionState))
-            {
-                channel.RestoreTransmitEncryption(savedEncryptionState);
-            }
-
-            channel.RestoreVolume(
-                userSettings.ChannelVolumes.TryGetValue(channel.SettingsKey, out double savedVolume)
-                    ? savedVolume
-                    : 1.0);
-            channel.RestoreStereoBalance(
-                userSettings.ChannelStereoBalances.TryGetValue(channel.SettingsKey, out double savedBalance)
-                    ? savedBalance
-                    : 0.0);
-            channel.RestoreOutputDeviceId(
-                userSettings.ChannelOutputDeviceIds.TryGetValue(channel.SettingsKey, out string? savedOutputDeviceId)
-                    ? savedOutputDeviceId
-                    : string.Empty);
-            channel.RestoreRecordingEnabled(userSettings.RecordingEnabledChannelKeys.Contains(
-                channel.SettingsKey,
-                StringComparer.OrdinalIgnoreCase));
             channel.TransmitEncryptionChanged += HandleChannelEncryptionChanged;
             channel.RecordingStateChanged += HandleChannelRecordingChanged;
             channel.VolumeChanged += HandleChannelVolumeChanged;
             channel.StereoBalanceChanged += HandleChannelStereoBalanceChanged;
             channel.PropertyChanged += HandleActivityChannelPropertyChanged;
             channel.PropertyChanged += HandleToneTargetChannelPropertyChanged;
-            channel.SetIgnoredSubscriberIds(
-                userSettings.RecordingIgnoredSubscriberIds.TryGetValue(
-                    channel.SettingsKey,
-                    out List<uint>? ignoredSubscriberIds)
-                    ? ignoredSubscriberIds
-                    : []);
+            channel.IgnoredSubscriberIdsText = string.Join(", ", channel.SessionState.RecordingSubscribers.IgnoredSubscribers);
             channel.ConfigureAudio(
                 candidate => ChangeChannelReceiveSelectionAsync(candidate, enabled: true),
                 candidate => ChangeChannelReceiveSelectionAsync(candidate, enabled: false));
             channel.ConfigureTransmit(StartTransmitAsync, StopTransmitAsync);
-            if (userSettings.RestoreSelectedChannelsOnStartup &&
-                userSettings.ReceiveEnabledChannelKeys.Contains(
-                    channel.SettingsKey,
-                    StringComparer.OrdinalIgnoreCase))
-            {
-                channel.SetAudioEnabled(true, "settings restore");
-            }
-            channel.RestoreTransmitSelection(userSettings.TransmitSelectedChannelKeys.Contains(
-                channel.SettingsKey,
-                StringComparer.OrdinalIgnoreCase));
+            channel.ConfigureEncryptionCommand(encrypted => SetChannelTransmitEncryptedAsync(channel.Id, encrypted).AsTask());
+            channel.ConfigureRecordingCommand(enabled => SetChannelRecordingEnabledAsync(channel.Id, enabled).AsTask());
             if (channel.IsRecordingEnabled)
                 TaskObservation.Observe(EnsureRecordingAudioAsync(channel));
         }
@@ -107,116 +74,25 @@ public sealed partial class MainWindowViewModel
         {
             system.JitterBufferChanged += HandleSystemJitterBufferChanged;
             system.PropertyChanged += HandleSystemPropertyChanged;
-            system.StatusChanged += HandleSubscribedSystemStatus;
+            // Legacy/custom radio adapters without portable notifications keep
+            // the same compatibility path; production FNE events use shared ingress.
+            if (system.RadioSession is not IRadioConnectionStateNotifications)
+                system.StatusChanged += HandleSubscribedSystemStatus;
             system.LogReceived += HandleSystemLog;
-            system.KeyResponseReceived += HandleSystemKeyResponse;
+            if (system.RadioSession is not IRadioP25KeyEndpoint)
+                system.KeyResponseReceived += HandleSystemKeyResponse;
         }
-        radioIngress.TrafficReceived += HandleSubscribedSystemTraffic;
-        radioIngress.AuthorityChanged += HandleSystemTalkgroupAuthorityChanged;
     }
 
-    private void HandleSystemTalkgroupAuthorityChanged(
-        object? sender,
-        TalkgroupAuthorityRecord authority)
-    {
-        SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Id == authority.SystemId);
-        if (system is null)
-            return;
-
-        void Apply()
-        {
-            if (Volatile.Read(ref disposeStarted) != 0)
-                return;
-
-            IReadOnlyList<ChannelViewModel> newlyUnavailable = ApplyTalkgroupAuthority(
-                system,
-                authority);
-            if (newlyUnavailable.Count == 0)
-                return;
-
-            int stoppedPatchTargets = patchForwarding.StopUnavailableTargets(newlyUnavailable);
-            ChannelViewModel[] activeChannels = ResolveChannels(transmitCoordinator.ActiveChannels);
-            bool stopConsoleTransmission = activeChannels.Any(newlyUnavailable.Contains);
-            string channels = string.Join(", ", newlyUnavailable.Select(DescribeUnavailableTalkgroup));
-            string stopped = stopConsoleTransmission || stoppedPatchTargets > 0
-                ? " Active transmission stopped."
-                : string.Empty;
-            string message =
-                $"{system.Name}: FNE talkgroup table does not allow {channels}; PTT disabled.{stopped}";
-            StatusText = message;
-            TransmitStatusText = message;
-            AddDebugLog(DateTimeOffset.Now, "TX", DebugLogSeverity.Warning, message);
-            if (stopConsoleTransmission)
-            {
-                TaskObservation.Observe(
-                    StopTransmitForTalkgroupAuthorityAsync(activeChannels, message));
-            }
-        }
-
-        if (uiDispatcher.CheckAccess())
-            Apply();
-        else
-            PostToUi(Apply);
-    }
-
-    private async Task StopTransmitForTalkgroupAuthorityAsync(
-        IReadOnlyCollection<ChannelViewModel> activeChannels,
-        string message)
-    {
-        await StopTransmitAsync(activeChannels).ConfigureAwait(false);
-        await RunOnUiThreadAsync(() => TransmitStatusText = message).ConfigureAwait(false);
-    }
-
-    private static string DescribeUnavailableTalkgroup(ChannelViewModel channel)
-        => channel.Definition.Protocol == ChannelProtocol.Dmr
-            ? $"{channel.Name} (TG {channel.Definition.DestinationId}, TS{channel.Definition.Slot + 1})"
-            : $"{channel.Name} (TG {channel.Definition.DestinationId}, {channel.ModeText})";
-
-    private static IReadOnlyList<ChannelViewModel> ApplyTalkgroupAuthority(
-        SystemViewModel system,
-        TalkgroupAuthorityRecord authority)
-    {
-        var channelsById = system.Channels.ToDictionary(
-            channel => new ChannelId(channel.SessionId));
-        var newlyUnavailable = new List<ChannelViewModel>();
-        foreach (TalkgroupAuthorityChannelRecord channelAuthority in authority.Channels)
-        {
-            if (!channelsById.TryGetValue(
-                    channelAuthority.ChannelId,
-                    out ChannelViewModel? channel))
-            {
-                continue;
-            }
-
-            FneTalkgroupAvailability previous = channel.TalkgroupAvailability;
-            FneTalkgroupAvailability next = channelAuthority.State switch
-            {
-                TargetAuthorityState.Available => FneTalkgroupAvailability.Available,
-                TargetAuthorityState.Unavailable => FneTalkgroupAvailability.Unavailable,
-                _ => FneTalkgroupAvailability.Pending
-            };
-            channel.ApplyTalkgroupAvailability(next);
-            if (previous != FneTalkgroupAvailability.Unavailable &&
-                next == FneTalkgroupAvailability.Unavailable)
-            {
-                newlyUnavailable.Add(channel);
-            }
-        }
-
-        return newlyUnavailable;
-    }
+    private static string DescribeUnavailableTalkgroup(ChannelRuntimeDefinition channel)
+        => channel.Protocol == ChannelProtocol.Dmr
+            ? $"{channel.Name} (TG {channel.DestinationId}, TS{channel.Slot + 1})"
+            : $"{channel.Name} (TG {channel.DestinationId}, {channel.Mode.ToUpperInvariant()})";
 
     private void HandleSubscribedSystemStatus(object? sender, FneConnectionStatus status)
     {
         if (sender is SystemViewModel system)
             HandleSystemStatus(system, status);
-    }
-
-    private void HandleSubscribedSystemTraffic(object? sender, RadioTrafficRecord traffic)
-    {
-        SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Id == traffic.SystemId);
-        if (system is not null)
-            HandleSystemTraffic(system, traffic);
     }
 
     private void RestoreInitialSelection()

@@ -104,6 +104,20 @@ public sealed class GeneratedAudioMonitorTests
     }
 
     [Fact]
+    public async Task SharedMonitorDoesNotResolveOrOpenADesktopPhysicalOutput()
+    {
+        var backend = new FakeAudioBackend();
+        await using var monitor = new GeneratedAudioMonitor(
+            () => throw new InvalidOperationException("A second backend must not be created."),
+            () => throw new InvalidOperationException("Desktop routing must not be consulted."),
+            openSharedOutput: _ => ValueTask.FromResult<IAudioPlayback>(backend.Playback));
+        await monitor.PlayAsync(new short[] { 1000 });
+        Assert.Equal(new short[] { 700 }, Assert.Single(backend.Playback.Frames));
+        Assert.True(backend.Playback.DrainCalled);
+        Assert.True(backend.Playback.IsDisposed);
+    }
+
+    [Fact]
     public async Task PrefetchesTwoHundredMillisecondsThenReplenishesInMediaFrames()
     {
         var backend = new FakeAudioBackend();

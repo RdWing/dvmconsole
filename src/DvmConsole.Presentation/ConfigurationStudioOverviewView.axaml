@@ -12,7 +12,7 @@
       <TextBlock Classes="heading" Text="Overview"/>
       <Border Classes="panel">
         <StackPanel Spacing="7">
-          <TextBlock FontSize="16"
+          <TextBlock FontSize="{DynamicResource StudioSectionFontSize}"
                      Text="Configuration Studio edits the same interoperable YAML configuration that DVM Console already loads. Studio keeps changes in a draft until you review and save them."
                      TextWrapping="Wrap"/>
           <TextBlock FontWeight="SemiBold" Text="{Binding ConfigurationShapeText}" TextWrapping="Wrap"/>

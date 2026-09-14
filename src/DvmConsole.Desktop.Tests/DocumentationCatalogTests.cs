@@ -9,6 +9,39 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class DocumentationCatalogTests
 {
     [Fact]
+    public void MacBundleDataLivesOutsideTheExecutableDirectory()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "Console.app", "Contents");
+        string resources = DvmConsole.Storage.BundledResources.Root(Path.Combine(root, "MacOS"));
+        Assert.Equal(Path.Combine(root, "Resources"), resources);
+        Assert.Equal(Path.Combine(resources, "Demo", "codeplug.yml"),
+            App.ResolveDemoConfigurationPath(Path.Combine(root, "MacOS")));
+        Assert.Equal(Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar),
+            DvmConsole.Storage.BundledResources.Root(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar));
+    }
+
+    [Fact]
+    public async Task PortableCatalogResolvesOnlyBundledTopicsAndSearchesSharedContent()
+    {
+        using var fixture = new DocumentationFixture(new Dictionary<string, string>
+        {
+            ["Getting Started/01-Overview.md"] = "# Overview",
+            ["Getting Started/Operations/01-Radio Settings.md"] = "# Radio settings\n\nConfigure listening."
+        });
+        IConsoleHelpCatalog catalog = fixture.Catalog;
+        var topics = await catalog.FindAsync("listening");
+        var destination = Assert.Single(topics);
+        Assert.Equal("Radio Settings", destination.Title);
+        Assert.Equal("Getting Started › Operations", destination.Section);
+        Assert.Equal(destination, catalog.ResolveLink("Getting Started/01-Overview.md",
+            "Operations/01-Radio%20Settings.md#listening"));
+        Assert.Null(catalog.ResolveLink(destination.Id, "file:///private/secret.md"));
+        Assert.Null(catalog.ResolveLink(destination.Id, "../../missing.md"));
+        Assert.Contains("Configure listening.", await catalog.ReadAsync(destination.Id));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => catalog.ReadAsync("missing.md"));
+    }
+
+    [Fact]
     public async Task DefaultCatalogReadsPackagedGuide()
     {
         DocumentationCatalog catalog = DocumentationCatalog.OpenDefault();

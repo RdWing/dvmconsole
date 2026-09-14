@@ -3,6 +3,7 @@
 
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using DvmConsole.Application;
 
 namespace DvmConsole.Presentation;
 
@@ -96,28 +97,10 @@ public sealed class PatchGroupEditorViewModel : INotifyPropertyChanged
         PatchMemberEditorViewModel[] selectedMembers = Members
             .Where(member => member.IsMember)
             .ToArray();
-        if (selectedMembers.Length == 0)
-            return null;
-
-        if (!IsOneWay)
-        {
-            PatchMemberEditorViewModel[] invalidMembers = selectedMembers
-                .Where(member => !member.CanTransmit)
-                .ToArray();
-            return invalidMembers.Length == 0
-                ? null
-                : $"These members cannot transmit: {FormatMemberNames(invalidMembers)}.";
-        }
-
-        if (SelectedSource is null || !SelectedSource.CanReceive)
-            return "Choose a receive-capable source for the one-way patch.";
-
-        PatchMemberEditorViewModel[] invalidDestinations = selectedMembers
-            .Where(member => !ReferenceEquals(member, SelectedSource) && !member.CanTransmit)
-            .ToArray();
-        return invalidDestinations.Length == 0
-            ? null
-            : $"One-way patch destinations must be transmit-capable: {FormatMemberNames(invalidDestinations)}.";
+        return PatchMembershipValidation.Validate(
+            selectedMembers.Select(member => new PatchMemberCapabilities(
+                member.Channel.Name, member.CanReceive, member.CanTransmit)).ToArray(),
+            IsOneWay, Array.IndexOf(selectedMembers, SelectedSource));
     }
 
     public bool IsEnabled
@@ -203,8 +186,6 @@ public sealed class PatchGroupEditorViewModel : INotifyPropertyChanged
             member.SetReceiveOnlySourceAllowed(allowReceiveOnlySource);
     }
 
-    private static string FormatMemberNames(IEnumerable<PatchMemberEditorViewModel> members)
-        => string.Join(", ", members.Select(member => member.Channel.Name));
 }
 
 public sealed class PatchMemberEditorViewModel : INotifyPropertyChanged

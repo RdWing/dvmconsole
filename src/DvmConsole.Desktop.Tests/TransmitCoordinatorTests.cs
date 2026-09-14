@@ -561,6 +561,35 @@ public sealed class TransmitCoordinatorTests
     }
 
     [Fact]
+    public async Task CancelledCaptureStartupRetiresResourcesWithoutPublishingAnActiveCall()
+    {
+        var channel = Channel("Analog", 100);
+        var endpoint = new FakeEndpoint("Test", [channel]);
+        var audio = new FakeAudioBackend();
+        using var cancellation = new CancellationTokenSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        audio.Capture.BeforeStart = async token =>
+        {
+            entered.TrySetResult();
+            await release.Task.WaitAsync(token);
+        };
+        await using var coordinator = new ChannelTransmitCoordinator(createAudioBackend: () => audio);
+        Task start = coordinator.StartAsync([new TransmitTarget(channel.ToTransmitDescriptor(), endpoint)], cancellation.Token);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start.WaitAsync(TimeSpan.FromSeconds(30)));
+            Assert.Empty(coordinator.ActiveChannels);
+            Assert.Empty(endpoint.Sent);
+            Assert.True(audio.Capture.IsDisposed);
+            Assert.True(audio.IsDisposed);
+        }
+        finally { release.TrySetResult(); }
+    }
+
+    [Fact]
     public async Task WarmMicrophoneStaysRunningBetweenCallsUntilDisabled()
     {
         var channel = Channel("Analog", 100);
@@ -1006,12 +1035,13 @@ public sealed class TransmitCoordinatorTests
         public bool IsRunning { get; private set; }
         public bool IsDisposed { get; private set; }
         public int DisposeCount { get; private set; }
-        public ValueTask StartAsync(CancellationToken cancellationToken = default)
+        public Func<CancellationToken, Task>? BeforeStart { get; set; }
+        public async ValueTask StartAsync(CancellationToken cancellationToken = default)
         {
+            if (BeforeStart is not null) await BeforeStart(cancellationToken);
             if (failStart)
                 throw new IOException("test capture start failure");
             IsRunning = true;
-            return ValueTask.CompletedTask;
         }
         public ValueTask StopAsync(CancellationToken cancellationToken = default) { IsRunning = false; return ValueTask.CompletedTask; }
         public ValueTask DisposeAsync() { IsDisposed = true; DisposeCount++; return ValueTask.CompletedTask; }

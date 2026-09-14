@@ -21,12 +21,17 @@ public sealed class RadioFrameEncryptionResolverTests
                 packetSequence: (ushort)index))
             .ToArray();
 
-        _ = RadioFrameEncryptionResolver.TryResolve(frames[0]);
+        // Warm dispatch with one frame; the measured frames must remain unseen
+        // so a newly allocated per-frame cache entry would still fail this test.
+        for (int index = 0; index < frames.Length; index++)
+            _ = RadioFrameEncryptionResolver.TryResolve(frames[0]);
+        bool resolvedAny = false;
         long before = GC.GetAllocatedBytesForCurrentThread();
         foreach (CountingFrame frame in frames)
-            Assert.Null(RadioFrameEncryptionResolver.TryResolve(frame));
+            resolvedAny |= RadioFrameEncryptionResolver.TryResolve(frame).HasValue;
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
+        Assert.False(resolvedAny);
         Assert.Equal(0, allocated);
         Assert.All(frames, frame => Assert.Equal(0, frame.PayloadReads));
     }

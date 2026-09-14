@@ -4,6 +4,8 @@
 using DvmConsole.Core.Configuration;
 using Xunit;
 
+using DvmConsole.Application;
+
 namespace DvmConsole.Desktop.Tests;
 
 public sealed class ReceiveDiagnosticsReporterTests

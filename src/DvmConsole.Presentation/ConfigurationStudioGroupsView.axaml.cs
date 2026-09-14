@@ -9,6 +9,7 @@ namespace DvmConsole.Presentation;
 public sealed partial class ConfigurationStudioGroupsView : UserControl
 {
     private const double NarrowWidth = 760;
+    private bool? narrowLayout;
 
     public ConfigurationStudioGroupsView()
     {
@@ -23,6 +24,10 @@ public sealed partial class ConfigurationStudioGroupsView : UserControl
     public event EventHandler<PatchGroupEventArgs>? ToggleMultiSelectPttRequested;
 
     private ConfigurationStudioViewModel? ViewModel => DataContext as ConfigurationStudioViewModel;
+
+    /// <summary>Hosts may supply an application-backed operator editor while retaining shared draft definitions.</summary>
+    public void SetOperatorContent(Control content)
+        => this.FindControl<Border>("GroupOperatorPanel")!.Child = content;
 
     private void HandleAddGroupClick(object? sender, RoutedEventArgs e) => ViewModel?.AddGroup();
     private void HandleDeleteGroupClick(object? sender, RoutedEventArgs e)
@@ -59,7 +64,10 @@ public sealed partial class ConfigurationStudioGroupsView : UserControl
         if (body is null || operatorPanel is null)
             return;
 
-        bool narrow = width > 0 && width < NarrowWidth;
+        if (width <= 0) return;
+        bool narrow = width < NarrowWidth;
+        if (narrowLayout == narrow) return;
+        narrowLayout = narrow;
         body.ColumnDefinitions = new ColumnDefinitions(narrow ? "*" : "2*,3*");
         body.RowDefinitions = new RowDefinitions(narrow ? "Auto,Auto" : "Auto");
         Grid.SetColumn(operatorPanel, narrow ? 0 : 1);

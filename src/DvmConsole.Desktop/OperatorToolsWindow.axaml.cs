@@ -287,7 +287,9 @@ public sealed partial class OperatorToolsWindow : Window
             () => list.GetVisualDescendants().OfType<ListBoxItem>(),
             control => control is ListBoxItem item
                 ? item.DataContext as CallHistoryEntry ?? item.Content as CallHistoryEntry
-                : null);
+                : null,
+            itemExists: item => list.Items.Contains(item),
+            realizeItem: item => list.ScrollIntoView(item));
     }
 
     private void HandleHistoryCollectionChanging(object? sender, NotifyCollectionChangedEventArgs e)

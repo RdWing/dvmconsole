@@ -299,10 +299,10 @@ public sealed class AudioMixerTests
         {
             await channel.WriteAsync(
                 Enumerable.Repeat((short)500, 4 * 160).ToArray());
-            await WaitForAsync(() => output.WriteCalls >= 4);
-            await Task.Delay(1_200);
-
-            Exception observed = await faulted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            // Wait for the pump's actual fault notification. The production
+            // callback deadline remains one second; the outer timeout allows
+            // a loaded runner to schedule the pump and event continuation.
+            Exception observed = await faulted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.IsType<IOException>(observed);
 
             await Assert.ThrowsAsync<IOException>(async () =>
@@ -455,6 +455,26 @@ public sealed class AudioMixerTests
 
         Assert.Single(output.Frames);
         Assert.Equal((short)200, output.Frames[0][0]);
+    }
+
+    [Fact]
+    public async Task ReceiveSuppressionLeavesLocalMonitorAudibleWithoutReplayingRadioAudio()
+    {
+        var output = new FakePlayback();
+        await using var mixer = new AudioMixer(output);
+        await using var receive = mixer.OpenChannel();
+        await using var monitor = mixer.OpenMonitorChannel();
+        mixer.SetInputDiscarded(true);
+        await receive.WriteAsync(CreateSamples(100));
+        await monitor.WriteAsync(CreateSamples(500));
+        await monitor.DrainAsync();
+        Assert.NotEmpty(output.Frames);
+        Assert.All(output.Frames, frame => Assert.All(frame, sample => Assert.Equal((short)500, sample)));
+        Assert.True(mixer.GetDiagnostics().TransitionDiscardedSamples > 0);
+        mixer.SetInputDiscarded(false);
+        await receive.WriteAsync(CreateSamples(200));
+        await receive.DrainAsync();
+        Assert.DoesNotContain(output.Frames, frame => frame.Contains((short)100));
     }
 
     [Fact]
@@ -690,14 +710,17 @@ public sealed class AudioMixerTests
     [Fact]
     public async Task DrainsAPartialLaneWithoutClosingIt()
     {
+        // This verifies sample accounting and lane reuse, not host scheduling
+        // latency. Cancel the drain itself if the overall fixture hangs.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var output = new FakePlayback();
         await using var mixer = new AudioMixer(output);
         await using IAudioPlayback channel = mixer.OpenChannel();
 
         await channel.WriteAsync(Enumerable.Repeat((short)300, 200).ToArray());
-        int? firstDrain = await channel.DrainAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+        int? firstDrain = await channel.DrainAsync(timeout.Token);
         await channel.WriteAsync(CreateSamples(400));
-        int? secondDrain = await channel.DrainAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+        int? secondDrain = await channel.DrainAsync(timeout.Token);
 
         Assert.Equal(200, firstDrain);
         Assert.Equal(160, secondDrain);

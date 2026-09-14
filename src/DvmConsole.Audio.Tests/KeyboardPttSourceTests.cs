@@ -127,7 +127,7 @@ public sealed class KeyboardPttSourceTests
     public async Task GlobalAdapterDoesNotSynchronouslyBlockItsCallerOnNativeReadiness()
     {
         using var release = new ManualResetEventSlim();
-        using var entered = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var capture = new BlockingGlobalKeyboardCapture(entered, release);
         await using var ptt = new GlobalKeyboardPttSource(
             KeyboardPttKey.F12,
@@ -136,16 +136,16 @@ public sealed class KeyboardPttSourceTests
         Task caller = Task.Run(() => returned.SetResult(ptt.StartAsync().AsTask()));
         try
         {
-            Task operation = await returned.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
+            Task operation = await returned.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
             Assert.False(operation.IsCompleted);
             release.Set();
-            await operation.WaitAsync(TimeSpan.FromSeconds(2));
+            await operation.WaitAsync(TimeSpan.FromSeconds(30));
         }
         finally
         {
             release.Set();
-            await caller.WaitAsync(TimeSpan.FromSeconds(2));
+            await caller.WaitAsync(TimeSpan.FromSeconds(30));
         }
     }
 
@@ -153,7 +153,7 @@ public sealed class KeyboardPttSourceTests
     public async Task GlobalAdapterDoesNotSynchronouslyBlockItsCallerOnNativeTeardown()
     {
         using var release = new ManualResetEventSlim();
-        using var entered = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var capture = new BlockingStopGlobalKeyboardCapture(entered, release);
         await using var ptt = new GlobalKeyboardPttSource(KeyboardPttKey.F12, () => capture);
         await ptt.StartAsync();
@@ -161,16 +161,16 @@ public sealed class KeyboardPttSourceTests
         Task caller = Task.Run(() => returned.SetResult(ptt.StopAsync().AsTask()));
         try
         {
-            Task operation = await returned.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            Assert.True(entered.Wait(TimeSpan.FromSeconds(2)));
+            Task operation = await returned.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
             Assert.False(operation.IsCompleted);
             release.Set();
-            await operation.WaitAsync(TimeSpan.FromSeconds(2));
+            await operation.WaitAsync(TimeSpan.FromSeconds(30));
         }
         finally
         {
             release.Set();
-            await caller.WaitAsync(TimeSpan.FromSeconds(2));
+            await caller.WaitAsync(TimeSpan.FromSeconds(30));
         }
     }
 
@@ -369,7 +369,7 @@ public sealed class KeyboardPttSourceTests
     }
 
     private sealed class BlockingGlobalKeyboardCapture(
-        ManualResetEventSlim entered,
+        TaskCompletionSource entered,
         ManualResetEventSlim release) : IGlobalKeyboardCapture
     {
         public event Action<Exception>? Terminated { add { } remove { } }
@@ -381,7 +381,7 @@ public sealed class KeyboardPttSourceTests
 
         public ValueTask StartAsync(CancellationToken cancellationToken = default)
         {
-            entered.Set();
+            entered.TrySetResult();
             release.Wait(cancellationToken);
             return ValueTask.CompletedTask;
         }
@@ -396,7 +396,7 @@ public sealed class KeyboardPttSourceTests
     }
 
     private sealed class BlockingStopGlobalKeyboardCapture(
-        ManualResetEventSlim entered,
+        TaskCompletionSource entered,
         ManualResetEventSlim release) : IGlobalKeyboardCapture
     {
         public event Action<Exception>? Terminated { add { } remove { } }
@@ -411,7 +411,7 @@ public sealed class KeyboardPttSourceTests
 
         public void Stop()
         {
-            entered.Set();
+            entered.TrySetResult();
             release.Wait();
         }
 

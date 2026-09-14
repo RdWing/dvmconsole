@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025-2026 RdWing
 // SPDX-License-Identifier: AGPL-3.0-only
 
+using DvmConsole.Storage;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
@@ -30,7 +31,7 @@ public sealed partial class ConfigurationStudioWindow : Window
     private readonly MainWindowViewModel runtimeViewModel;
     private readonly UserSettingsStore settingsStore;
     private readonly ManagedConfigurationLibrary configurationLibrary;
-    private readonly DesktopConfigurationMaterializer configurationMaterializer;
+    private readonly ManagedConfigurationMaterializer configurationMaterializer;
     private readonly ConfigurationStudioSessionController sessionController;
     private readonly ConfigurationStudioDocumentController documentController;
     private bool ready;
@@ -53,7 +54,7 @@ public sealed partial class ConfigurationStudioWindow : Window
         MainWindowViewModel runtimeViewModel,
         UserSettingsStore settingsStore,
         ManagedConfigurationLibrary configurationLibrary,
-        DesktopConfigurationMaterializer configurationMaterializer,
+        ManagedConfigurationMaterializer configurationMaterializer,
         ConfigurationId? managedConfigurationId,
         ConfigurationStudioSection initialSection)
     {
@@ -86,11 +87,11 @@ public sealed partial class ConfigurationStudioWindow : Window
             managedConfigurationId,
             documentIdentity,
             runtimeViewModel,
-            new DesktopConfigurationStudioCompanionSource(),
+            new MaterializedConfigurationStudioCompanionSource(),
             new DesktopConfigurationStudioPreviewFactory(),
             initialState,
             initialSection);
-        var savePlanner = new DesktopConfigurationStudioSavePlanner(viewModel, settingsStore);
+        var savePlanner = new ConfigurationStudioSavePlanner(viewModel, settingsStore);
         sessionController = new ConfigurationStudioSessionController(
             viewModel,
             new ConfigurationStudioRuntimePorts(
@@ -118,6 +119,7 @@ public sealed partial class ConfigurationStudioWindow : Window
     private ConfigurationStudioViewModel viewModel
         => (ConfigurationStudioViewModel)DataContext!;
     internal ConfigurationStudioViewModel StudioViewModel => viewModel;
+    internal Task? SaveCommandCompletionForCapture { get; private set; }
     internal ConfigurationId? ManagedConfigurationId => sessionController.ManagedConfigurationId;
     internal ConfigurationSavePlan CreateSavePlanForCapture(string destinationPath)
         => sessionController.CreatePlan(destinationPath);
@@ -407,10 +409,10 @@ public sealed partial class ConfigurationStudioWindow : Window
     }
 
     private async void HandleReviewAndSaveClick(object? sender, RoutedEventArgs e)
-        => await HandleSaveCommandAsync(saveCopy: false);
+        => await (SaveCommandCompletionForCapture = HandleSaveCommandAsync(saveCopy: false));
 
     private async void HandleSaveAsClick(object? sender, RoutedEventArgs e)
-        => await HandleSaveCommandAsync(saveCopy: true);
+        => await (SaveCommandCompletionForCapture = HandleSaveCommandAsync(saveCopy: true));
 
     private async Task HandleSaveCommandAsync(bool saveCopy)
     {
@@ -525,7 +527,7 @@ public sealed partial class ConfigurationStudioWindow : Window
             string? path = await pickPath(title, suggestedName);
             if (path is null)
                 return;
-            var filesystemDestination = new DesktopConfigurationDocumentSet(path);
+            var filesystemDestination = new FileConfigurationDocumentSet(path);
             await WriteExportAsync(
                 filesystemDestination.Primary.DisplayName,
                 filesystemDestination,

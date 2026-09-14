@@ -1,0 +1,63 @@
+name: iOS compilation and simulator smoke
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      source_ref:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    name: iOS / ${{ matrix.mode }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [simulator, unsigned-device]
+    env:
+      RUSTUP_TOOLCHAIN: 1.85.0
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - name: Check out source and fnecore
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: recursive
+          ref: ${{ inputs.source_ref || github.sha }}
+          persist-credentials: false
+      - name: Set up pinned .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+      - name: Prepare Apple build tools
+        shell: bash
+        run: |
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          dotnet workload install ios --version 10.0.401
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup target add --toolchain 1.85.0 aarch64-apple-ios aarch64-apple-ios-sim
+      - name: Build Release AOT without private signing
+        shell: bash
+        run: bash scripts/build-ios.sh Release '${{ matrix.mode }}'
+      - name: Smoke iPhone and iPad simulators
+        if: matrix.mode == 'simulator'
+        shell: bash
+        run: python3 scripts/run-ios-simulator-smoke.py --configuration Release
+      - name: Retain build manifests and smoke evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-${{ matrix.mode }}-evidence
+          path: |
+            artifacts/ios/*/Release/build-manifest.json
+            artifacts/ios/qualification/ci/**/*.log
+            artifacts/ios/qualification/ci/**/*.txt
+            artifacts/ios/qualification/ci/**/*.json
+          if-no-files-found: warn
+          retention-days: 14

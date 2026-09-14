@@ -1,0 +1,31 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:p="using:DvmConsole.Presentation" x:Class="DvmConsole.Mobile.MobileStudioStyles">
+  <Style Selector="p|ConfigurationStudioView.touch Border.panel">
+    <Setter Property="CornerRadius" Value="12"/>
+    <Setter Property="Padding" Value="14"/>
+  </Style>
+  <Style Selector="p|ConfigurationStudioView.touch Button, p|ConfigurationStudioView.touch TextBox, p|ConfigurationStudioView.touch ComboBox, p|ConfigurationStudioView.touch NumericUpDown">
+    <Setter Property="CornerRadius" Value="8"/>
+  </Style>
+  <Style Selector="p|ConfigurationStudioView.touch TextBlock.heading, p|ConfigurationStudioView.touch TextBlock.subheading">
+    <Setter Property="FontSize" Value="{DynamicResource MobileNavigationFontSize}"/>
+    <Setter Property="FontWeight" Value="Bold"/>
+  </Style>
+  <Style Selector="p|ConfigurationStudioView.touch TextBlock.caption">
+    <Setter Property="FontSize" Value="{DynamicResource ChannelListDetailFontSize}"/>
+  </Style>
+  <Style Selector="p|ConfigurationStudioView.touch Button.nav-button">
+    <Setter Property="Padding" Value="12,10"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+  </Style>
+  <Style Selector="p|ConfigurationStudioView.touch TextBox[AcceptsReturn=False]">
+    <Setter Property="VerticalContentAlignment" Value="Center"/>
+  </Style>
+  <Style Selector="p|ConfigurationStudioView.touch ComboBox">
+    <Setter Property="VerticalContentAlignment" Value="Center"/>
+  </Style>
+  <Style Selector="p|ConfigurationStudioView.touch ListBoxItem:selected TextBlock, p|ConfigurationStudioView.touch TreeViewItem:selected TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource OperationalStateTextBrush}"/>
+  </Style>
+</Styles>

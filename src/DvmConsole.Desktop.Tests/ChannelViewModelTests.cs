@@ -148,7 +148,7 @@ public sealed class ChannelViewModelTests
         Assert.False(channel.IsReceivePresentationActive);
         Assert.Equal("Receive disabled", channel.StateText);
         Assert.NotEqual(
-            Color.Parse("#008A3A"),
+            Color.Parse("#008238"),
             Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color);
     }
 
@@ -179,14 +179,14 @@ public sealed class ChannelViewModelTests
         Assert.Equal(ChannelRuntimeState.Idle, channel.State);
         Assert.True(channel.IsReceivePresentationActive);
         Assert.Equal(
-            Color.Parse("#008A3A"),
+            Color.Parse("#008238"),
             Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color);
 
         channel.MarkReceivePlaybackEnded(7);
 
         Assert.False(channel.IsReceivePresentationActive);
         Assert.NotEqual(
-            Color.Parse("#008A3A"),
+            Color.Parse("#008238"),
             Assert.IsType<SolidColorBrush>(channel.CardBackgroundBrush).Color);
     }
 
@@ -1259,6 +1259,37 @@ public sealed class ChannelViewModelTests
         Assert.False(channel.IsTransmitEncrypted);
         Assert.True(channel.CanTransmit);
         Assert.True(channel.CanToggleEncryption);
+    }
+
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    public void EncryptionSelectionRemainsFixedThroughoutTransmitLifecycle(bool starting, bool active, bool stopping)
+    {
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        {
+            Name = "Selectable",
+            System = "System 1",
+            Tgid = "101",
+            Mode = "p25",
+            Algo = "aes",
+            KeyId = "0x50",
+            SelectableEncryption = true
+        });
+        channel.RestoreTransmitEncryption(true);
+        channel.SessionState.Operator.SetTransmitTransition(starting, stopping);
+        channel.SessionState.Operator.SetTransmitEnabled(active);
+        int changes = 0;
+        channel.TransmitEncryptionChanged += (_, _) => changes++;
+        channel.SetTransmitEncrypted(false);
+        Assert.True(channel.IsTransmitEncrypted);
+        Assert.Equal(0, changes);
+        channel.SessionState.Operator.SetTransmitTransition(false, false);
+        channel.SessionState.Operator.SetTransmitEnabled(false);
+        channel.SetTransmitEncrypted(false);
+        Assert.False(channel.IsTransmitEncrypted);
+        Assert.Equal(1, changes);
     }
 
     private static FneTrafficFrame CreateTraffic(

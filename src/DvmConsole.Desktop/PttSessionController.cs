@@ -11,15 +11,6 @@ internal sealed record PttSourceStateChange(
     PttTargetScope Scope,
     PttActivationSource Source);
 
-internal enum PttActivationSource
-{
-    None,
-    LocalChannelControl,
-    WindowLocalKeyboard,
-    OsGlobalKeyboard,
-    SerialHardware
-}
-
 internal sealed record PttSessionStartResult(
     KeyboardPttStartResult GlobalKeyboard,
     KeyboardPttStartResult ActiveSystemKeyboard,

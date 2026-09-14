@@ -99,7 +99,7 @@ public sealed class RecordingCommandControllerTests
             return recordingPath is not null;
         }
 
-        public Task StartPlaybackAsync(RecordingId? recordingId, string path)
+        public Task StartPlaybackAsync(RecordingId? recordingId, string path, RecordingCallIdentity identity)
         {
             StartedRecordingId = recordingId;
             StartedPath = path;

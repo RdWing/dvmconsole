@@ -3,9 +3,9 @@
 
 namespace DvmConsole.Vocoder;
 
-public sealed class NativeVocoderFactory : IVocoderFactory
+public sealed class NativeVocoderFactory(NativeVocoderLinkage linkage = NativeVocoderLinkage.Dynamic) : IVocoderFactory
 {
     public IVocoderBackend Create(
         IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions>? receiveAudioProcessingOptions = null)
-        => new SoftwareVocoderBackend(receiveAudioProcessingOptions);
+        => new SoftwareVocoderBackend(receiveAudioProcessingOptions, linkage);
 }

@@ -196,7 +196,7 @@ public sealed class ConsoleSessionRuntimeTests
             cleanupCalled.SetResult();
             return ValueTask.CompletedTask;
         });
-        runtime = new ConsoleSessionRuntime(services);
+        runtime = new ConsoleSessionRuntime(services, AvaloniaApplicationScheduler.Instance);
         runtime.StartTimer(TimeSpan.FromHours(1), static (_, _) => { });
         runtime.StartTimer(TimeSpan.FromHours(2), static (_, _) => { });
 
@@ -204,7 +204,7 @@ public sealed class ConsoleSessionRuntimeTests
             .SnapshotOwnership()
             .ToArray();
         Assert.Equal(2, runtime.ActiveTimerCount);
-        Assert.Equal(new ConsoleSessionServiceOwnership("timers", "dispatcher-timers"), ownership[^1]);
+        Assert.Equal(new ConsoleSessionServiceOwnership("timers", "scheduled-work"), ownership[^1]);
 
         await runtime.DisposeAsync();
 
@@ -218,7 +218,7 @@ public sealed class ConsoleSessionRuntimeTests
     public async Task RuntimeCanOwnAnIdleTimerUntilActivityStartsIt()
     {
         var services = new ConsoleSessionServices();
-        var runtime = new ConsoleSessionRuntime(services);
+        var runtime = new ConsoleSessionRuntime(services, AvaloniaApplicationScheduler.Instance);
 
         ConsoleSessionRuntime.ConsoleSessionTimer timer = runtime.CreateTimer(
             TimeSpan.FromHours(1),
@@ -319,7 +319,7 @@ public sealed class ConsoleSessionRuntimeTests
                 .ToArray();
             string[] requiredOwnership =
             [
-                "dispatcher-timers",
+                "scheduled-work",
                 "ptt-session",
                 "coordinators-under-ptt-gate",
                 "radio-session-ingress",
@@ -331,11 +331,13 @@ public sealed class ConsoleSessionRuntimeTests
                 "shell-settings"
             ];
             Assert.All(requiredOwnership, name => Assert.Contains(name, cleanupOrder));
-            Assert.Equal("dispatcher-timers", cleanupOrder[0]);
+            Assert.Equal("scheduled-work", cleanupOrder[0]);
             Assert.Equal("systems", cleanupOrder[^1]);
             AssertBefore(cleanupOrder, "ptt-session", "coordinators-under-ptt-gate");
             AssertBefore(cleanupOrder, "radio-session-ingress", "systems");
             AssertBefore(cleanupOrder, "audio-work", "source-receive-work");
+            AssertBefore(cleanupOrder, "source-receive-work", "source-decode");
+            AssertBefore(cleanupOrder, "source-decode", "routing");
             AssertBefore(cleanupOrder, "shell-settings", "systems");
         }
         finally

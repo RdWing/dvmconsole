@@ -26,10 +26,22 @@ internal readonly record struct RadioMediaIngressFrame
         Encryption = encryption;
     }
 
+    public static RadioMediaIngressFrame FromFrame(IRadioMediaFrame traffic, long? boundaryTimestamp = null)
+    {
+        ArgumentNullException.ThrowIfNull(traffic);
+        var timing = traffic as IRadioFrameIngressTiming;
+        long boundary = boundaryTimestamp ?? (timing is { BoundaryTimestamp: > 0 }
+            ? timing.BoundaryTimestamp : SystemReceiveWorkQueueScheduler.Instance.GetTimestamp());
+        return new(traffic, boundary, timing?.TransportIngressTimestamp ?? 0,
+            RadioFrameEncryptionResolver.TryResolve(traffic));
+    }
+
     public IRadioMediaFrame Traffic { get; }
     public long BoundaryTimestamp { get; }
     public long TransportIngressTimestamp { get; }
     public RadioFrameEncryption? Encryption { get; }
+    // Optional owner epoch; ordinary receive/desktop queues keep the default zero.
+    public long AdmissionGeneration { get; init; }
 }
 
 internal readonly record struct ReceiveWorkQueueDiagnostics(
@@ -99,58 +111,6 @@ internal readonly record struct ReceiveWorkerShutdownDiagnostic(
     int PendingFrames,
     int PendingContinuations,
     bool CancellationAcknowledgementTimedOut = false);
-
-// A state change only needs to wake the single channel worker once. Keeping at
-// most one pending signal prevents a burst of already-processed frames from
-// turning into stale, immediate wakeups at a later jitter-buffer deadline.
-internal sealed class CoalescingWakeSignal : IDisposable
-{
-    private readonly SemaphoreSlim signal = new(0, 1);
-    private int pending;
-
-    public bool Set()
-    {
-        if (Interlocked.Exchange(ref pending, 1) != 0)
-            return false;
-
-        signal.Release();
-        return true;
-    }
-
-    public async ValueTask<bool> WaitAsync(TimeSpan timeout)
-    {
-        bool signaled;
-        if (timeout == Timeout.InfiniteTimeSpan)
-        {
-            await signal.WaitAsync().ConfigureAwait(false);
-            signaled = true;
-        }
-        else
-        {
-            signaled = await signal.WaitAsync(timeout).ConfigureAwait(false);
-        }
-
-        if (signaled)
-        {
-            // A Set racing this reset is still observed by the worker's state
-            // recheck; a later Set publishes the next binary signal normally.
-            Volatile.Write(ref pending, 0);
-        }
-        return signaled;
-    }
-
-    internal bool TryConsume()
-    {
-        if (!signal.Wait(0))
-            return false;
-
-        Volatile.Write(ref pending, 0);
-        return true;
-    }
-
-    public void Dispose()
-        => signal.Dispose();
-}
 
 // Keeps receive work ordered for one channel without coupling it to any other
 // channel. The bounded pending buffer prevents a slow decoder or output device

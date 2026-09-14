@@ -1,0 +1,93 @@
+name: TestFlight delivery
+
+on:
+  workflow_run:
+    workflows: ['Build and package']
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+# Never interrupt an upload. A later successful neo build waits its turn.
+concurrency:
+  group: testflight-delivery
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      (github.event.workflow_run.head_branch == 'neo' ||
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-24.04
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - name: Verify upstream delivery qualification
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          UPSTREAM_RUN: ${{ github.event.workflow_run.id }}
+          UPSTREAM_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          merge_base="$(gh api "repos/$GH_REPO/compare/$UPSTREAM_SHA...neo" --jq '.merge_base_commit.sha')"
+          if [[ "$merge_base" != "$UPSTREAM_SHA" ]]; then
+            echo 'The tested commit does not belong to neo.' >&2
+            exit 1
+          fi
+          conclusion="$(gh api --paginate "repos/$GH_REPO/actions/runs/$UPSTREAM_RUN/jobs?filter=latest&per_page=100" --jq '.jobs[] | select(.name == "Delivery qualification") | .conclusion')"
+          if [[ "$conclusion" == success ]]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo 'No completed delivery qualification; no TestFlight upload.'
+          fi
+
+  upload:
+    needs: qualify
+    if: needs.qualify.outputs.ready == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    environment: testflight
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      RUSTUP_TOOLCHAIN: 1.85.0
+    steps:
+      - name: Check out the qualified commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          submodules: recursive
+          persist-credentials: false
+      - name: Set up pinned .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+      - name: Prepare build tools
+        run: |
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          dotnet workload install ios --version 10.0.401
+          rustup toolchain install 1.85.0 --profile minimal
+          rustup target add --toolchain 1.85.0 aarch64-apple-ios
+      - name: Build, validate and upload to TestFlight
+        env:
+          IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
+          IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
+          IOS_APP_STORE_PROFILE_BASE64: ${{ secrets.IOS_APP_STORE_PROFILE_BASE64 }}
+          ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: bash scripts/upload-testflight.sh
+      - name: Retain debugging symbols
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: testflight-symbols-${{ github.run_number }}-${{ github.run_attempt }}
+          path: ~/Library/Developer/Xcode/Archives/**/dSYMs/**
+          if-no-files-found: ignore
+          retention-days: 90

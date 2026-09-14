@@ -6,6 +6,9 @@ using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Desktop;
 using DvmConsole.FneClient;
+using DvmConsole.FneIntegration;
+using DvmConsole.Core.Runtime;
+using DvmConsole.Core.Diagnostics;
 using DvmConsole.Media;
 using DvmConsole.Vocoder;
 using fnecore.P25;
@@ -15,6 +18,202 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class ChannelReceiveAudioCoordinatorTests
 {
+    [Fact]
+    public async Task MonitorSharesReceiveOutputAndRetainsItAfterLastReceiveChannelStops()
+    {
+        var backends = new List<FakeAudioBackend>();
+        await using var coordinator = new ChannelReceiveAudioCoordinator(() =>
+        { var backend = new FakeAudioBackend(); backends.Add(backend); return backend; }, () => new FakeVocoderBackend());
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        { Name = "Receive", System = "System 1", Tgid = "100", Mode = "analog" });
+        await coordinator.StartAsync(channel);
+        await using var monitor = await coordinator.OpenMonitorOutputAsync();
+        Assert.Equal(2, backends.Count);
+        Assert.True(backends[1].IsDisposed);
+        Assert.False(backends[0].IsDisposed);
+        await coordinator.StopAsync(channel);
+        Assert.False(backends[0].IsDisposed);
+        await monitor.WriteAsync(Enumerable.Repeat((short)1200, 320).ToArray());
+        await monitor.DrainAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Contains(backends[0].Playback.Frames, frame => frame.Any(sample => sample != 0));
+        await monitor.DisposeAsync();
+        Assert.True(backends[0].IsDisposed);
+    }
+
+    [Fact]
+    public async Task RouteRecoveryRetiresMonitorAndLateLeaseDisposalPreservesReplacement()
+    {
+        var backends = new List<FakeAudioBackend>();
+        await using var coordinator = new ChannelReceiveAudioCoordinator(() =>
+        { var backend = new FakeAudioBackend(); backends.Add(backend); return backend; }, () => new FakeVocoderBackend());
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        { Name = "Receive", System = "System 1", Tgid = "100", Mode = "analog" });
+        await coordinator.StartAsync(channel);
+        await using var monitor = await coordinator.OpenMonitorOutputAsync();
+        var result = await coordinator.RecoverSelectedAsync([channel.SessionState.Id]);
+        Assert.Single(result.Restarted);
+        Assert.True(backends[0].IsDisposed);
+        Assert.False(backends[^1].IsDisposed);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => monitor.WriteAsync(new short[160]).AsTask());
+        await monitor.DisposeAsync();
+        Assert.False(backends[^1].IsDisposed);
+    }
+
+    [Fact]
+    public async Task FullStopRetiresMonitorOnlyRouteAndAllowsFreshOutput()
+    {
+        var backends = new List<FakeAudioBackend>();
+        await using var coordinator = new ChannelReceiveAudioCoordinator(() =>
+        { var backend = new FakeAudioBackend(); backends.Add(backend); return backend; }, () => new FakeVocoderBackend());
+        await using var old = await coordinator.OpenMonitorOutputAsync();
+        await coordinator.StopAsync();
+        Assert.True(backends[0].IsDisposed);
+        await using var current = await coordinator.OpenMonitorOutputAsync();
+        await old.DisposeAsync();
+        Assert.False(backends[^1].IsDisposed);
+        await coordinator.DisposeAsync();
+        Assert.True(backends[^1].IsDisposed);
+    }
+
+    [Fact]
+    public async Task SharedReceiveSessionRoutesDmrIngressThroughDecoderMixerAndMeter()
+    {
+        var configuration = new ConsoleConfiguration
+        {
+            Systems = [new SystemConfiguration { Name = "System 1", Identity = "Console", Address = "127.0.0.1", Port = 62031, PeerId = 1, Rid = "1001" }],
+            Zones = [new ZoneConfiguration { Name = "Test", Channels = [new ChannelConfiguration
+                { Name = "Receive", System = "System 1", Tgid = "100", Mode = "dmr", Slot = 1 }] }]
+        };
+        var radio = new IngressRadio();
+        var backend = new FakeAudioBackend();
+        var codec = new DeferredProcessingVocoder();
+        var meter = new TaskCompletionSource<ChannelMeterSample>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var runtime = await ConsoleReceiveSession.CreateAsync(configuration, (state, _) =>
+        {
+            radio.Channels = state.Topology.Channels.Select(channel => channel.Id).ToArray();
+            var descriptor = new RadioSystemDescriptor(radio.SystemId, radio.Name, "FNE", new Dictionary<string, string>());
+            var host = new ConsoleHostServices(radio, new SessionAudioFactory(backend), new SessionVocoderFactory(codec),
+                null!, null!, null!, null!, SystemClock.Instance,
+                new BackgroundApplicationScheduler(exception => meter.TrySetException(exception)), SystemApplicationDelay.Instance, null!, []);
+            return new(host, [descriptor], FneReceiveFrameNormalization.Instance);
+        });
+        var logs = new List<ConsoleLogEvent>();
+        runtime.LogPublished += (_, _) => throw new InvalidOperationException("Broken observer");
+        runtime.LogPublished += (_, entry) => logs.Add(entry);
+        radio.EmitLog(new(DateTimeOffset.UtcNow, radio.Name, DebugLogSeverity.Debug, "Transport diagnostic"));
+        Assert.Equal(ConsoleLogLevel.Debug, Assert.Single(logs).Level);
+        Assert.Equal("Transport diagnostic", logs[0].Message);
+        runtime.MeterSampled += (_, sample) => { if (sample.Peak > 0) meter.TrySetResult(sample); };
+        ChannelId channel = runtime.CaptureTopology().Channels.Single().Id;
+        await runtime.SetReceiveEnabledAsync(channel, true);
+        for (ushort sequence = 1; sequence <= 6; sequence++) radio.Emit(CreateTraffic(100, 0, sequence));
+        short[] output = await backend.Playback.NonSilent.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        ChannelMeterSample observed = await meter.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Contains(output, sample => sample != 0);
+        Assert.True(codec.ProcessCalls > 0);
+        Assert.Equal(channel, observed.ChannelId);
+        Assert.Equal("2", runtime.CaptureSnapshot().Channels[channel].LastCaller);
+        Assert.Single(runtime.History);
+        await runtime.DisposeAsync();
+        Assert.True(backend.IsDisposed);
+        Assert.True(backend.Playback.IsDisposed);
+        Assert.Equal(1, radio.Disposals);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SharedReceiveTarFinalizesWithOrWithoutLocalListening(bool listen)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "neo-receive-tar-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            await using var store = new OpusRecordingStore(root, null, 0);
+            var configuration = new ConsoleConfiguration
+            {
+                Systems = [new SystemConfiguration { Name = "System 1", Identity = "Console", Address = "127.0.0.1", Port = 62031, PeerId = 1, Rid = "1001" }],
+                Zones = [new ZoneConfiguration { Name = "Test", Channels = [new ChannelConfiguration
+                    { Name = "Receive", System = "System 1", Tgid = "100", Mode = "dmr", Slot = 1 }] }]
+            };
+            var radio = new IngressRadio();
+            var backend = new FakeAudioBackend();
+            var captured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var finalized = new TaskCompletionSource<RecordingFinalizationResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            store.RecordingFinalized += (_, result) => finalized.TrySetResult(result);
+            await using var runtime = await ConsoleReceiveSession.CreateAsync(configuration, (state, ownership) =>
+            {
+                radio.Channels = state.Topology.Channels.Select(channel => channel.Id).ToArray();
+                var capture = ownership.Recording.OwnAsync("test-capture", new CallRecordingManager(store));
+                capture.RecordingStateChanged += id =>
+                {
+                    if (((IReceiveRecordingSession)capture).CaptureState(id).IsRecording) captured.TrySetResult();
+                };
+                var descriptor = new RadioSystemDescriptor(radio.SystemId, radio.Name, "FNE", new Dictionary<string, string>());
+                var host = new ConsoleHostServices(radio, new SessionAudioFactory(backend), new SessionVocoderFactory(new DeferredProcessingVocoder(useRecordingSignal: true)),
+                    null!, null!, store, null!, SystemClock.Instance,
+                    new BackgroundApplicationScheduler(exception => captured.TrySetException(exception)), SystemApplicationDelay.Instance, null!, []);
+                return new(host, [descriptor], FneReceiveFrameNormalization.Instance, Recordings: capture);
+            });
+            ChannelId channel = runtime.CaptureTopology().Channels.Single().Id;
+            if (listen) await runtime.SetReceiveEnabledAsync(channel, true);
+            await runtime.SetRecordingEnabledAsync(channel, true);
+            for (ushort sequence = 1; sequence <= 6; sequence++) radio.Emit(CreateTraffic(100, 0, sequence));
+            await captured.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(runtime.CaptureSnapshot().Channels[channel].TarArmed);
+            if (listen) await backend.Playback.NonSilent.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            else Assert.False(backend.Playback.NonSilent.Task.IsCompleted);
+            await runtime.QuiesceAsync(CancellationToken.None);
+            RecordingFinalizationResult result = await finalized.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Null(result.Error);
+            Assert.True(result.IsPlayable, result.Diagnostic);
+            Assert.Equal("Receive", result.Metadata!.ChannelName);
+            Assert.False(runtime.CaptureSnapshot().Channels[channel].Recording);
+            var archive = new DvmConsole.Storage.OpusRecordingArchive(store);
+            var entry = Assert.Single(await archive.LoadAsync());
+            Assert.Equal("Receive", entry.ChannelName);
+            Assert.True(entry.IsPlayable);
+            Assert.Equal(Path.GetFileName(result.Metadata.FilePath), entry.FileName);
+            using var exported = new MemoryStream();
+            await archive.ExportAsync(entry.Id, exported);
+            Assert.Equal(File.ReadAllBytes(result.Metadata.FilePath), exported.ToArray());
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => archive.DeleteAsync(entry.Id, new CancellationToken(true)));
+            Assert.Single(await archive.LoadAsync());
+            Assert.True(await archive.DeleteAsync(entry.Id));
+            Assert.Empty(await archive.LoadAsync());
+            Assert.False(await archive.DeleteAsync(entry.Id));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    private sealed class SessionAudioFactory(IAudioBackend backend) : IAudioBackendFactory
+    { public IAudioBackend Create(AudioBackendConfiguration configuration) => backend; }
+    private sealed class SessionVocoderFactory(IVocoderBackend backend) : IVocoderFactory
+    { public IVocoderBackend Create(IReadOnlyDictionary<VocoderMode, ReceiveAudioProcessingOptions>? receiveAudioProcessingOptions = null) => backend; }
+    private sealed class IngressRadio : IRadioSession, IRadioSessionFactory, IRadioLogSource
+    {
+        public ChannelId[] Channels = [];
+        public int Disposals;
+        public event EventHandler<DebugLogEntry>? LogPublished;
+        public void EmitLog(DebugLogEntry entry) => LogPublished?.Invoke(this, entry);
+        public SystemId SystemId => SystemId.FromName(Name);
+        public string Name => "System 1";
+        public bool IsConnected => false;
+        public bool IsConnectionActive => false;
+        public uint? SourceId => 1001;
+        public IReadOnlyCollection<TransmitChannelDescriptor> ChannelDescriptors => [];
+        public IReadOnlyCollection<ChannelId> ChannelIds => Channels;
+        public event EventHandler<RadioTrafficRecord>? TrafficReceived;
+        public event EventHandler<TalkgroupAuthorityRecord>? AuthorityChanged { add { } remove { } }
+        public void Emit(IRadioMediaFrame frame) => TrafficReceived?.Invoke(this, new(SystemId, Channels, frame, DateTimeOffset.UtcNow));
+        public ValueTask<IRadioSession> CreateAsync(RadioSystemDescriptor descriptor, CancellationToken cancellationToken = default) => ValueTask.FromResult<IRadioSession>(this);
+        public ValueTask StartAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+        public ValueTask QuiesceAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync() { Disposals++; return ValueTask.CompletedTask; }
+        public TargetAuthorityState GetTargetAuthority(RadioMediaProtocol protocol, uint destinationId, byte runtimeSlot) => TargetAuthorityState.Available;
+        public uint CreateStreamId() => 1;
+        public void SendTraffic(RadioMediaProtocol protocol, ReadOnlyMemory<byte> payload, ushort packetSequence, uint streamId) { }
+    }
+
     [Fact]
     public async Task RecordingAndListeningShareOneRawDecoderWithPresentationOnlyProcessing()
     {
@@ -48,7 +247,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         Assert.Equal(1, vocoder.SessionsCreated);
     }
 
-    private sealed class DeferredProcessingVocoder : IVocoderBackend, IVocoderSession, IReceiveAudioProcessingSession
+    private sealed class DeferredProcessingVocoder(bool useRecordingSignal = false) : IVocoderBackend, IVocoderSession, IReceiveAudioProcessingSession
     {
         private bool deferred;
         public int SessionsCreated { get; private set; }
@@ -59,7 +258,13 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         public IVocoderSession CreateSession(VocoderMode mode) { SessionsCreated++; return this; }
         public void DeferReceiveAudioProcessing() => deferred = true;
         public void ProcessReceiveAudio(Span<short> samples) { ProcessCalls++; samples.Fill(200); }
-        public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples) { samples.Fill((short)(deferred ? 100 : 200)); return 0; }
+        public int Decode(ReadOnlySpan<byte> codeword, Span<short> samples)
+        {
+            if (useRecordingSignal)
+                for (int index = 0; index < samples.Length; index++) samples[index] = (short)(6000 * Math.Sin(2 * Math.PI * 440 * index / 8000));
+            else samples.Fill((short)(deferred ? 100 : 200));
+            return 0;
+        }
         public int Encode(ReadOnlySpan<short> samples, Span<byte> codeword) => 0;
         public void Dispose() { }
     }
@@ -282,6 +487,53 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         coordinator.SetLivePlaybackDiscarded(discarded: false);
         await coordinator.ProcessAsync(channel, CreateAnalogTraffic(100, packetSequence: 2));
         await WaitForAsync(() => backend.Playback.Frames.Count > 0);
+    }
+
+    [Fact]
+    public async Task DesktopRollbackRestoresPlaybackWithoutOverridingOperatorMute()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "neo-rollback-audio", Guid.NewGuid().ToString("N"));
+        var backend = new FakeAudioBackend();
+        var channel = new ChannelViewModel(new ChannelConfiguration
+        { Name = "Dispatch", System = "System 1", Tgid = "100", Mode = "analog" });
+        var system = new SystemViewModel(new FneConnectionOptions(
+            "System 1", "Console", "127.0.0.1", 62031, 1, null, false, null),
+            "System 1", "local", [channel]);
+        var store = new DvmConsole.Core.Settings.UserSettingsStore(Path.Combine(root, "UserSettings.json"));
+        var owner = new MainWindowViewModel("Ready", [system], [],
+            new MainWindowViewModelOptions(Document: new(store),
+                Host: new(SerialPortProvider: () => [], UiDispatcher: ImmediateTestUiDispatcher.Instance,
+                    AudioBackendFactory: new SessionAudioFactory(backend),
+                    VocoderFactory: new SessionVocoderFactory(new FakeVocoderBackend())),
+                Features: new(NetworkDisabledDemo: true)));
+        try
+        {
+            var audio = owner.OperationalRuntime.Receive.Audio;
+            await audio.StartAsync(new(channel.Id, channel.SessionState.Runtime.Definition));
+            owner.OutputMuted = true;
+            owner.SuppressSessionInputForTransition();
+            await using var adapter = new DesktopConsoleSessionRuntimeAdapter(owner,
+                _ => ValueTask.CompletedTask, _ => ValueTask.CompletedTask);
+            ((IConsoleSessionReactivation)adapter).ReactivateAfterFailedReplacement();
+            Assert.True(owner.OutputMuted);
+            await audio.ProcessAsync(channel.Id, CreateAnalogTraffic(100));
+            Assert.True(audio.GetPlaybackDiagnostics(channel.Id)!.TransitionDiscardedSamples > 0);
+            Assert.Empty(backend.Playback.Frames);
+
+            owner.OutputMuted = false;
+            await audio.ProcessAsync(channel.Id, CreateAnalogTraffic(100, packetSequence: 2));
+            await WaitForAsync(() => backend.Playback.Frames.Count > 0);
+
+            owner.ApplyFinalShutdownSafetyFence();
+            ((IConsoleSessionReactivation)adapter).ReactivateAfterFailedReplacement();
+            Assert.True(owner.IsSessionInputSuppressed);
+            Assert.False(await owner.OperationalRuntime.Transmit.BeginChannelAsync(channel.Id));
+        }
+        finally
+        {
+            await owner.DisposeAsync();
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
@@ -1597,6 +1849,7 @@ public sealed class ChannelReceiveAudioCoordinatorTests
             Format = format ?? PcmAudioFormat.Voice8KhzMono16Bit;
         }
 
+        public TaskCompletionSource<short[]> NonSilent { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public List<short[]> Frames { get; } = [];
         public bool IsDisposed { get; private set; }
         public PcmAudioFormat Format { get; }
@@ -1604,7 +1857,9 @@ public sealed class ChannelReceiveAudioCoordinatorTests
         public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Frames.Add(samples.ToArray());
+            short[] frame = samples.ToArray();
+            Frames.Add(frame);
+            if (frame.Any(sample => sample != 0)) NonSilent.TrySetResult(frame);
             return ValueTask.CompletedTask;
         }
 

@@ -15,151 +15,47 @@ public sealed partial class MainWindowViewModel : ITransmitLifecyclePresentation
         await StartTransmitAsync([channel]).ConfigureAwait(false);
     }
 
-    private async Task StartTransmitAsync(IReadOnlyCollection<ChannelViewModel> channels)
-    {
-        // Reject a PTT edge while tones or another startup own admission; never
-        // queue a stale press to transmit after the operator has released it.
-        if (!await transmitAdmissionGate.WaitAsync(0).ConfigureAwait(false))
-        {
-            await RunOnUiThreadAsync(() => TransmitStatusText = "PTT unavailable while another transmit operation is in progress.")
-                .ConfigureAwait(false);
-            return;
-        }
-        try
-        {
-            await StartTransmitCoreAsync(channels).ConfigureAwait(false);
-        }
-        finally
-        {
-            transmitAdmissionGate.Release();
-        }
-    }
+    private Task StartTransmitAsync(IReadOnlyCollection<ChannelViewModel> channels)
+        => transmitRuntime.Manual.StartAsync(channels.Select(channel => new ChannelId(channel.SessionId)).ToArray());
 
-    private async Task StartTransmitCoreAsync(IReadOnlyCollection<ChannelViewModel> channels)
-    {
-        if (IsSessionInputSuppressed ||
-            Volatile.Read(ref disposeStarted) != 0)
-        {
-            return;
-        }
+    private void PresentManualTransmitStarting(IReadOnlyList<ChannelId> ids)
+        => SessionStatus.SetTransmit(ids.Count == 1
+            ? $"Starting PTT on {ResolveChannel(ids[0]).Name}…"
+            : $"Starting PTT on {ids.Count} selected channels…");
 
-        if (networkDisabledDemo)
-        {
-            await RunOnUiThreadAsync(() =>
-                TransmitStatusText = "Demo safety boundary: PTT input observed; network output remains disabled.")
-                .ConfigureAwait(false);
-            return;
-        }
-
-        if (channels.Count == 0 || transmitCoordinator.ActiveChannel is not null)
-            return;
-
-        ChannelViewModel? receivingChannel = channels.FirstOrDefault(
-            channel => channel.IsReceivePresentationActive && !channel.HasCallPriority);
-        if (receivingChannel is not null)
-        {
-            await RunOnUiThreadAsync(() =>
-                TransmitStatusText = $"PTT unavailable: {receivingChannel.Name} is currently receiving.")
-                .ConfigureAwait(false);
-            return;
-        }
-
-        TransmitTarget[] targets = channels
-            .Select(channel => new TransmitTarget(
-                channel.ToTransmitDescriptor(),
-                Systems.FirstOrDefault(candidate => candidate.Name.Equals(
-                    channel.Definition.SystemName,
-                    StringComparison.OrdinalIgnoreCase))!))
-            .ToArray();
-        TransmitChannelDescriptor? missingSystemChannel = targets
-            .FirstOrDefault(target => target.System is null)?.Channel;
-        if (missingSystemChannel is not null)
-        {
-            TransmitStatusText = $"PTT unavailable: system '{missingSystemChannel.Definition.SystemName}' was not found.";
-            return;
-        }
-
-        await RunOnUiThreadAsync(() =>
-        {
-            foreach (ChannelViewModel target in channels)
-                target.SetTransmitStarting(true);
-            TransmitStatusText = channels.Count == 1
-                ? $"Starting PTT on {channels.First().Name}…"
-                : $"Starting PTT on {channels.Count} selected channels…";
-        }).ConfigureAwait(false);
-
-        await transmitLifecycle.StartAsync(new TransmitStartRequest(targets, TalkPermitTone))
-            .ConfigureAwait(false);
-    }
-
-    async Task ITransmitLifecyclePresentation.StartedAsync(
+    Task ITransmitLifecyclePresentation.StartedAsync(
         IReadOnlyList<TransmitTarget> targets,
         IReadOnlyList<ChannelId> activeIds,
         TransmitStartupDiagnostics diagnostics,
-        Stopwatch startupTimer)
+        Func<TimeSpan> getStartupElapsed)
     {
-        ChannelViewModel[] activeChannels = ResolveChannels(activeIds);
-        await RunOnUiThreadAsync(() =>
+        PostToUi(NotifyCallHistoryChanged);
+        SessionStatus.SetTransmit(activeIds.Count == 1
+            ? $"Transmitting on {ResolveChannel(activeIds[0]).Name} · PTT: {PttInputSourceText}."
+            : $"Transmitting on {activeIds.Count} selected channels · PTT: {PttInputSourceText}.");
+        return Task.CompletedTask;
+    }
+
+    internal ManualTransmitSession ManualTransmitSession => transmitRuntime.Session;
+
+    private void PresentManualTransmitStarted(TransmitTarget target, uint streamId,
+        ConsoleCallHistoryRecord record, TransmitStartupDiagnostics diagnostics, Func<TimeSpan> getStartupElapsed)
+    {
+        ChannelViewModel channel = ResolveChannel(target.Channel.Id);
+        bool secure = target.Channel.Definition.IsEncrypted && target.Channel.TransmitEncrypted;
+        PostToUi(() =>
         {
-            foreach (ChannelViewModel channel in activeChannels)
-                channel.SetTransmitEnabled(
-                    true,
-                    transmitCoordinator.GetActiveStreamId(new ChannelId(channel.SessionId)));
-            foreach (ChannelViewModel channel in activeChannels)
-            {
-                TransmitTarget target = targets.First(candidate =>
-                    candidate.Channel.Id == new ChannelId(channel.SessionId));
-                uint streamId = transmitCoordinator.GetActiveStreamId(new ChannelId(channel.SessionId));
-                bool secure = channel.Definition.IsEncrypted && channel.IsTransmitEncrypted;
-                byte? algorithmId = null;
-                ushort? keyId = null;
-                if (secure && EncryptionPresentation.TryParseConfiguredAlgorithm(
-                        channel.Definition,
-                        out byte parsedAlgorithmId,
-                        out ushort parsedKeyId))
-                {
-                    algorithmId = parsedAlgorithmId;
-                    keyId = parsedKeyId;
-                }
-
-                AddDebugLog(
-                    DateTimeOffset.Now,
-                    target.System.Name,
-                    DebugLogSeverity.Info,
-                    $"TX call started on {channel.Name}: " +
-                    $"{ProtocolFor(channel).ToString().ToUpperInvariant()} " +
-                    $"{target.System.SourceId ?? 0}→{channel.Definition.DestinationId}, " +
-                    $"stream {streamId}" +
-                    (secure ? ", secure." : ", clear."));
-                AddDebugLog(
-                    DateTimeOffset.Now,
-                    target.System.Name,
-                    DebugLogSeverity.Debug,
-                    FormatTransmitStartupDiagnostics(
-                        channel,
-                        streamId,
-                        diagnostics,
-                        startupTimer.Elapsed));
-                callHistory.AddConsoleTransmission(
-                    DateTimeOffset.Now,
-                    target.System.Name,
-                    channel.Name,
-                    target.System.SourceId ?? 0,
-                    channel.Definition.DestinationId,
-                    ProtocolFor(channel),
-                    streamId,
-                    callerText: "Console",
-                    encrypted: secure,
-                    encryptionAlgorithmId: algorithmId,
-                    encryptionKeyId: keyId,
-                    channelId: new ChannelId(channel.SessionId));
-            }
-
-            NotifyCallHistoryChanged();
-            TransmitStatusText = activeChannels.Length == 1
-                ? $"Transmitting on {activeChannels[0].Name} · PTT: {PttInputSourceText}."
-                : $"Transmitting on {activeChannels.Length} selected channels · PTT: {PttInputSourceText}.";
-        }).ConfigureAwait(false);
+            AddDebugLog(DateTimeOffset.Now, target.System.Name, DebugLogSeverity.Info,
+                $"TX call started on {channel.Name}: " +
+                $"{ProtocolFor(channel).ToString().ToUpperInvariant()} " +
+                $"{target.System.SourceId ?? 0}→{channel.Definition.DestinationId}, " +
+                $"stream {streamId}" + (secure ? ", secure." : ", clear."));
+            AddDebugLog(DateTimeOffset.Now, target.System.Name, DebugLogSeverity.Debug,
+                FormatTransmitStartupDiagnostics(channel, streamId, diagnostics, getStartupElapsed()));
+            // Read back the latest record if TX ended before the UI caught up.
+            if (callHistory.Runtime.Find(record.Id) is { } current)
+                callHistory.ProjectRuntimeRecord(current);
+        });
     }
 
     private string FormatTransmitStartupDiagnostics(
@@ -189,45 +85,23 @@ public sealed partial class MainWindowViewModel : ITransmitLifecyclePresentation
     private async Task StopTransmitAsync(ChannelViewModel channel)
         => await StopTransmitAsync([channel]).ConfigureAwait(false);
 
-    private async Task StopTransmitAsync(
+    private Task StopTransmitAsync(
         IReadOnlyCollection<ChannelViewModel> channels,
         string? stoppedStatusText = null,
         bool propagateUnconfirmedStop = false)
-    {
-        await transmitAdmissionGate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            await StopTransmitCoreAsync(channels, stoppedStatusText, propagateUnconfirmedStop).ConfigureAwait(false);
-        }
-        finally
-        {
-            transmitAdmissionGate.Release();
-        }
-    }
-
-    private Task StopTransmitCoreAsync(
-        IReadOnlyCollection<ChannelViewModel> channels,
-        string? stoppedStatusText = null,
-        bool propagateUnconfirmedStop = false)
-        => transmitLifecycle.StopAsync(
+        => transmitRuntime.Manual.StopAsync(
             channels.Select(channel => new ChannelId(channel.SessionId)).ToArray(),
             stoppedStatusText, propagateUnconfirmedStop);
 
-    async Task ITransmitLifecyclePresentation.StoppingAsync(IReadOnlyList<TransmitStream> streams)
+    Task ITransmitLifecyclePresentation.StoppingAsync(IReadOnlyList<TransmitStream> streams)
     {
-        var activeStreams = streams.Select(stream =>
-            (Channel: ResolveChannel(stream.ChannelId), stream.StreamId)).ToArray();
-        await RunOnUiThreadAsync(() =>
-        {
-            foreach (var entry in activeStreams)
-                entry.Channel.SetTransmitStopping(true);
-            TransmitStatusText = activeStreams.Length == 1
-                ? $"Releasing PTT on {activeStreams[0].Channel.Name}…"
-                : $"Releasing PTT on {activeStreams.Length} channels…";
-        }).ConfigureAwait(false);
+        SessionStatus.SetTransmit(streams.Count == 1
+            ? $"Releasing PTT on {ResolveChannel(streams[0].ChannelId).Name}…"
+            : $"Releasing PTT on {streams.Count} channels…");
+        return Task.CompletedTask;
     }
 
-    async Task ITransmitLifecyclePresentation.StoppedAsync(
+    Task ITransmitLifecyclePresentation.StoppedAsync(
         IReadOnlyList<ChannelId> channelIds,
         IReadOnlyList<TransmitStream> streams,
         IReadOnlySet<ChannelId> unresolved,
@@ -235,83 +109,52 @@ public sealed partial class MainWindowViewModel : ITransmitLifecyclePresentation
         Exception? stopFailure,
         string? stoppedStatusText)
     {
-        ChannelViewModel[] channels = ResolveChannels(channelIds);
-        var activeStreams = streams.Select(stream =>
-            (Channel: ResolveChannel(stream.ChannelId), stream.StreamId)).ToArray();
-        await RunOnUiThreadAsync(() =>
-        {
-            foreach (ChannelViewModel channel in channels)
-            {
-                if (unresolved.Contains(new ChannelId(channel.SessionId)))
-                {
-                    channel.SetTransmitStopping(false);
-                    continue;
-                }
-                channel.SetTransmitEnabled(false);
-                callRecordings.StopTransmit(channel);
-            }
-            foreach ((ChannelViewModel channel, uint streamId) in activeStreams)
-            {
-                if (unresolved.Contains(new ChannelId(channel.SessionId)))
-                    continue;
-                SystemViewModel? system = Systems.FirstOrDefault(candidate => candidate.Channels.Contains(channel));
-                if (system is not null)
-                {
-                    AddDebugLog(
-                        DateTimeOffset.Now,
-                        system.Name,
-                        DebugLogSeverity.Info,
-                        $"TX call ended on {channel.Name}: {ProtocolFor(channel).ToString().ToUpperInvariant()} " +
-                        $"stream {streamId}.");
-                    callHistory.CompleteConsoleTransmission(
-                        system.Name,
-                        ProtocolFor(channel),
-                        streamId,
-                        DateTimeOffset.Now,
-                        channel.Name,
-                        channel.Definition.DestinationId);
-                }
-            }
-            if (activeStreams.Any(entry =>
-                !unresolved.Contains(new ChannelId(entry.Channel.SessionId))))
-            {
-                NotifyCallHistoryChanged();
-            }
-            AddDebugLog(
-                DateTimeOffset.Now,
-                "TX",
-                unresolved.Count == 0 ? DebugLogSeverity.Debug : DebugLogSeverity.Warning,
-                $"PTT release completed in {elapsed.TotalMilliseconds:0} ms; " +
-                $"{activeStreams.Count(entry => !unresolved.Contains(
-                    new ChannelId(entry.Channel.SessionId)))} confirmed, " +
-                $"{activeStreams.Count(entry => unresolved.Contains(
-                    new ChannelId(entry.Channel.SessionId)))} unconfirmed.");
-            TransmitStatusText = unresolved.Count > 0
-                ? $"PTT release failed; transmit state remains active for retry or disconnect: " +
-                  $"{stopFailure?.Message ?? "stop was not confirmed"}"
-                : stopFailure is null
-                ? stoppedStatusText ?? "PTT idle."
-                : $"Transmission stopped safely after an error: {stopFailure.Message}";
-        }).ConfigureAwait(false);
+        int completed = streams.Count(stream => !unresolved.Contains(stream.ChannelId));
+        if (completed > 0) PostToUi(NotifyCallHistoryChanged);
+        int unconfirmed = streams.Count - completed;
+        DebugLogSeverity releaseSeverity = unresolved.Count == 0 ? DebugLogSeverity.Debug : DebugLogSeverity.Warning;
+        PostToUi(() => AddDebugLog(DateTimeOffset.Now, "TX",
+            releaseSeverity,
+            $"PTT release completed in {elapsed.TotalMilliseconds:0} ms; " +
+            $"{completed} confirmed, {unconfirmed} unconfirmed."));
+        SessionStatus.SetTransmit(unresolved.Count > 0
+            ? $"PTT release failed; transmit state remains active for retry or disconnect: " +
+              $"{stopFailure?.Message ?? "stop was not confirmed"}"
+            : stopFailure is null
+            ? stoppedStatusText ?? "PTT idle."
+            : $"Transmission stopped safely after an error: {stopFailure.Message}");
+        return Task.CompletedTask;
     }
 
+    private void PresentManualTransmitCompleted(TransmitStream stream, CallId? call)
+    {
+        var definition = channelMedia.State(stream.ChannelId).Runtime.Definition;
+        string system = definition.SystemName;
+        PostToUi(() =>
+        {
+            AddDebugLog(DateTimeOffset.Now, system, DebugLogSeverity.Info,
+                $"TX call ended on {definition.Name}: {ChannelProtocolMediaMapper.ToTrafficProtocol(definition.Protocol).ToString().ToUpperInvariant()} " +
+                $"stream {stream.StreamId}.");
+            if (call is { } id && callHistory.Runtime.Find(id) is { } record)
+                callHistory.ProjectRuntimeRecord(record);
+        });
+    }
+
+    DateTimeOffset ITransmitLifecyclePresentation.Now => DateTimeOffset.Now;
+    long ITransmitLifecyclePresentation.GetTimestamp() => Stopwatch.GetTimestamp();
+    TimeSpan ITransmitLifecyclePresentation.GetElapsedTime(long started) => Stopwatch.GetElapsedTime(started);
     bool ITransmitLifecyclePresentation.MuteReceiveWhileTransmitting => userSettings.MuteRxAudioWhileTransmitting;
     bool? ITransmitLifecyclePresentation.SelectedMicrophoneIsBluetooth => SelectedAudioInputDevice?.IsBluetooth;
     void ITransmitLifecyclePresentation.ClearActivation() => pttActivationArbiter.Clear();
     void ITransmitLifecyclePresentation.Log(DateTimeOffset timestamp, string source, DebugLogSeverity severity, string message)
         => AddDebugLog(timestamp, source, severity, message);
     Task ITransmitLifecyclePresentation.StartFailedAsync(IReadOnlyList<ChannelId> channels, Exception failure)
-        => RunOnUiThreadAsync(() =>
-        {
-            foreach (ChannelViewModel channel in ResolveChannels(channels))
-            {
-                channel.SetTransmitEnabled(false);
-                callRecordings.StopTransmit(channel);
-            }
-            AddDebugLog(DateTimeOffset.Now, "TX", DebugLogSeverity.Error,
-                $"Transmit startup failed: {failure}");
-            TransmitStatusText = $"PTT unavailable: {failure.Message}";
-        });
+    {
+        PostToUi(() => AddDebugLog(DateTimeOffset.Now, "TX", DebugLogSeverity.Error,
+            $"Transmit startup failed: {failure}"));
+        SessionStatus.SetTransmit($"PTT unavailable: {failure.Message}");
+        return Task.CompletedTask;
+    }
 
     public async Task TestTalkPermitToneAsync()
         => await transmitAudioTransition.PlayTalkPermitToneAsync(reportSuccess: true).ConfigureAwait(false);
@@ -326,8 +169,5 @@ public sealed partial class MainWindowViewModel : ITransmitLifecyclePresentation
 
     private async Task RestoreSuspendedAudioAsync()
         => await transmitAudioTransition.RestoreSuspendedAudioAsync().ConfigureAwait(false);
-
-    private async Task MuteReceiveAudioAsync(string statusText)
-        => await transmitAudioTransition.MuteReceiveAudioAsync(statusText).ConfigureAwait(false);
 
 }

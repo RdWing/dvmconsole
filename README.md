@@ -3,8 +3,8 @@
 </p>
 
 **DVM Console NEO** is an open-source radio console for DVM FNE on macOS, Windows,
-and Linux. Monitor channels, transmit across systems, build patches,
-and review recorded calls from one desktop.
+Linux, iOS, and iPadOS. Monitor channels, transmit across systems, build patches,
+and review recorded calls from your computer, iPhone, or iPad.
 
 **[Download](#download-dvm-console-neo)** ·
 [Set up your console](#build-your-configuration-in-studio) ·
@@ -29,22 +29,51 @@ For amateur and educational use. **Not for public- or life-safety operation.**
 
 Choose the package for your computer. Extract ZIP archives before launching;
 Linux AppImages run as a single executable. Check the release page for the
-latest downloads. The latest packages are listed below:
+latest downloads and availability of the v0.8.0 packages listed below:
 
 | Platform | Package | Requirements |
 | --- | --- | --- |
-| Apple Silicon Mac | `dvmconsole-0.7.0-osx-arm64.zip` | macOS 14+ supported; macOS 12–13 best effort |
-| Intel Mac | `dvmconsole-0.7.0-osx-x64.zip` | macOS 14+ supported; macOS 12–13 best effort |
-| Windows x64 | `dvmconsole-0.7.0-win-x64.zip` | Windows x64 |
-| Windows ARM64 | `dvmconsole-0.7.0-win-arm64.zip` | Windows ARM64 |
-| Linux x64 | `DVMConsole-0.7.0-x86_64.AppImage` | x64 Linux with PipeWire and GLIBC 2.34+ |
-| Linux ARM64 | `DVMConsole-0.7.0-aarch64.AppImage` | ARM64 Linux with PipeWire and GLIBC 2.34+ |
+| Apple Silicon Mac | `dvmconsole-0.8.0-osx-arm64.zip` | macOS 14+ supported; macOS 12 and 13 best effort |
+| Intel Mac | `dvmconsole-0.8.0-osx-x64.zip` | macOS 14+ supported; macOS 12 and 13 best effort |
+| Windows x64 | `dvmconsole-0.8.0-win-x64.zip` | Windows x64 |
+| Windows ARM64 | `dvmconsole-0.8.0-win-arm64.zip` | Windows ARM64 |
+| Linux x64 | `DVMConsole-0.8.0-x86_64.AppImage` | x64 Linux with PipeWire and GLIBC 2.34+ |
+| Linux ARM64 | `DVMConsole-0.8.0-aarch64.AppImage` | ARM64 Linux with PipeWire and GLIBC 2.34+ |
+| iPhone and iPad | [Join the TestFlight beta](https://testflight.apple.com/join/KuYtQqja) | iOS/iPadOS 15 or newer; older-device testing is ongoing |
 
 **[Download the latest release →](https://github.com/RdWing/dvmconsole/releases/latest)**
 
-The macOS packages have a macOS 12 deployment floor. macOS 12–13 are
+The macOS packages have a macOS 12 deployment floor. macOS 12 and 13 are
 best-effort compatibility targets; macOS 14 and newer remain officially
 supported and CI-tested.
+
+### iPhone and iPad
+
+Take Console NEO with you. Monitor channels, transmit, send tones, build
+patches, and record calls on iPhone or iPad. Create your configuration right on
+the device with Studio, or bring one over from desktop. iPhone keeps channels
+close at hand in a compact touch list; iPad gives you Cards and List with room
+to spread out. Both use the same radio and media runtime as desktop.
+
+Every platform is a first-class part of Console NEO. iOS and iPadOS have
+feature parity with desktop in core console capabilities, with the same care
+given to reliability and performance. The interface adapts to the device, while
+platform-specific hardware and operating-system features remain available where
+supported.
+
+**[Join the public iPhone and iPad beta →](https://testflight.apple.com/join/KuYtQqja)**
+
+Open the link on your iPhone or iPad and follow the TestFlight instructions to
+install Console NEO. Updates arrive through TestFlight. An App Store release is
+planned after beta testing.
+
+The app targets iOS/iPadOS 15 and newer; testing on older devices is ongoing.
+
+Start in **Settings → Configuration Library**, create a configuration in Studio,
+or import a configuration bundle through Files. You can transfer bundles through
+iCloud Drive; configuration changes do not sync automatically.
+See the [iPhone and iPad guide](docs/user-guide/Getting%20Started/04-Operations/05-iOS%20and%20iPadOS.md)
+for audio, background behavior, and mobile controls.
 
 > [!WARNING]
 > Version 0.7.0 stores NEO data in `DVMProject/dvmconsole-neo` instead of the
@@ -61,15 +90,13 @@ supported and CI-tested.
 <details>
 <summary><strong>Install on macOS</strong></summary>
 
-1. Extract the complete ZIP and move `DVMConsole.app` to `Applications`.
-2. The current package is unsigned. For an archive downloaded from the RdWing
-   GitHub Release, remove its quarantine attribute:
+Official Mac downloads starting with v0.8.0 are signed with Developer ID and
+notarized by Apple. No quarantine-removal command is needed.
 
-   ```sh
-   xattr -dr com.apple.quarantine "/Applications/DVMConsole.app"
-   ```
-
-3. Open DVM Console NEO. Choose **File > New Configuration** to build a
+1. Download `osx-arm64` for an Apple Silicon Mac or `osx-x64` for an Intel Mac.
+   **Apple menu > About This Mac** identifies your chip or processor.
+2. Extract the complete ZIP, move `DVMConsole.app` to `Applications`, and open it.
+3. Choose **File > New Configuration** to build a
    codeplug in Studio, or **Import Codeplug** to add an existing YAML file to
    the managed Configuration Library.
 
@@ -105,7 +132,7 @@ If the application closes unexpectedly, preserve
 2. Make it executable, replacing the filename with the package you downloaded:
 
    ```sh
-   chmod +x DVMConsole-0.7.0-x86_64.AppImage
+   chmod +x DVMConsole-0.8.0-x86_64.AppImage
    ```
 
 3. Run the AppImage. Choose **File > New Configuration** to start in Studio,
@@ -124,8 +151,10 @@ application closes unexpectedly, preserve
 
 ## Build your configuration in Studio
 
-Start with **File > New Configuration**. Add FNE systems, zones, channels,
-aliases, encryption keys, web streams, and groups without writing YAML.
+On desktop, start with **File > New Configuration**. On iPhone or iPad, open
+**Settings → Configuration Library** and create a configuration. Add FNE systems,
+zones, channels, aliases, encryption keys, web streams, and groups without
+writing YAML.
 Use **Review & Save** to check and save your draft, then **Disconnect and load**
 to start using it.
 You can also import an existing codeplug and its companion files.
@@ -135,8 +164,8 @@ You can also import an existing codeplug and its companion files.
 <sub>Configuration Studio with the public demo codeplug.</sub>
 
 Once your configuration is loaded, choose your microphone and speakers in
-**Audio > Audio settings**, connect to the FNE, and select the channels you want
-to hear. You can also set up groups and choose which channels to record.
+**Audio > Audio settings** on desktop or **Settings → Audio** on mobile.
+Connect to the FNE and select the channels you want to hear. You can also set up groups and choose which channels to record.
 
 [Create your first configuration →](docs/user-guide/Getting%20Started/03-Configurations/01-Codeplug%20Creation.md) ·
 [Audio setup](docs/user-guide/Getting%20Started/04-Operations/03-Audio%20Settings.md) ·
@@ -151,7 +180,7 @@ active-system PTT to choose which channels you transmit on.
 | Listen | Transmit | Review |
 | --- | --- | --- |
 | Monitor DMR, P25 Phase 1, NXDN 4800, and local web streams. | Use channel PTT, multi-select groups, and cross-protocol patches. | Record selected calls with TAR and play them from Event History. |
-| Route channels to different speakers; mute a zone or system without stopping recordings. | Send pages, tones, DTMF, and custom alert audio through selected routes. | Inspect call metadata and export redacted diagnostics when troubleshooting. |
+| On desktop, route channels to different speakers; mute a zone or system without stopping recordings. | Send pages, tones, DTMF, and custom alert audio through selected routes. | Inspect call metadata and export redacted diagnostics when troubleshooting. |
 
 <details>
 <summary>More operating capabilities and protocol support</summary>
@@ -170,9 +199,9 @@ active-system PTT to choose which channels you transmit on.
   each file.
 - Use P25 FNE/KMM key delivery with a local fallback, plus protocol-scoped local
   privacy keys for DMR and NXDN.
-- Follow the system-default audio devices or pin specific microphone and speaker
-  routes.
-- Use DVM Console microphone processing on macOS, Windows, and Linux, with
+- Follow the system audio route on mobile. Desktop can also pin microphones
+  and independent speaker routes.
+- Use DVM Console microphone processing across all hosts, with
   optional device-dependent Windows communications processing on supported
   endpoints.
 
@@ -187,6 +216,26 @@ interfaces, see [RadioConsole2](https://github.com/W3AXL/RadioConsole2) and
 </details>
 
 ## What’s new in DVM Console NEO
+
+### 0.8.0: Console NEO on iPhone and iPad
+
+Console NEO now runs on iPhone and iPad. Version 0.8.0 brings the core console
+experience to iPhone and iPad: touch Configuration Studio, grouped channel
+lists, recording history, tones, patches and audio controls, all using the
+shared console runtime. Export a configuration ZIP from desktop and import it
+directly on mobile, or transfer saved tone patterns to keep them available
+across your devices.
+
+Arrange iPad Cards freely on the grid or reorder mobile List rows within a zone.
+The two layouts save independently. Mobile audio stays active for connected
+sources, and saved recordings can play while disconnected. Desktop Event History
+keeps your place as new calls arrive.
+
+**[Join the public TestFlight beta](https://testflight.apple.com/join/KuYtQqja)** on iPhone or iPad.
+Desktop packages are distributed through GitHub Releases; an App Store release
+is planned after beta testing.
+
+[Read the 0.8.0 release notes →](docs/releases/v0.8.0.md)
 
 ### 0.7.0: More platforms, easier setup, and dependable operation
 
@@ -270,7 +319,8 @@ web-stream cancellation, and native-audio cleanup.
 | Configure and manage local recordings | [Talkgroup Audio Recorder](docs/user-guide/Getting%20Started/03-Configurations/05-Talkgroup%20Audio%20Recorder.md) |
 | Build or package the application | [Building and packaging](docs/user-guide/Getting%20Started/02-Building.md) |
 
-In the app, `Help > Documentation` opens the operator guide.
+On desktop, **Help > Documentation** opens the operator guide. On iPhone and
+iPad, use **Settings → Help**.
 
 ## Open source and project lineage
 
@@ -301,6 +351,10 @@ Use the root `dvmconsole.sln`. The build compiles native components
 automatically. Repository scripts handle publishing, package verification, and
 packaged desktop smoke tests. Run the deterministic, network-disabled demo with
 `--demo`.
+
+The [iPhone and iPad app](docs/user-guide/Getting%20Started/04-Operations/05-iOS%20and%20iPadOS.md)
+can be built separately on macOS. It uses List on iPhone and offers Cards and
+List on iPad. Mobile device testing is still in progress.
 
 ## Network, configuration, and safety
 

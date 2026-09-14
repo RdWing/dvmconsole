@@ -38,6 +38,9 @@ set_target_properties(dvmaudio PROPERTIES OUTPUT_NAME "dvmaudio")
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(dvm_playback_continuity_tests dvm_playback_continuity_tests.c)
+    target_compile_options(dvm_playback_continuity_tests PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME dvm_playback_continuity_tests COMMAND dvm_playback_continuity_tests)
     find_package(Threads REQUIRED)
     add_executable(dvm_capture_signal_tests
         dvm_capture_signal.c

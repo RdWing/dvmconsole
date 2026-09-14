@@ -1,0 +1,32 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<ResourceDictionary x:Class="DvmConsole.Mobile.MobileConsoleTheme" xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- Console-only surfaces from the approved mockup. Operational selections retain the shared palette. -->
+  <ResourceDictionary.ThemeDictionaries>
+    <ResourceDictionary x:Key="Dark">
+      <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#0D131A"/>
+      <SolidColorBrush x:Key="PrimaryTextBrush" Color="#E4EAF1"/>
+      <SolidColorBrush x:Key="MutedTextBrush" Color="#B4C2CE"/>
+      <SolidColorBrush x:Key="CardBackgroundBrush" Color="#17212B"/>
+      <SolidColorBrush x:Key="ControlBorderBrush" Color="#354757"/>
+      <SolidColorBrush x:Key="ButtonBackgroundBrush" Color="#1C2937"/>
+      <SolidColorBrush x:Key="PttBackgroundBrush" Color="#1C2937"/>
+      <SolidColorBrush x:Key="MobileListeningSurfaceBrush" Color="#172E24"/>
+      <SolidColorBrush x:Key="MobileListeningBorderBrush" Color="#438566"/>
+      <SolidColorBrush x:Key="MobileRibbonBorderBrush" Color="#243542"/>
+      <SolidColorBrush x:Key="MobilePrimaryButtonBorderBrush" Color="#384B5D"/>
+      <SolidColorBrush x:Key="MobileConnectedBrush" Color="#61D994"/>
+      <SolidColorBrush x:Key="MobileDisconnectedBrush" Color="#E57878"/>
+      <SolidColorBrush x:Key="MobileConnectingBrush" Color="#E7B65A"/>
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="Light">
+      <SolidColorBrush x:Key="MobileListeningSurfaceBrush" Color="#E3F3E9"/>
+      <SolidColorBrush x:Key="MobileListeningBorderBrush" Color="#438566"/>
+      <SolidColorBrush x:Key="MobileRibbonBorderBrush" Color="#D0D8E0"/>
+      <SolidColorBrush x:Key="MobilePrimaryButtonBorderBrush" Color="#8996A3"/>
+      <SolidColorBrush x:Key="MobileConnectedBrush" Color="#08733F"/>
+      <SolidColorBrush x:Key="MobileDisconnectedBrush" Color="#B42318"/>
+      <SolidColorBrush x:Key="MobileConnectingBrush" Color="#895600"/>
+    </ResourceDictionary>
+  </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>

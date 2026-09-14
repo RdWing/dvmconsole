@@ -1,0 +1,312 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0-ios26.5": {
+      "Avalonia.iOS": {
+        "type": "Direct",
+        "requested": "[11.3.18, )",
+        "resolved": "11.3.18",
+        "contentHash": "ANoc+ZsY0uae+u2UGnaByxSM0piZAtx0JPetHwy36dEBCvJ6TrgKYRzF34ZWd/AIXpN9fzEp7eIBO3p0NAMzyQ==",
+        "dependencies": {
+          "Avalonia": "11.3.18",
+          "Avalonia.Skia": "11.3.18"
+        }
+      },
+      "Microsoft.NET.ILLink.Tasks": {
+        "type": "Direct",
+        "requested": "[10.0.11, )",
+        "resolved": "10.0.11",
+        "contentHash": "IBf7lbovvjGWVWXZX5cJ/cO0WXbId0Zq4BuSeT94mGZuOAP66oMeH9PTBZ9Jpp3Jb6jtK0qm/NyUbPRo1gC/wQ=="
+      },
+      "Avalonia": {
+        "type": "Transitive",
+        "resolved": "11.3.18",
+        "contentHash": "2C4UxhWUObWGgYKWic1x5BMMWGJP6SElb91WeOxs+X/iR26rtkqpxFFwwo50FXS9AyYnHfk8QKXDEfe7oT/kZA==",
+        "dependencies": {
+          "Avalonia.BuildServices": "11.3.2",
+          "Avalonia.Remote.Protocol": "11.3.18",
+          "MicroCom.Runtime": "0.11.0"
+        }
+      },
+      "Avalonia.BuildServices": {
+        "type": "Transitive",
+        "resolved": "11.3.2",
+        "contentHash": "qHDToxto1e3hci5YqbG9n0Ty8mlp3zBUN5wT66wKqaDVzXyQ0do3EnRILd4Ke9jpvsktaPpgE0YjEk7hornryQ=="
+      },
+      "Avalonia.Remote.Protocol": {
+        "type": "Transitive",
+        "resolved": "11.3.18",
+        "contentHash": "vw+6ZfgTuu72dA9aVWn6u56t2nrBd5MoMU0wo/qI9XJAl/c0oYYphIvwLvJP1JorubQY4UE3d0ac8ULBhrGBiA=="
+      },
+      "Avalonia.Skia": {
+        "type": "Transitive",
+        "resolved": "11.3.18",
+        "contentHash": "/B4aXmNRNjG8I5U/a1xJI+bIi0XO6DDzS3mBrIKlVnJRY2CyZiUeESRQXLnIU77Z9TvqkUROs+D47s085YjFtA==",
+        "dependencies": {
+          "Avalonia": "11.3.18",
+          "HarfBuzzSharp": "8.3.1.1",
+          "HarfBuzzSharp.NativeAssets.Linux": "8.3.1.1",
+          "HarfBuzzSharp.NativeAssets.WebAssembly": "8.3.1.1",
+          "SkiaSharp": "2.88.9",
+          "SkiaSharp.NativeAssets.Linux": "2.88.9",
+          "SkiaSharp.NativeAssets.WebAssembly": "2.88.9"
+        }
+      },
+      "Avalonia.Themes.Fluent": {
+        "type": "Transitive",
+        "resolved": "11.3.18",
+        "contentHash": "+Q/TJoynD0zNuu5w2gD+xcTl7GNKJFxlPYAndRLs/mTDrNbbsvv/271WyIysbMPsXSjCyBDp7RCZzQkpD6x5Bg==",
+        "dependencies": {
+          "Avalonia": "11.3.18"
+        }
+      },
+      "ColorDocument.Avalonia": {
+        "type": "Transitive",
+        "resolved": "11.0.3",
+        "contentHash": "3lKt5G7v7nHMZOQ7fbLRb8DgpLw3lC7lELWEErPnFS1nblT4MbV9kzPZXQ7G4NcE8vpEjU01gw6dDfRIy65NBA==",
+        "dependencies": {
+          "Avalonia": "11.0.0",
+          "ColorTextBlock.Avalonia": "11.0.3"
+        }
+      },
+      "ColorTextBlock.Avalonia": {
+        "type": "Transitive",
+        "resolved": "11.0.3",
+        "contentHash": "oqj4yK4jD4XIvGJiTIh97+fVMVUHVWQZIdG+8PbENBkmLTg9TkZMga+hm8SOwB+W/r6m0coSmoH7NUMz2Wn6lg==",
+        "dependencies": {
+          "Avalonia": "11.0.0"
+        }
+      },
+      "Concentus": {
+        "type": "Transitive",
+        "resolved": "2.2.2",
+        "contentHash": "2B9YmHPKO+k7YpAAnqmiXwiMJnfjfj1C868RszOll2iZWLnGTAiC1q21L/d7CvTan7T+hyqU8dR0Dcy3cpjVfQ=="
+      },
+      "Concentus.Oggfile": {
+        "type": "Transitive",
+        "resolved": "1.0.7",
+        "contentHash": "rKWtI5oiTWqK2ol1aWvIT1BRTPi07Uo1hAet0ysQoZQqFo/mxBRwr+ERw89fIdkL3tbMf3ncoW7b3HDGx8Sk4g==",
+        "dependencies": {
+          "Concentus": "2.2.2"
+        }
+      },
+      "HarfBuzzSharp": {
+        "type": "Transitive",
+        "resolved": "8.3.1.1",
+        "contentHash": "tLZN66oe/uiRPTZfrCU4i8ScVGwqHNh5MHrXj0yVf4l7Mz0FhTGnQ71RGySROTmdognAs0JtluHkL41pIabWuQ==",
+        "dependencies": {
+          "HarfBuzzSharp.NativeAssets.iOS": "8.3.1.1"
+        }
+      },
+      "HarfBuzzSharp.NativeAssets.iOS": {
+        "type": "Transitive",
+        "resolved": "8.3.1.1",
+        "contentHash": "JNGHDIteZNRXv7Aj5OcVeolWqUU7YzLXBbLV79a4cot+BEUHagocP2Ed2qAfkr2a2B2Ena6BXOta7bBt2xHEtw=="
+      },
+      "HarfBuzzSharp.NativeAssets.Linux": {
+        "type": "Transitive",
+        "resolved": "8.3.1.1",
+        "contentHash": "3EZ1mpIiKWRLL5hUYA82ZHteeDIVaEA/Z0rA/wU6tjx6crcAkJnBPwDXZugBSfo8+J3EznvRJf49uMsqYfKrHg=="
+      },
+      "HarfBuzzSharp.NativeAssets.WebAssembly": {
+        "type": "Transitive",
+        "resolved": "8.3.1.1",
+        "contentHash": "loJweK2u/mH/3C2zBa0ggJlITIszOkK64HLAZB7FUT670dTg965whLFYHDQo69NmC4+d9UN0icLC9VHidXaVCA=="
+      },
+      "Markdown.Avalonia.Tight": {
+        "type": "Transitive",
+        "resolved": "11.0.3",
+        "contentHash": "yV61pNsz8GfVzaNy2IM/K6eGEoL5J0uqPY3TCpWfVpwkH9gZEi48BIhoY3Lz/fmqbLR74aE2s1/N01z7jZQavQ==",
+        "dependencies": {
+          "Avalonia": "11.0.0",
+          "ColorDocument.Avalonia": "11.0.3",
+          "ColorTextBlock.Avalonia": "11.0.3"
+        }
+      },
+      "MicroCom.Runtime": {
+        "type": "Transitive",
+        "resolved": "0.11.0",
+        "contentHash": "MEnrZ3UIiH40hjzMDsxrTyi8dtqB5ziv3iBeeU4bXsL/7NLSal9F1lZKpK+tfBRnUoDSdtcW3KufE4yhATOMCA=="
+      },
+      "NLayer": {
+        "type": "Transitive",
+        "resolved": "3.0.0",
+        "contentHash": "aQrCT93NjIrJNXA7wiTSHMp9OUhGNb8YTJAwnsx2FtaNdAe74vwfguFExf6QFNU72XhNPb/bLAcdMbxvaNZgWg=="
+      },
+      "SharpZipLib": {
+        "type": "Transitive",
+        "resolved": "1.4.2",
+        "contentHash": "yjj+3zgz8zgXpiiC3ZdF/iyTBbz2fFvMxZFEBPUcwZjIvXOf37Ylm+K58hqMfIBt5JgU/Z2uoUS67JmTLe973A=="
+      },
+      "SkiaSharp": {
+        "type": "Transitive",
+        "resolved": "2.88.9",
+        "contentHash": "3MD5VHjXXieSHCleRLuaTXmL2pD0mB7CcOB1x2kA1I4bhptf4e3R27iM93264ZYuAq6mkUyX5XbcxnZvMJYc1Q==",
+        "dependencies": {
+          "SkiaSharp.NativeAssets.iOS": "2.88.9"
+        }
+      },
+      "SkiaSharp.NativeAssets.iOS": {
+        "type": "Transitive",
+        "resolved": "2.88.9",
+        "contentHash": "WX97CFiCZSxG7mM3U6zf3rKW2gJHRe18mA0bwkQ8iU/+PYJailNvcXH878XuEigXHfWO+73UJM8Ivw4CWtC60w=="
+      },
+      "SkiaSharp.NativeAssets.Linux": {
+        "type": "Transitive",
+        "resolved": "2.88.9",
+        "contentHash": "cWSaJKVPWAaT/WIn9c8T5uT/l4ETwHxNJTkEOtNKjphNo8AW6TF9O32aRkxqw3l8GUdUo66Bu7EiqtFh/XG0Zg==",
+        "dependencies": {
+          "SkiaSharp": "2.88.9"
+        }
+      },
+      "SkiaSharp.NativeAssets.WebAssembly": {
+        "type": "Transitive",
+        "resolved": "2.88.9",
+        "contentHash": "kt06RccBHSnAs2wDYdBSfsjIDbY3EpsOVqnlDgKdgvyuRA8ZFDaHRdWNx1VHjGgYzmnFCGiTJBnXFl5BqGwGnA=="
+      },
+      "YamlDotNet": {
+        "type": "Transitive",
+        "resolved": "16.2.0",
+        "contentHash": "iKVYog7JNiFOTr4gMHSjCqrGFD2NyABUHgSkRq9XR8A2+fsWepSWTpjHAOnKo1LVAHjy33o6I0u6lo5Ng0NtAw=="
+      },
+      "dvmconsole.application": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Core": "[0.7.0, )",
+          "DvmConsole.Core": "[0.7.0, )",
+          "DvmConsole.Media": "[0.7.0, )",
+          "DvmConsole.Operations": "[0.7.0, )",
+          "DvmConsole.Ptt.Abstractions": "[0.7.0, )",
+          "DvmConsole.Vocoder.Abstractions": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.audio.abstractions": {
+        "type": "Project"
+      },
+      "dvmconsole.audio.core": {
+        "type": "Project",
+        "dependencies": {
+          "Concentus.Oggfile": "[1.0.7, )",
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "NLayer": "[3.0.0, )"
+        }
+      },
+      "dvmconsole.audio.ios": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Core": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.configuration.yaml": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Application": "[0.7.0, )",
+          "DvmConsole.Core": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.core": {
+        "type": "Project",
+        "dependencies": {
+          "YamlDotNet": "[16.2.0, )"
+        }
+      },
+      "dvmconsole.fne": {
+        "type": "Project",
+        "dependencies": {
+          "SharpZipLib": "[1.4.2, )"
+        }
+      },
+      "dvmconsole.fneclient": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Core": "[0.7.0, )",
+          "DvmConsole.Fne": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.fneintegration": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Application": "[0.7.0, )",
+          "DvmConsole.FneClient": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.media": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Core": "[0.7.0, )",
+          "DvmConsole.Core": "[0.7.0, )",
+          "DvmConsole.Fne": "[0.7.0, )",
+          "DvmConsole.Vocoder.Abstractions": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.mobile": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Presentation": "[0.7.0, )",
+          "Markdown.Avalonia.Tight": "[11.0.3, )"
+        }
+      },
+      "dvmconsole.operations": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Core": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.presentation": {
+        "type": "Project",
+        "dependencies": {
+          "Avalonia": "[11.3.18, )",
+          "Avalonia.Themes.Fluent": "[11.3.18, )",
+          "DvmConsole.Application": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.ptt.abstractions": {
+        "type": "Project"
+      },
+      "dvmconsole.storage": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Application": "[0.7.0, )",
+          "DvmConsole.Core": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.vocoder.abstractions": {
+        "type": "Project"
+      },
+      "dvmconsole.vocoder.native": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Vocoder.Abstractions": "[0.7.0, )"
+        }
+      }
+    },
+    "net10.0-ios26.5/iossimulator-arm64": {
+      "HarfBuzzSharp.NativeAssets.iOS": {
+        "type": "Transitive",
+        "resolved": "8.3.1.1",
+        "contentHash": "JNGHDIteZNRXv7Aj5OcVeolWqUU7YzLXBbLV79a4cot+BEUHagocP2Ed2qAfkr2a2B2Ena6BXOta7bBt2xHEtw=="
+      },
+      "HarfBuzzSharp.NativeAssets.Linux": {
+        "type": "Transitive",
+        "resolved": "8.3.1.1",
+        "contentHash": "3EZ1mpIiKWRLL5hUYA82ZHteeDIVaEA/Z0rA/wU6tjx6crcAkJnBPwDXZugBSfo8+J3EznvRJf49uMsqYfKrHg=="
+      },
+      "SkiaSharp.NativeAssets.iOS": {
+        "type": "Transitive",
+        "resolved": "2.88.9",
+        "contentHash": "WX97CFiCZSxG7mM3U6zf3rKW2gJHRe18mA0bwkQ8iU/+PYJailNvcXH878XuEigXHfWO+73UJM8Ivw4CWtC60w=="
+      },
+      "SkiaSharp.NativeAssets.Linux": {
+        "type": "Transitive",
+        "resolved": "2.88.9",
+        "contentHash": "cWSaJKVPWAaT/WIn9c8T5uT/l4ETwHxNJTkEOtNKjphNo8AW6TF9O32aRkxqw3l8GUdUo66Bu7EiqtFh/XG0Zg==",
+        "dependencies": {
+          "SkiaSharp": "2.88.9"
+        }
+      }
+    }
+  }
+}

@@ -29,6 +29,7 @@ public sealed class ConfigurationOperatorState
     public CodeplugGroupState GroupState { get; set; } = new();
     public CodeplugStudioState StudioState { get; set; } = new();
     public bool RetainPatchStateOnStartup { get; set; }
+    public bool MobileAutoConnect { get; set; }
     public bool RestoreSelectedChannelsOnStartup { get; set; } = true;
     public List<string> SelectedWebStreams { get; set; } = [];
     public Dictionary<string, bool> TransmitEncryptionStates { get; set; }
@@ -57,6 +58,7 @@ public sealed class ConfigurationOperatorState
             StudioState = (StudioState ?? new CodeplugStudioState()).Clone(),
             RetainPatchStateOnStartup = RetainPatchStateOnStartup,
             RestoreSelectedChannelsOnStartup = RestoreSelectedChannelsOnStartup,
+            MobileAutoConnect = MobileAutoConnect,
             SelectedWebStreams = includeWebStreamAuthorization
                 ? [.. SelectedWebStreams ?? []]
                 : [],

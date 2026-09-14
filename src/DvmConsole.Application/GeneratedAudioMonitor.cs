@@ -74,6 +74,7 @@ public sealed class GeneratedAudioMonitor : IAsyncDisposable
     private readonly Func<IAudioBackend> createAudioBackend;
     private readonly Func<PcmAudioFormat, IPcmPlaybackPacer> createPacer;
     private readonly Func<string?> getOutputDeviceId;
+    private readonly Func<CancellationToken, ValueTask<IAudioPlayback>>? openSharedOutput;
     private readonly Func<IAudioBackend, string?, CancellationToken, Task<AudioDeviceInfo>> resolveOutput;
     private readonly IApplicationDelay delay;
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -84,8 +85,10 @@ public sealed class GeneratedAudioMonitor : IAsyncDisposable
         Func<string?> getOutputDeviceId,
         Func<IAudioBackend, string?, CancellationToken, Task<AudioDeviceInfo>>? resolveOutput = null,
         IApplicationDelay? delay = null,
-        Func<PcmAudioFormat, IPcmPlaybackPacer>? createPacer = null)
+        Func<PcmAudioFormat, IPcmPlaybackPacer>? createPacer = null,
+        Func<CancellationToken, ValueTask<IAudioPlayback>>? openSharedOutput = null)
     {
+        this.openSharedOutput = openSharedOutput;
         this.createAudioBackend = createAudioBackend ??
             throw new ArgumentNullException(nameof(createAudioBackend));
         this.getOutputDeviceId = getOutputDeviceId ??
@@ -107,14 +110,11 @@ public sealed class GeneratedAudioMonitor : IAsyncDisposable
         try
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            using IAudioBackend backend = createAudioBackend();
-            AudioDeviceInfo output = await resolveOutput(
-                backend,
-                getOutputDeviceId(),
-                cancellationToken).ConfigureAwait(false);
-            await using IAudioPlayback playback = backend.OpenPlayback(
-                output,
-                PcmAudioFormat.Voice8KhzMono16Bit);
+            using IAudioBackend? backend = openSharedOutput is null ? createAudioBackend() : null;
+            await using IAudioPlayback playback = openSharedOutput is not null
+                ? await openSharedOutput(cancellationToken).ConfigureAwait(false)
+                : backend!.OpenPlayback(await resolveOutput(backend, getOutputDeviceId(), cancellationToken)
+                    .ConfigureAwait(false), PcmAudioFormat.Voice8KhzMono16Bit);
 
             IPcmPlaybackPacer pacer = createPacer(playback.Format);
             short[] outputBuffer = ArrayPool<short>.Shared.Rent(PlaybackPrefetchSamples);

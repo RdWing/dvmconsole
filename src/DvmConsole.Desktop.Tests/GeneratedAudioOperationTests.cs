@@ -8,6 +8,37 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class GeneratedAudioOperationTests
 {
     [Fact]
+    public async Task WithdrawalCancelsAffectedActiveAndQueuedWorkButKeepsOtherTargets()
+    {
+        var port = new Port();
+        await using var owner = new GeneratedAudioOperation(port);
+        TransmitTarget Target(string name) => new(new ChannelViewModel(new DvmConsole.Core.Configuration.ChannelConfiguration
+        { Name = name, System = "Test", Mode = "p25", Tgid = "100" }).ToTransmitDescriptor(), null!);
+        var affected = Target("Affected");
+        var other = Target("Other");
+        Task<Exception?> active = owner.SendAsync([affected], new short[] { 1 });
+        await port.Started.WaitAsync();
+        Task<Exception?> queued = owner.SendAsync([affected], new short[] { 2 });
+        Task<Exception?> unrelated = owner.SendAsync([other], new short[] { 3 });
+
+        await owner.CancelTargetsAsync([affected.Channel.Id]);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => active);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
+        await port.Started.WaitAsync();
+        Assert.Equal(2, port.Admissions);
+        port.Continue.Release();
+        await unrelated;
+        Assert.False(port.Muted);
+        Assert.Equal(2, port.Restorations);
+
+        Task<Exception?> fresh = owner.SendAsync([affected], new short[] { 4 });
+        await port.Started.WaitAsync();
+        port.Continue.Release();
+        await fresh;
+        Assert.Equal(3, port.Transmissions);
+    }
+
+    [Fact]
     public async Task CompleteLifecycleIsSerializedThroughRestoration()
     {
         var port = new Port();

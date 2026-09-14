@@ -24,6 +24,7 @@ public interface IConfigurationStudioNavigationViewModel
     string FileNavigationHeading { get; }
     IEnumerable ConfigurationHierarchy { get; }
     IConfigurationHierarchyNode? SelectedHierarchyNode { get; set; }
+    void ActivateHierarchyNode(IConfigurationHierarchyNode node);
 }
 
 public sealed class ConfigurationStudioSectionEventArgs(ConfigurationStudioSection section) : EventArgs

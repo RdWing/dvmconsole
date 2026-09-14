@@ -15,6 +15,33 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class PatchForwardingCoordinatorTests
 {
+    [Fact]
+    public async Task PauseJoinsTransmittersAndRecoveryDoesNotReplayTheInterruptedCall()
+    {
+        (ChannelViewModel source, FakeEndpoint sourceSystem) = Create("Source", 100, 1001);
+        (ChannelViewModel target, FakeEndpoint targetSystem) = Create("Target", 200, 2002);
+        await using var coordinator = new PatchForwardingCoordinator([sourceSystem, targetSystem]);
+        coordinator.ApplyMemberships(new Dictionary<string, IReadOnlyList<PatchMemberAddress>>
+        { ["Patch"] = [new("Source", 100), new("Target", 200)] });
+        ObserveVoice(coordinator, source, 77, 7001);
+        coordinator.ObserveDecodedSamples(source, 77, 7001, ActiveSamples());
+        await WaitForSentCountAsync(targetSystem, 1);
+        Task pause = coordinator.PauseForwardingAsync();
+        Assert.Same(pause, coordinator.PauseForwardingAsync());
+        await pause.WaitAsync(TimeSpan.FromSeconds(5));
+        int stoppedCount = targetSystem.Sent.Count;
+        Assert.Equal(0, coordinator.CaptureQueueHealth().Depth);
+        Assert.Equal(["Patch"], coordinator.GroupNames);
+        coordinator.ResumeForwarding();
+        ObserveVoice(coordinator, source, 77, 7001);
+        coordinator.ObserveDecodedSamples(source, 77, 7001, ActiveSamples());
+        Assert.Equal(stoppedCount, targetSystem.Sent.Count);
+        ObserveVoice(coordinator, source, 78, 7001);
+        coordinator.ObserveDecodedSamples(source, 78, 7001, ActiveSamples());
+        await WaitForSentCountAsync(targetSystem, stoppedCount + 1);
+        coordinator.StopSource(source, 78);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -39,9 +66,11 @@ public sealed class PatchForwardingCoordinatorTests
             coordinator.ObserveDecodedSamples(source, 77, 7001, new short[160 * 8]);
             await WaitUntilAsync(() => coordinator.CaptureQueueHealth().Depth == 7);
             await WaitUntilAsync(() => time.HasTimerWithin(TimeSpan.FromMilliseconds(20)));
-            // Timer continuations may run inline. Keep the controlled clock
-            // callback off the test thread while the transport barrier is held.
-            firstTick = Task.Run(() => time.Advance(TimeSpan.FromMilliseconds(20)));
+            // Timer continuations may run inline and block at the transport
+            // barrier. Give this controlled callback its own thread so pool
+            // saturation cannot prevent the test from reaching that barrier.
+            firstTick = Task.Factory.StartNew(() => time.Advance(TimeSpan.FromMilliseconds(20)),
+                CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             await targetSystem.SendEntered.WaitAsync(TimeSpan.FromSeconds(1));
             if (overflowCurrentCall)
             {
@@ -575,24 +604,33 @@ public sealed class PatchForwardingCoordinatorTests
         {
             ["Patch"] = [new("Source", 100), new("Target", 200)]
         });
-        targetSystem.BlockNextSendUntil(releaseSend);
-        ObserveVoice(coordinator, source, streamId: 77, sourceId: 7001);
-        coordinator.ObserveDecodedSamples(source, streamId: 77, sourceId: 7001, ActiveSamples());
-        await targetSystem.SendEntered.WaitAsync(TimeSpan.FromSeconds(1));
+        try
+        {
+            targetSystem.BlockNextSendUntil(releaseSend);
+            ObserveVoice(coordinator, source, streamId: 77, sourceId: 7001);
+            coordinator.ObserveDecodedSamples(source, streamId: 77, sourceId: 7001, ActiveSamples());
+            await targetSystem.SendEntered.WaitAsync(TimeSpan.FromSeconds(10));
 
-        using var canceledWait = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => coordinator.DisposeAsync(canceledWait.Token).AsTask());
+            using var canceledWait = new CancellationTokenSource();
+            Task canceledCleanup = coordinator.DisposeAsync(canceledWait.Token).AsTask();
+            canceledWait.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceledCleanup);
 
-        Task sharedCleanup = coordinator.DisposeAsync().AsTask();
-        Assert.False(sharedCleanup.IsCompleted);
-        releaseSend.Set();
-        await sharedCleanup.WaitAsync(TimeSpan.FromSeconds(1));
+            Task sharedCleanup = coordinator.DisposeAsync().AsTask();
+            Assert.False(sharedCleanup.IsCompleted);
+            releaseSend.Set();
+            await sharedCleanup.WaitAsync(TimeSpan.FromSeconds(10));
 
-        Assert.Equal(2, targetSystem.Sent.Count);
-        Assert.Equal(
-            (byte)AnalogAudioFrameType.Terminator,
-            targetSystem.Sent[^1].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
+            Assert.Equal(2, targetSystem.Sent.Count);
+            Assert.Equal(
+                (byte)AnalogAudioFrameType.Terminator,
+                targetSystem.Sent[^1].Payload[AnalogVoicePacketCodec.FrameTypeOffset]);
+        }
+        finally
+        {
+            releaseSend.Set();
+            await coordinator.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+        }
     }
 
     private static (ChannelViewModel Channel, FakeEndpoint System) Create(string system, uint talkgroup, uint sourceId, bool connected = true)
@@ -687,7 +725,8 @@ public sealed class PatchForwardingCoordinatorTests
             if (release is not null)
             {
                 sendEntered.TrySetResult();
-                release.Wait(TimeSpan.FromSeconds(2));
+                // Every blocking-send fixture releases this barrier in finally.
+                release.Wait();
             }
             if (Interlocked.Exchange(ref throwOnNextSend, 0) != 0)
             {

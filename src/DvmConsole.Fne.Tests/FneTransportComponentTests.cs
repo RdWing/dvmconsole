@@ -138,6 +138,8 @@ public sealed class FneTransportComponentTests
     [Fact]
     public async Task SendingClosingFrameCompletesStoppingTransportAndBlockedReceive()
     {
+        using var remote = new System.Net.Sockets.UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var endpoint = (IPEndPoint)remote.Client.LocalEndPoint!;
         var lifetime = new FneTransportLifetime();
         UdpReceiver receiver;
         using (FneTransportSessionContext.Use(
@@ -147,7 +149,7 @@ public sealed class FneTransportComponentTests
         {
             receiver = new UdpReceiver();
         }
-        receiver.Connect(new IPEndPoint(IPAddress.Loopback, 62031));
+        receiver.Connect(endpoint);
         Task<UdpFrame> receive = receiver.Receive();
         byte[] closing = new byte[32];
         closing[18] = Constants.NET_FUNC_RPT_CLOSING;
@@ -156,12 +158,14 @@ public sealed class FneTransportComponentTests
         lifetime.BeginStop();
         receiver.Send(new UdpFrame
         {
-            Endpoint = new IPEndPoint(IPAddress.Loopback, 62031),
+            Endpoint = endpoint,
             Message = closing
         });
 
         UdpFrame stopped = await receive.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.True(lifetime.IsStopped);
         Assert.Empty(stopped.Message);
+        var delivered = await remote.ReceiveAsync().WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(closing, delivered.Buffer);
     }
 }

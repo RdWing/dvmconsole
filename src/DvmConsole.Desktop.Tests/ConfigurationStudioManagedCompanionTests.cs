@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2025-2026 RdWing
 // SPDX-License-Identifier: AGPL-3.0-only
 
+using DvmConsole.Storage;
 using DvmConsole.Application;
 using DvmConsole.Core.Configuration;
 using DvmConsole.Core.Settings;
@@ -75,7 +76,7 @@ public sealed class ConfigurationStudioManagedCompanionTests
                 null,
                 codeplugPath,
                 runtime,
-                new DesktopConfigurationStudioCompanionSource(),
+                new MaterializedConfigurationStudioCompanionSource(),
                 new DesktopConfigurationStudioPreviewFactory(),
                 new ConfigurationStudioInitialState(
                     new Dictionary<string, ConfigurationStudioPosition>(),
@@ -143,7 +144,7 @@ public sealed class ConfigurationStudioManagedCompanionTests
                 null,
                 "managed:new-user",
                 runtime,
-                new DesktopConfigurationStudioCompanionSource(),
+                new MaterializedConfigurationStudioCompanionSource(),
                 new DesktopConfigurationStudioPreviewFactory(),
                 new ConfigurationStudioInitialState(
                     new Dictionary<string, ConfigurationStudioPosition>(),
@@ -300,7 +301,7 @@ public sealed class ConfigurationStudioManagedCompanionTests
                     ["keys.clear"] = "current-key-content",
                     ["alias.yml"] = "current-alias-content"
                 });
-            var destination = new DesktopConfigurationDocumentSet(destinationPath);
+            var destination = new FileConfigurationDocumentSet(destinationPath);
 
             Directory.Delete(sourceDirectory, recursive: true);
 
@@ -340,7 +341,7 @@ public sealed class ConfigurationStudioManagedCompanionTests
                 null,
                 "managed:new",
                 runtime,
-                new DesktopConfigurationStudioCompanionSource(),
+                new MaterializedConfigurationStudioCompanionSource(),
                 new DesktopConfigurationStudioPreviewFactory(),
                 new ConfigurationStudioInitialState(
                     new Dictionary<string, ConfigurationStudioPosition>(),
@@ -390,7 +391,7 @@ public sealed class ConfigurationStudioManagedCompanionTests
                 runtime.ConfigurationReference?.Id,
                 codeplugPath,
                 runtime,
-                new DesktopConfigurationStudioCompanionSource(),
+                new MaterializedConfigurationStudioCompanionSource(),
                 new DesktopConfigurationStudioPreviewFactory(),
                 new ConfigurationStudioInitialState(
                     new Dictionary<string, ConfigurationStudioPosition>(),
@@ -449,7 +450,7 @@ public sealed class ConfigurationStudioManagedCompanionTests
 
         try
         {
-            var destination = new DesktopConfigurationDocumentSet(primaryPath);
+            var destination = new FileConfigurationDocumentSet(primaryPath);
             await using IExportDocumentTransaction transaction = await destination.BeginTransactionAsync();
             await WriteAsync(transaction.Primary, "replacement-primary");
             IWritableDocument companion = await transaction.CreateCompanionAsync("keys.clear");
@@ -501,7 +502,7 @@ public sealed class ConfigurationStudioManagedCompanionTests
         File.WriteAllText(primaryPath, "original");
         try
         {
-            var destination = new DesktopConfigurationDocumentSet(primaryPath);
+            var destination = new FileConfigurationDocumentSet(primaryPath);
             await using IExportDocumentTransaction first = await destination.BeginTransactionAsync();
             await using IExportDocumentTransaction second = await destination.BeginTransactionAsync();
             await WriteAsync(first.Primary, "first");
@@ -533,7 +534,7 @@ public sealed class ConfigurationStudioManagedCompanionTests
         string primaryPath = Path.Combine(directory, "codeplug.yml");
         try
         {
-            var destination = new DesktopConfigurationDocumentSet(primaryPath);
+            var destination = new FileConfigurationDocumentSet(primaryPath);
             await using IExportDocumentTransaction transaction = await destination.BeginTransactionAsync();
             await WriteAsync(transaction.Primary, "secret-primary");
             IWritableDocument companion = await transaction.CreateCompanionAsync("keys.clear");

@@ -411,6 +411,7 @@
           "DvmConsole.Configuration.Yaml": "[0.7.0, )",
           "DvmConsole.Core": "[0.7.0, )",
           "DvmConsole.FneClient": "[0.7.0, )",
+          "DvmConsole.FneIntegration": "[0.7.0, )",
           "DvmConsole.Media": "[0.7.0, )",
           "DvmConsole.Operations": "[0.7.0, )",
           "DvmConsole.Presentation": "[0.7.0, )",
@@ -503,6 +504,13 @@
           "DvmConsole.Fne": "[0.7.0, )"
         }
       },
+      "dvmconsole.fneintegration": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Application": "[0.7.0, )",
+          "DvmConsole.FneClient": "[0.7.0, )"
+        }
+      },
       "dvmconsole.media": {
         "type": "Project",
         "dependencies": {
@@ -511,6 +519,13 @@
           "DvmConsole.Core": "[0.7.0, )",
           "DvmConsole.Fne": "[0.7.0, )",
           "DvmConsole.Vocoder.Abstractions": "[0.7.0, )"
+        }
+      },
+      "dvmconsole.mobile": {
+        "type": "Project",
+        "dependencies": {
+          "DvmConsole.Presentation": "[0.7.0, )",
+          "Markdown.Avalonia.Tight": "[11.0.3, )"
         }
       },
       "dvmconsole.operations": {

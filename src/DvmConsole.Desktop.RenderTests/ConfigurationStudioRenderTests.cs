@@ -1406,6 +1406,7 @@ public sealed class ConfigurationStudioRenderTests
             WrapPanel footerActions = sharedStudio.FindControl<WrapPanel>("FooterActions")!;
             foreach (string automationName in new[]
                      {
+                         "Configuration validation details",
                          "Save configuration copy",
                          "Export configuration YAML",
                          "Review and save configuration"
@@ -1413,7 +1414,7 @@ public sealed class ConfigurationStudioRenderTests
             {
                 Button action = Assert.Single(
                     sharedStudio.GetVisualDescendants().OfType<Button>(),
-                    button => string.Equals(
+                    button => button.IsEffectivelyVisible && string.Equals(
                         AutomationProperties.GetName(button),
                         automationName,
                         StringComparison.Ordinal));
@@ -1467,7 +1468,8 @@ public sealed class ConfigurationStudioRenderTests
     [InlineData(599, true)]
     [InlineData(390, false)]
     [InlineData(360, true)]
-    public async Task SharedConfigurationStudioRendersAtMobileWidths(double width, bool dark)
+    [InlineData(320, true, true)]
+    public async Task SharedConfigurationStudioRendersAtMobileWidths(double width, bool dark, bool touch = false)
     {
         string demoCodeplug = Path.Combine(AppContext.BaseDirectory, "Demo", "codeplug.yml");
         using DemoSessionState demoState = DemoSessionState.Create();
@@ -1527,14 +1529,14 @@ public sealed class ConfigurationStudioRenderTests
             host.UpdateLayout();
             AssertPortableZonesPage(zones, width);
 
-            var shell = new ConfigurationStudioView { DataContext = viewModel };
+            var shell = new ConfigurationStudioView { DataContext = viewModel, UseTouchLayout = touch };
             host.Content = shell;
             host.UpdateLayout();
             await App.WaitForRenderAsync();
             host.UpdateLayout();
             Grid shellLayout = shell.FindControl<Grid>("ShellLayout")!;
             Grid pageHost = shell.FindControl<Grid>("PageHost")!;
-            Border footer = shell.FindControl<Border>("Footer")!;
+            Border footer = shell.FindControl<Border>(touch ? "TouchFooter" : "Footer")!;
             Assert.True(
                 shellLayout.DesiredSize.Width <= shell.Bounds.Width + 1,
                 $"Studio shell desired width {shellLayout.DesiredSize.Width} exceeded {shell.Bounds.Width} at {width} logical pixels.");
@@ -1553,11 +1555,8 @@ public sealed class ConfigurationStudioRenderTests
             TextBox channelSearch = shell.ZonesView.FindControl<TextBox>("ChannelSearchBox")!;
             AssertControlContainedIn(zoneHeading, pageHost, shell, "zone heading", width);
             AssertControlContainedIn(channelSearch, pageHost, shell, "channel search", width);
-            WrapPanel footerActions = shell.FindControl<WrapPanel>("FooterActions")!;
-            Assert.True(
-                footerActions.Bounds.Right <= shell.Bounds.Width + 1,
-                $"Studio footer exceeded the {width}-pixel viewport.");
-            foreach (Button action in footerActions.Children.OfType<Button>())
+            foreach (Button action in footer.GetVisualDescendants().OfType<Button>()
+                         .Where(button => button.IsEffectivelyVisible))
             {
                 Point? actionOrigin = action.TranslatePoint(default, shell);
                 Assert.True(
@@ -1695,9 +1694,16 @@ public sealed class ConfigurationStudioRenderTests
             Assert.NotEmpty(narrowList.GetVisualDescendants().OfType<ListBoxItem>());
             Point paneOrigin = channelPane.TranslatePoint(default, page) ?? default;
             Point inspectorOrigin = inspector.TranslatePoint(default, page) ?? default;
-            Assert.True(
-                paneOrigin.Y + channelPane.Bounds.Height <= inspectorOrigin.Y + 1,
-                "The channel list overlapped the zone/channel inspector.");
+            if (inspector.IsVisible)
+                Assert.True(
+                    paneOrigin.Y + channelPane.Bounds.Height <= inspectorOrigin.Y + 1,
+                    "The channel list overlapped the zone/channel inspector.");
+            else
+            {
+                Assert.True(page.FindControl<Button>("OpenInspector")!.IsVisible);
+                Assert.True(channelPane.Bounds.Height >= page.Bounds.Height - 1,
+                    "The compact channel page did not use the available height.");
+            }
 
             Point headingOrigin = heading.TranslatePoint(default, header) ?? default;
             Point searchOrigin = search.TranslatePoint(default, header) ?? default;
@@ -1844,7 +1850,7 @@ public sealed class ConfigurationStudioRenderTests
         viewModel.Redo();
         Assert.Equal(alternateSystem, viewModel.SelectedZoneSystemName);
 
-        var savePlanner = new DesktopConfigurationStudioSavePlanner(viewModel, settingsStore);
+        var savePlanner = new ConfigurationStudioSavePlanner(viewModel, settingsStore);
         ConfigurationSavePlan plan = savePlanner.CreatePlan(demoCodeplug);
         string json = plan.Files.Single(file => file.Category == "Operator settings").Content;
         UserSettings settings = JsonSerializer.Deserialize<UserSettings>(json, JsonOptions)!;
@@ -2160,7 +2166,7 @@ public sealed class ConfigurationStudioRenderTests
         viewModel.Configuration.Groups[0].Name = "Regional Operations";
         viewModel.CommitFieldEdit();
 
-        var savePlanner = new DesktopConfigurationStudioSavePlanner(viewModel, settingsStore);
+        var savePlanner = new ConfigurationStudioSavePlanner(viewModel, settingsStore);
         ConfigurationSavePlan plan = savePlanner.CreatePlan(activeCodeplug);
         string json = plan.Files.Single(file => file.Category == "Operator settings").Content;
         UserSettings migrated = JsonSerializer.Deserialize<UserSettings>(json, JsonOptions)!;

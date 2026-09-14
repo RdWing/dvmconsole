@@ -64,6 +64,47 @@ public sealed class LocalTonePlayerTests
         Assert.Single(backend.Playbacks[0].Frames); // Warmup only on the rejected route.
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SharedPermitOutputRequiresCallbacksWithoutOpeningAnotherDevice(bool suppressCallbacks)
+    {
+        var backend = new FakeAudioBackend { FailOpenPlayback = true };
+        var playback = new FakePlayback(suppressCallbacks, TimeSpan.Zero);
+        int activations = 0;
+        await using var player = new LocalTonePlayer(() => backend, () => null,
+            delayAsync: (_, _) => Task.CompletedTask,
+            openSharedOutput: _ => ValueTask.FromResult<IAudioPlayback>(new SharedPlayback(playback)));
+        Task<LocalTonePlaybackResult> play = player.PlayTalkPermitAsync(false, false,
+            beforeCueAsync: _ => { activations++; return Task.CompletedTask; });
+        if (suppressCallbacks)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => play);
+            Assert.Equal(0, activations);
+        }
+        else
+        {
+            LocalTonePlaybackResult result = await play;
+            Assert.Equal(1, result.Attempts);
+            Assert.Equal(1, activations);
+        }
+        Assert.Equal(0, backend.OpenPlaybackCount);
+        Assert.True(playback.IsDisposed);
+    }
+
+    private sealed class SharedPlayback(FakePlayback inner) : IAudioPlayback, IPhysicalAudioOutputDiagnosticsSource
+    {
+        public PcmAudioFormat Format => inner.Format;
+        public int? QueuedSamples => inner.QueuedSamples;
+        public PhysicalAudioOutputDiagnostics GetPhysicalOutputDiagnostics()
+            => new(TimeSpan.Zero, TimeSpan.Zero, inner.OutputCallbackCount);
+        public ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default)
+            => inner.WriteAsync(samples, cancellationToken);
+        public ValueTask FlushAsync(CancellationToken cancellationToken = default) => inner.FlushAsync(cancellationToken);
+        public ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default) => inner.DrainAsync(cancellationToken);
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+    }
+
     private sealed class DefaultAliasBackend : IAudioBackend, IDefaultAudioDeviceIdentityProvider
     {
         public string DefaultIdentity { get; set; } = "first";

@@ -39,6 +39,7 @@ public sealed class PcmRateConverter
     // Express the next source position in output-rate units. Advancing by the
     // input rate keeps rational rate pairs deterministic across any chunking.
     private long sourcePositionNumerator;
+    private short[] borrowedOutput = [];
 
     public PcmRateConverter(int inputRate, int outputRate, int channels = 1)
     {
@@ -61,6 +62,24 @@ public sealed class PcmRateConverter
             firstFilteredFrame = new short[channels];
             secondFilteredFrame = new short[channels];
         }
+    }
+
+    /// <summary>
+    /// Converts into reusable storage. Consume the result synchronously, before
+    /// the next call or reuse of the input buffer. Copy it if ownership is needed.
+    /// Like the other conversion methods, this method is not thread-safe.
+    /// </summary>
+    public ReadOnlySpan<short> ConvertBorrowed(ReadOnlySpan<short> samples)
+    {
+        if (samples.IsEmpty)
+            return ReadOnlySpan<short>.Empty;
+        int maximumOutputSamples = GetMaximumOutputSampleCount(samples.Length);
+        if (inputRate == outputRate)
+            return samples;
+        if (borrowedOutput.Length < maximumOutputSamples)
+            borrowedOutput = new short[maximumOutputSamples];
+        int count = Convert(samples, borrowedOutput);
+        return borrowedOutput.AsSpan(0, count);
     }
 
     public short[] Convert(ReadOnlySpan<short> samples)

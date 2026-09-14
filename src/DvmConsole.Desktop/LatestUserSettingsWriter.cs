@@ -131,13 +131,11 @@ internal class LatestSnapshotWriter<TSnapshot> : IAsyncDisposable
         {
             await wake.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-            while (TryGetPending(out TSnapshot? snapshot, out long revision, out bool force))
+            while (TryGetPending(out TSnapshot? snapshot, out long revision, out bool force,
+                       out CancellationToken interruptToken))
             {
                 if (!force && debounce > TimeSpan.Zero)
                 {
-                    CancellationToken interruptToken;
-                    lock (sync)
-                        interruptToken = debounceInterrupt.Token;
                     using var delayCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                         cancellationToken,
                         interruptToken);
@@ -231,7 +229,8 @@ internal class LatestSnapshotWriter<TSnapshot> : IAsyncDisposable
     private bool TryGetPending(
         out TSnapshot snapshot,
         out long revision,
-        out bool force)
+        out bool force,
+        out CancellationToken interruptToken)
     {
         lock (sync)
         {
@@ -240,12 +239,16 @@ internal class LatestSnapshotWriter<TSnapshot> : IAsyncDisposable
                 snapshot = null!;
                 revision = 0;
                 force = false;
+                interruptToken = default;
                 return false;
             }
 
             snapshot = latestSnapshot;
             revision = requestedRevision;
             force = forceThroughRevision > completedRevision;
+            // Capture alongside the revision so a flush between this read and
+            // the delay cancels the token we actually wait on.
+            interruptToken = debounceInterrupt.Token;
             return true;
         }
     }

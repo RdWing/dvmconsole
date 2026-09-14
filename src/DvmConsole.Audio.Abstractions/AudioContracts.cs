@@ -104,7 +104,16 @@ public interface IAudioPlayback : IAsyncDisposable
     // different sample rate.
     int? QueuedSamples => null;
     ValueTask WriteAsync(ReadOnlyMemory<short> samples, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Makes all accepted PCM eligible for playback, including an incomplete
+    /// buffering cushion or final partial frame. Does not discard queued audio
+    /// or wait for its presentation. Immediate-write endpoints may do nothing.
+    /// </summary>
     ValueTask FlushAsync(CancellationToken cancellationToken = default);
+    /// <summary>Completes buffered input and waits for queued playback when supported.
+    /// Returns the number of interleaved samples drained, or null when unavailable.
+    /// Owners cancel writes and dispose their playback to stop and discard instead.
+    /// </summary>
     ValueTask<int?> DrainAsync(CancellationToken cancellationToken = default)
         => ValueTask.FromResult<int?>(null);
 }

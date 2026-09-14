@@ -45,19 +45,10 @@ internal sealed class AudioSettingsViewModel : INotifyPropertyChanged
         this.selectedAudioProcessingMode = selectedAudioProcessingMode;
         audioInputPresetNameText = settings.AudioInputPresetName;
 
-        foreach ((string key, string label, VocoderMode mode) in new[]
-        {
-            (RxAudioProcessingModeSetting.P25Phase1Mode, "P25 Phase 1", VocoderMode.P25Imbe),
-            (RxAudioProcessingModeSetting.P25Phase2Mode, "P25 Phase 2", VocoderMode.P25Phase2Ambe),
-            (RxAudioProcessingModeSetting.DmrMode, "DMR", VocoderMode.DmrAmbe),
-            (RxAudioProcessingModeSetting.NxdnMode, "NXDN", VocoderMode.NxdnAmbe)
-        })
+        foreach (var mode in DvmConsole.Application.ConsoleReceiveProcessingProfile.Modes)
         {
             rxAudioProcessingModes.Add(new RxAudioProcessingModeViewModel(
-                key,
-                label,
-                mode,
-                settings.RxAudioProcessingOptions[key]));
+                mode.SettingsKey, mode.Name, mode.Mode, settings.RxAudioProcessingOptions[mode.SettingsKey]));
         }
         foreach (AudioInputPresetSetting preset in settings.AudioInputPresets)
             audioInputPresets.Add(new AudioInputPresetViewModel(preset));

@@ -223,6 +223,7 @@ public sealed class FneConnection : IAsyncDisposable
                 RemoveTrafficHandler(value);
         }
     }
+    public event EventHandler<P25SubscriberResponse>? SubscriberResponseReceived;
     public event EventHandler<FneKeyResponse>? KeyResponseReceived;
     public event EventHandler<FneTalkgroupAuthority>? TalkgroupAuthorityChanged;
 
@@ -841,6 +842,9 @@ public sealed class FneConnection : IAsyncDisposable
 
     private void HandleP25DataReceived(object? sender, P25DataReceivedEvent args)
     {
+        if (SubscriberResponseReceived is not null && args.DUID == P25DUID.TSDU &&
+            P25SubscriberResponseCodec.TryDecode(args.Data, out var response))
+            Raise(SubscriberResponseReceived, response);
         long boundaryTimestamp = Stopwatch.GetTimestamp();
         PublishTraffic(FneTrafficMapper.FromP25(
             args,

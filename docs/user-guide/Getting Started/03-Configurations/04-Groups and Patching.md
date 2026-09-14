@@ -1,6 +1,8 @@
 # Groups and patching
 
-Manage patch and multi-select groups in Configuration Studio.
+Use patch groups to forward received calls between channels, or multi-select
+groups to transmit to several channels together. Manage both in Configuration
+Studio.
 
 Open it from:
 
@@ -10,12 +12,20 @@ View > Groups
 
 **View > Groups** opens Studio on the Groups page. The codeplug stores each
 group's name and type. DVM Console stores membership, one-way direction, source
-order, and enabled state as operator state for the managed configuration. Two
+order, and enabled state in the saved settings for that configuration. Two
 managed configurations can use the same group name without sharing state.
+
+On iPhone and iPad, open the settings gear, choose **Edit active configuration**,
+then **Browse > Groups**. The active configuration includes an **Active console
+groups** editor for membership, one-way routing, and patch enable state. Choose
+**Save and apply** to apply a patch's changes. The same controls are available
+under **Settings > Groups and patches**. Save and load new group definitions
+before editing their operational membership. For multi-select groups, add the
+saved members to TX selection and use **TX selected** on Console.
 
 ![Groups page](../../Assets/configuration-studio-groups.png)
 
-When Studio is editing the active codeplug, enable controls and multi-select PTT
+On desktop, when Studio is editing the active codeplug, enable controls and multi-select PTT
 work immediately. Those controls are disabled
 for a new, inactive, or unsaved codeplug.
 
@@ -26,7 +36,7 @@ for a new, inactive, or unsaved codeplug.
 A patch group forwards received audio from one member to other members in the
 group.
 
-DVM Console applies the source system's adaptive receive jitter buffer once,
+DVM Console applies the source system's configured receive jitter buffer once,
 then decodes the source to 8 kHz PCM and re-encodes it for each destination
 protocol. Destination audio follows the protocol's 20 ms transmit clock instead
 of arriving in decoded batches. This allows cross-protocol patches; source
@@ -51,7 +61,7 @@ progressively older. DVM Console limits that backlog:
 - A skipped or shortened source call does not restart midway. A new source
   call can forward once the destination has capacity again.
 
-Open **View > Debug Logs** and search for `PATCH` to find overload warnings
+Open **View > Debug Logs** on desktop or **Settings → Diagnostics → Logs** on mobile and search for `PATCH` to find overload warnings
 identifying the affected destination. Source receive audio and TAR recordings
 are independent of this forwarding limit. The one-second threshold measures
 queued audio age, not total forwarding delay: protocol completion or a stalled
@@ -209,8 +219,8 @@ indicator takes priority in the card indicator area.
 
 | Item | Persists by default | Notes |
 | --- | --- | --- |
-| Patch members | Yes | Always sticky |
-| Patch enabled state | No | Only sticky when Retain Patch State on Startup is enabled |
+| Patch members | Yes | Retained when the patch is disabled |
+| Patch enabled state | No | Requires Retain Patch State on Startup |
 | Multi-select members | Yes | Stored for the managed configuration |
 | Edit mode | No | Clears when editing stops or the Groups window closes |
 

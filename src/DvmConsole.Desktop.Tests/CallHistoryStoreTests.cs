@@ -3,6 +3,7 @@
 
 using System.Collections.ObjectModel;
 using DvmConsole.Desktop;
+using DvmConsole.Presentation;
 using DvmConsole.FneClient;
 using Xunit;
 
@@ -10,6 +11,31 @@ namespace DvmConsole.Desktop.Tests;
 
 public sealed class CallHistoryStoreTests
 {
+    [Fact]
+    public void ProjectsApplicationTransmitIdentityAndEncryptionWithoutRepublishing()
+    {
+        var history = new DvmConsole.Application.ConsoleCallHistory();
+        var store = new CallHistoryStore(history);
+        store.AddConsoleTransmission(DateTimeOffset.UnixEpoch, "System", "Dispatch", 42, 100,
+            FneTrafficProtocol.P25, 77, " Console ", true, 0x84, 12);
+
+        var record = Assert.Single(history.Snapshot);
+        CallHistoryEntry entry = Assert.Single(store.Entries);
+        Assert.Equal(record.Id, entry.Id);
+        Assert.True(entry.IsConsoleTransmission);
+        Assert.Equal("Console", entry.CallerText);
+        Assert.True(entry.EncryptionKnown);
+        Assert.True(entry.Encrypted);
+        Assert.Equal((byte)0x84, entry.EncryptionAlgorithmId);
+        Assert.Equal((ushort)12, entry.EncryptionKeyId);
+        store.ProjectRuntimeRecord(record);
+        Assert.Same(entry, Assert.Single(store.Entries));
+        Assert.Same(record, Assert.Single(history.Snapshot));
+        Assert.True(store.CompleteConsoleTransmission("System", FneTrafficProtocol.P25, 77,
+            DateTimeOffset.UnixEpoch.AddSeconds(2)));
+        Assert.Equal(history.Find(entry.Id)!.EndedAt, entry.EndTimestamp);
+    }
+
     [Fact]
     public void UnchangedHistoryViewPublishesNoCollectionMutations()
     {
@@ -129,6 +155,30 @@ public sealed class CallHistoryStoreTests
         Assert.Equal(TimeSpan.FromSeconds(2.25), entry.Duration);
         Assert.Equal("2.3s", entry.DurationText);
         Assert.False(store.Complete("Other", FneTrafficProtocol.Dmr, 42, DateTimeOffset.UtcNow));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RuntimeRetentionUsesPublishedRecordingAttachment(bool removeRecording)
+    {
+        var store = new CallHistoryStore();
+        var entry = CreateEntry(42);
+        store.Add(entry);
+        var recording = CreatePlayableRecording(42);
+        store.AddOrAttachRecording(recording);
+        Assert.True(store.Runtime.Find(entry.Id)!.HasRecording);
+        if (removeRecording) store.RemoveRecording(recording);
+
+        // Completing shared History does not enumerate or project Desktop rows.
+        var completion = store.Runtime.CompleteReceive("System 1",
+            DvmConsole.Core.Runtime.RadioMediaProtocol.Dmr, 42,
+            DateTimeOffset.UnixEpoch.AddMilliseconds(20));
+        Assert.NotNull(completion);
+        Assert.Equal(removeRecording, completion.Removed);
+        Assert.True(entry.IsActive);
+        store.ProjectCompletion(completion);
+        Assert.Equal(removeRecording, store.Entries.Count == 0);
     }
 
     [Fact]

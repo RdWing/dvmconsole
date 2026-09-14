@@ -13,6 +13,20 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class AdaptiveReceiveJitterBufferControllerTests
 {
     [Theory]
+    [InlineData(RadioMediaProtocol.P25)]
+    [InlineData(RadioMediaProtocol.Dmr)]
+    [InlineData(RadioMediaProtocol.Nxdn)]
+    public void ImmutableMobileOptionsUseTheSameDesktopBufferPolicy(RadioMediaProtocol protocol)
+    {
+        var options = new ConsoleReceiveBufferingOptions(540, false, 240, false, 320, false);
+        Assert.Equal(ReceiveJitterBufferConfigurationPolicy.GetConfiguration(protocol, options.ToSetting()),
+            ReceiveJitterBufferConfigurationPolicy.GetConfiguration(protocol, options));
+        options = options with { P25Adaptive = true, DmrAdaptive = true, NxdnAdaptive = true };
+        Assert.Equal(ReceiveJitterBufferConfigurationPolicy.GetConfiguration(protocol, options.ToSetting()),
+            ReceiveJitterBufferConfigurationPolicy.GetConfiguration(protocol, options));
+    }
+
+    [Theory]
     [InlineData(FneTrafficProtocol.P25, 1_620)]
     [InlineData(FneTrafficProtocol.Dmr, 540)]
     [InlineData(FneTrafficProtocol.Nxdn, 720)]

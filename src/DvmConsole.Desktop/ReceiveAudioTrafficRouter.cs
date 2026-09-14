@@ -16,8 +16,9 @@ internal sealed class ReceiveAudioTrafficRouter
     public ReceiveAudioTrafficRouter(
         IReadOnlyDictionary<
             (FneTrafficProtocol Protocol, uint DestinationId),
-            ChannelViewModel[]> routes)
-        => adapter = new ReceiveRoutePresentationAdapter(routes);
+            ChannelViewModel[]> routes,
+        ConsoleReceiveRouteState? sharedState = null)
+        => adapter = new ReceiveRoutePresentationAdapter(routes, sharedState);
 
     public ChannelViewModel[] ResolveTargets(
         IReadOnlyList<ChannelViewModel> decodeChannels,

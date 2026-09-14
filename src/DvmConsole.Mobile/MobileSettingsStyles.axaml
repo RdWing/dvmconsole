@@ -1,0 +1,117 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:mobile="using:DvmConsole.Mobile"
+        xmlns:presentation="using:DvmConsole.Presentation">
+  <!-- Multiline documents retain their natural top alignment. NumericUpDown
+       forwards its own alignment to the TextBox in its control template. -->
+  <Style Selector="mobile|MobileSettingsView TextBox[AcceptsReturn=False]">
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView NumericUpDown">
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView ComboBox">
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView ToggleSwitch">
+    <Setter Property="HorizontalAlignment" Value="Stretch" />
+    <Setter Property="MinHeight" Value="48" />
+    <Setter Property="OnContent" Value="" />
+    <Setter Property="OffContent" Value="" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16" MinHeight="48" Background="Transparent">
+          <ContentPresenter x:Name="PART_ContentPresenter" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"
+                            VerticalAlignment="Center" />
+          <Border x:Name="SwitchTrack" Grid.Column="1" Width="48" Height="28" CornerRadius="14"
+                  Background="{DynamicResource ControlBorderBrush}" VerticalAlignment="Center">
+            <Canvas x:Name="PART_SwitchKnob" Width="20" Height="22" Margin="3" HorizontalAlignment="Left">
+              <Grid x:Name="PART_MovingKnobs" Width="22" Height="22">
+                <Ellipse Width="22" Height="22" Fill="White" />
+              </Grid>
+            </Canvas>
+          </Border>
+        </Grid>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+  <Style Selector="mobile|MobileSettingsView ToggleSwitch:checked /template/ Border#SwitchTrack">
+    <Setter Property="Background" Value="#16824E" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView ToggleSwitch:disabled">
+    <Setter Property="Opacity" Value="0.5" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView presentation|ToneSettingsView Button">
+    <Setter Property="MinHeight" Value="44" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView Button.selected-tone-family">
+    <Setter Property="Background" Value="{DynamicResource OperationalSelectionSurfaceBrush}" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView Button.settings-navigation">
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="FontSize" Value="{DynamicResource MobileNavigationFontSize}" />
+    <Setter Property="Padding" Value="12,10" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView Button.selected-settings-category">
+    <Setter Property="BorderBrush" Value="{DynamicResource OperationalSelectionBorderBrush}" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView Button.grouped-navigation">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Padding" Value="14,12" />
+    <Setter Property="MinHeight" Value="52" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView Button.grouped-navigation.selected-settings-category">
+    <Setter Property="Background" Value="{DynamicResource OperationalSelectionSurfaceBrush}" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView TextBox, mobile|MobileSettingsView ComboBox, mobile|MobileSettingsView NumericUpDown">
+    <Setter Property="CornerRadius" Value="8" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView Button">
+    <Setter Property="CornerRadius" Value="8" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView Button.tone-family-segment">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="CornerRadius" Value="7" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView Button.tone-family-segment.selected-tone-family">
+    <Setter Property="Background" Value="{DynamicResource OperationalSelectionSurfaceBrush}" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView Button.selected-settings-category, mobile|MobileSettingsView Button.selected-tone-family">
+    <Setter Property="Foreground" Value="{DynamicResource OperationalStateTextBrush}" />
+  </Style>
+  <Style Selector="mobile|MobileSettingsView Button.selected-settings-category TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource OperationalStateTextBrush}" />
+  </Style>
+  <!-- Flyouts are separate visual roots; scope by an explicit mobile-only class. -->
+  <Style Selector="FlyoutPresenter.studio-actions">
+    <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}"/>
+    <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="CornerRadius" Value="12"/>
+    <Setter Property="Padding" Value="8"/>
+  </Style>
+  <Style Selector="Button.studio-action">
+    <Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}"/>
+    <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="CornerRadius" Value="8"/>
+    <Setter Property="Padding" Value="12,8"/>
+    <Setter Property="FontSize" Value="{DynamicResource MobileBodyFontSize}"/>
+  </Style>
+  <Style Selector="TextBlock.studio-action-heading">
+    <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}"/>
+    <Setter Property="FontSize" Value="{DynamicResource ChannelListDetailFontSize}"/>
+  </Style>
+
+  <Style Selector="Button.studio-action.destructive">
+    <Setter Property="Foreground" Value="{DynamicResource OperationalTransmitBorderBrush}"/>
+  </Style>
+</Styles>

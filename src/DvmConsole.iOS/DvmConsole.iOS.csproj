@@ -1,0 +1,84 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Host-only variable-font adapter; keep this API checked against pinned Avalonia 11.3.18. -->
+    <AvaloniaAccessUnstablePrivateApis>true</AvaloniaAccessUnstablePrivateApis>
+    <TargetFramework>net10.0-ios</TargetFramework>
+    <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
+    <ApplicationId>io.jchang.dvmconsole.neo</ApplicationId>
+    <ApplicationTitle>Console NEO</ApplicationTitle>
+    <AppIcon>AppIcon</AppIcon>
+    <ApplicationDisplayVersion>$(VersionPrefix)</ApplicationDisplayVersion>
+    <ApplicationVersion>2</ApplicationVersion>
+    <!-- Match the desktop preservation contract for reflection-heavy dependencies. -->
+    <NoWarn>$(NoWarn);IL2104</NoWarn>
+    <RuntimeIdentifier Condition="'$(DvmConsoleIosRuntime)' != ''">$(DvmConsoleIosRuntime)</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">iossimulator-arm64</RuntimeIdentifier>
+    <NuGetLockFilePath>packages.$(RuntimeIdentifier).lock.json</NuGetLockFilePath>
+  </PropertyGroup>
+  <ItemGroup>
+    <BundleResource Include="PrivacyInfo.xcprivacy" LogicalName="PrivacyInfo.xcprivacy" />
+    <BundleResource Include="../../docs/user-guide/**/*.md" LogicalName="Documentation/%(RecursiveDir)%(Filename)%(Extension)" />
+    <BundleResource Include="../../docs/user-guide/manifest.json" LogicalName="Documentation/manifest.json" />
+    <BundleResource Include="../../docs/user-guide/Assets/*" LogicalName="Documentation/Assets/%(Filename)%(Extension)" />
+    <TrimmerRootAssembly Include="Avalonia.DesignerSupport" />
+    <TrimmerRootAssembly Include="YamlDotNet" />
+    <TrimmerRootAssembly Include="Markdown.Avalonia" />
+    <PackageReference Include="Avalonia.iOS" Version="11.3.18" />
+    <ProjectReference Include="../DvmConsole.Audio.iOS/DvmConsole.Audio.iOS.csproj" />
+    <ProjectReference Include="../DvmConsole.Vocoder.Native/DvmConsole.Vocoder.Native.csproj" AdditionalProperties="DvmConsoleStaticVocoder=true" />
+    <ProjectReference Include="../DvmConsole.FneIntegration/DvmConsole.FneIntegration.csproj" />
+    <ProjectReference Include="../DvmConsole.Storage/DvmConsole.Storage.csproj" />
+    <ProjectReference Include="../DvmConsole.Mobile/DvmConsole.Mobile.csproj" />
+    <ProjectReference Include="../DvmConsole.Configuration.Yaml/DvmConsole.Configuration.Yaml.csproj" />
+  </ItemGroup>
+  <PropertyGroup>
+    <IosVocoderRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../native/vocoder'))</IosVocoderRoot>
+    <IosVocoderTarget Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64'">aarch64-apple-ios-sim</IosVocoderTarget>
+    <IosVocoderTarget Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">aarch64-apple-ios</IosVocoderTarget>
+    <IosVocoderProfile Condition="'$(Configuration)' == 'Release'">release</IosVocoderProfile>
+    <IosVocoderProfile Condition="'$(IosVocoderProfile)' == ''">debug</IosVocoderProfile>
+    <IosVocoderReleaseArgument Condition="'$(Configuration)' == 'Release'">--release</IosVocoderReleaseArgument>
+    <IosVocoderTargetDirectory>$(IosVocoderRoot)/target/ios/$(Configuration)</IosVocoderTargetDirectory>
+    <IosVocoderArchive>$(IosVocoderTargetDirectory)/$(IosVocoderTarget)/$(IosVocoderProfile)/libdvmconsole_vocoder.a</IosVocoderArchive>
+  </PropertyGroup>
+  <ItemGroup>
+    <NativeReference Include="$(MSBuildThisFileDirectory)../../native/dvmaudio-ios/build/$(RuntimeIdentifier)/$(Configuration)/libdvmaudio_ios.a" Kind="Static" ForceLoad="true" SmartLink="false" Frameworks="AudioToolbox" />
+    <NativeReference Include="$(IosVocoderArchive)" Kind="Static" ForceLoad="true" SmartLink="false" />
+  </ItemGroup>
+  <Target Name="BuildIosVocoder" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(IosVocoderTarget)' == ''" Text="The iOS vocoder requires an ARM64 simulator or device target." />
+    <Exec Command="cargo +1.85.0 build --manifest-path &quot;$(IosVocoderRoot)/Cargo.toml&quot; --locked $(IosVocoderReleaseArgument) --target $(IosVocoderTarget) --target-dir &quot;$(IosVocoderTargetDirectory)&quot;"
+          EnvironmentVariables="IPHONEOS_DEPLOYMENT_TARGET=$(SupportedOSPlatformVersion)" />
+    <Error Condition="!Exists('$(IosVocoderArchive)')" Text="The iOS vocoder archive was not produced." />
+  </Target>
+  <!-- AOT modules embed references to other linked assemblies. A change in
+       any trimmed dependency must invalidate all cached modules, even when a
+       module's own IL file was unchanged. Extend the SDK's existing cache key. -->
+  <Target Name="TrackIosAotAssemblyContents" BeforeTargets="_GenerateAOTCompileDependencyCache"
+          Condition="'$(_RunAotCompiler)' == 'true'">
+    <ItemGroup>
+      <_ConsoleIosLinkedAssembly Include="@(_AssembliesToAOT)" />
+    </ItemGroup>
+    <Error Condition="'@(_ConsoleIosLinkedAssembly)' == ''" Text="The iOS AOT dependency directory is empty; refusing an untracked native build." />
+    <GetFileHash Files="@(_ConsoleIosLinkedAssembly)" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_ConsoleIosLinkedAssemblyHash" />
+    </GetFileHash>
+    <ItemGroup>
+      <_AOTCompileCache Include="@(_ConsoleIosLinkedAssemblyHash->'%(Identity):%(FileHash)')" />
+    </ItemGroup>
+  </Target>
+  <!-- The pinned iOS SDK tracks manifest properties but omits the source plist
+       from incremental inputs. Include it so metadata edits rebuild the bundle. -->
+  <Target Name="TrackIosManifestSource" AfterTargets="_CompileAppManifestInputs">
+    <ItemGroup>
+      <_CompileAppManifestInputFile Include="$(MSBuildProjectDirectory)/Info.plist" />
+    </ItemGroup>
+  </Target>
+  <Target Name="ConsoleBuildWithCompletionEvidence" DependsOnTargets="Build">
+    <Error Condition="'$(ConsoleBuildCompletionPath)' == '' or '$(ConsoleBuildCompletionNonce)' == ''"
+           Text="Build completion evidence requires an invocation-specific path and nonce." />
+    <WriteLinesToFile File="$(ConsoleBuildCompletionPath)" Lines="$(ConsoleBuildCompletionNonce)"
+                      Overwrite="true" Encoding="ASCII" />
+  </Target>
+</Project>

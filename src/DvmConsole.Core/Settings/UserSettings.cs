@@ -51,6 +51,9 @@ public sealed class RxAudioProcessingModeSetting
     public double CompressorThresholdDbfs { get; set; } = -18;
     public double CompressorMakeupGainDb { get; set; } = 3;
 
+    public RxAudioProcessingModeSetting Normalize()
+        => UserSettingsNormalizationRules.NormalizeRxAudioProcessingMode(this);
+
     public static Dictionary<string, RxAudioProcessingModeSetting> CreateDefaults()
         => ModeKeys.ToDictionary(
             key => key,
@@ -184,6 +187,10 @@ public sealed class UserSettings
     public double QuickCallToneAFrequencyHz { get; set; } = 600;
     public double QuickCallToneBFrequencyHz { get; set; } = 1200;
     public List<DtmfPresetSetting> DtmfPresets { get; set; } = [];
+    public int? MobileAlertBuiltIn { get; set; }
+    public string? MobileAlertAssetId { get; set; }
+    public string MobileAlertPresetName { get; set; } = "";
+
     public List<TonePresetSetting> TonePresets { get; set; } = [];
     public Dictionary<int, ToolbarToneAssignmentSetting> ToolbarToneAssignments { get; set; } = [];
     public List<AlertToneSetting> AlertTones { get; set; } = [];

@@ -7,7 +7,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="../Shared/TaskObservation.cs" Link="Threading/TaskObservation.cs" />
     <Using Include="DvmConsole.Threading" />
   </ItemGroup>
 

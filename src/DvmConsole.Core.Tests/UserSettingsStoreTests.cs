@@ -72,6 +72,26 @@ public sealed class UserSettingsStoreTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
+    [Theory]
+    [InlineData(-12)]
+    [InlineData(12)]
+    public void MicGainAndPresetRetainDecibelEndpoints(double db)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "neo-mic-range-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            double gain = Math.Pow(10, db / 20);
+            var preset = AudioInputPreset.Create("Endpoint", 0, gain, 0, 0, 0);
+            var store = new UserSettingsStore(Path.Combine(root, "settings.json"));
+            store.Save(new UserSettings { AudioInputGain = gain, AudioInputPresets = [preset.ToSetting()] });
+            var loaded = store.Load();
+            Assert.Equal(gain, loaded.AudioInputGain, 10);
+            Assert.Equal(gain, Assert.Single(loaded.AudioInputPresets).Gain, 10);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     [Fact]
     public void UnreadableSettingsRemainProtectedUntilExplicitReload()
     {
@@ -1411,14 +1431,14 @@ public sealed class UserSettingsStoreTests
             Assert.Equal("default", loaded.AudioOutputDeviceId);
             Assert.Equal(UserSettings.DvmConsoleAudioProcessingMode, loaded.AudioProcessingMode);
             Assert.Equal(-40, loaded.AudioInputAgcTargetDbfs);
-            Assert.Equal(3, loaded.AudioInputGain);
+            Assert.Equal(4, loaded.AudioInputGain);
             Assert.Equal(-12, loaded.AudioInputEqLowGainDb);
             Assert.Equal(0, loaded.AudioInputEqMidGainDb);
             Assert.Equal(12, loaded.AudioInputEqHighGainDb);
             Assert.Equal("Voice", loaded.AudioInputPresetName);
             AudioInputPresetSetting microphonePreset = Assert.Single(loaded.AudioInputPresets);
             Assert.Equal("Mic Preset", microphonePreset.Name);
-            Assert.Equal(3, microphonePreset.Gain);
+            Assert.Equal(4, microphonePreset.Gain);
             Assert.Equal(-12, microphonePreset.LowGainDb);
             Assert.Equal(0, microphonePreset.MidGainDb);
             Assert.Equal(12, microphonePreset.HighGainDb);

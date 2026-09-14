@@ -18,7 +18,7 @@ public sealed record ReceiveAudioProcessingOptions
     public float CompressorThresholdDbfs { get; init; } = -18.0f;
     public float CompressorMakeupGainDb { get; init; } = 3.0f;
 
-    internal void Validate()
+    public void Validate()
     {
         ValidateRange(HighPassFrequencyHz, 0, 500, nameof(HighPassFrequencyHz));
         ValidateRange(PeakingFrequencyHz, 250, 3_000, nameof(PeakingFrequencyHz));

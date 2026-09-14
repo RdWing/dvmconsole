@@ -7,6 +7,9 @@ namespace DvmConsole.Desktop;
 
 public sealed partial class MainWindowViewModel : IToneSettingsViewModel
 {
+    public TonePatternDocument ExportTonePatterns() => tonePresentation.ExportPatterns();
+    public void ImportTonePatterns(TonePatternDocument document) => tonePresentation.ImportPatterns(document);
+
     string IToneSettingsViewModel.AlertTargetSummary => toneWorkspace.AlertTargetSummary;
     string IToneSettingsViewModel.AlertTargetDetails => toneWorkspace.AlertTargetDetails;
     string IToneSettingsViewModel.PageTargetSummary => toneWorkspace.PageTargetSummary;
@@ -46,8 +49,8 @@ public sealed partial class MainWindowViewModel : IToneSettingsViewModel
 
     private void RefreshToneTargets()
         => toneWorkspace.UpdateTargets(
-            ToneTargetSummary.Create("ALERT", ResolveGeneratedToneChannels()),
-            ToneTargetSummary.Create("PAGE", ResolvePageToneChannels()));
+            ToneTargetSummary.Create("ALERT", ResolveGeneratedToneChannels().Select(channel => (channel.SystemName, channel.Name))),
+            ToneTargetSummary.Create("PAGE", ResolvePageToneChannels().Select(channel => (channel.SystemName, channel.Name))));
 
     private void HandleToneTargetChannelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
     {

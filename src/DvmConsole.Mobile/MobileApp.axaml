@@ -1,0 +1,36 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:presentation="using:DvmConsole.Presentation"
+             x:Class="DvmConsole.Mobile.MobileApp"
+             Name="DVM Console NEO Preview">
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://DvmConsole.Presentation/ConsolePalette.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
+  <Application.Styles>
+    <FluentTheme />
+    <!-- Hide touch-host indicators without changing scrolling or shared editor layout. -->
+    <Style Selector="ScrollBar">
+      <Setter Property="Opacity" Value="0" />
+      <Setter Property="IsHitTestVisible" Value="False" />
+    </Style>
+    <StyleInclude Source="avares://DvmConsole.Mobile/MobileTypography.axaml" />
+    <Style Selector="TextBlock">
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+      <Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+    </Style>
+    <StyleInclude Source="avares://DvmConsole.Mobile/MobileSettingsStyles.axaml" />
+    <StyleInclude Source="avares://DvmConsole.Presentation/ConsoleChannelButtonStyles.axaml" />
+  </Application.Styles>
+</Application>

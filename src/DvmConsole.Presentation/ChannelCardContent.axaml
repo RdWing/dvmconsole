@@ -10,10 +10,13 @@
     x:DataType="presentation:IChannelCardViewModel">
   <UserControl.Styles>
     <StyleInclude Source="avares://DvmConsole.Presentation/CompactSliderStyles.axaml" />
+    <Style Selector="presentation|ChannelCardContent.touch TextBlock"><Setter Property="LineHeight" Value="{DynamicResource MobileChannelDetailLineHeight}"/><Setter Property="FontWeight" Value="Normal"/></Style>
+    <Style Selector="presentation|ChannelCardContent.touch TextBlock.card-title"><Setter Property="LineHeight" Value="{DynamicResource MobileChannelNameLineHeight}"/><Setter Property="FontFamily" Value="{DynamicResource MobileBoldFontFamily}"/></Style>
   </UserControl.Styles>
-  <Grid RowDefinitions="Auto,Auto,Auto,*,24" RowSpacing="3">
+  <Grid x:Name="CardLayout" RowDefinitions="Auto,Auto,Auto,*,24" RowSpacing="3">
+    <Grid x:Name="CardHeading" ColumnDefinitions="*,Auto">
     <StackPanel Spacing="2">
-      <TextBlock
+      <TextBlock Classes="card-title"
           Foreground="{Binding CardTextBrush}"
           FontWeight="Bold"
           FontSize="{Binding UiFontSize, ElementName=CardContentRoot}"
@@ -24,6 +27,7 @@
           FontSize="{Binding UiSmallFontSize, ElementName=CardContentRoot}"
           Text="{Binding TalkgroupText}" />
     </StackPanel>
+    </Grid>
     <TextBlock
         Grid.Row="1"
         Foreground="{Binding CardTextBrush}"
@@ -33,14 +37,14 @@
         VerticalAlignment="Center" />
     <presentation:AudioLevelMeter
         Grid.Row="2"
-        Classes="channel-audio-meter"
+        x:Name="CardMeter" Classes="channel-audio-meter"
         Width="{Binding AudioMeterWidth}"
         Height="4"
         Meter="{Binding AudioMeter}"
         HorizontalAlignment="Center"
         AutomationProperties.Name="Channel audio level" />
-    <Grid Grid.Row="3" MinHeight="23" ClipToBounds="False" ColumnDefinitions="*,Auto" ColumnSpacing="4">
-      <presentation:NeutralSnapSlider
+    <Grid x:Name="VolumeRow" Grid.Row="3" MinHeight="23" ClipToBounds="False" ColumnDefinitions="*,Auto" ColumnSpacing="4">
+      <presentation:NeutralSnapSlider x:Name="VolumeSlider"
           Classes="compact-slider"
           Minimum="-1"
           Maximum="1"
@@ -50,7 +54,7 @@
           ToolTip.Tip="Channel gain: center is 0 dB (1×)"
           AutomationProperties.Name="{Binding VolumeAutomationName}"
           AutomationProperties.HelpText="Channel gain; center is 0 decibels." />
-      <Button
+      <Button x:Name="EncryptionButton"
           Grid.Column="1"
           Classes="card-action channel-action encryption-select"
           Content="{Binding EncryptionButtonText}"
@@ -68,11 +72,11 @@
           Classes="ptt-input-guard"
           Background="Transparent"
           ToolTip.Tip="Push to talk; unavailable while this channel is receiving">
-        <Button Classes="ptt"
-                Content="{Binding PttButtonText}"
-                IsEnabled="{Binding IsPttControlEnabled}"
-                AutomationProperties.Name="{Binding PttAutomationName}"
-                AutomationProperties.HelpText="{Binding PttAutomationHelpText}" />
+        <Button x:Name="PttButton" Classes="ptt"
+            Content="{Binding PttButtonText}"
+            IsEnabled="{Binding IsPttControlEnabled}"
+            AutomationProperties.Name="{Binding PttAutomationName}"
+            AutomationProperties.HelpText="{Binding PttAutomationHelpText}" />
       </Border>
       <Button
           Grid.Column="1"

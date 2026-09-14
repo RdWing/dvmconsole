@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 using System.Text.Json.Serialization;
+using DvmConsole.Application;
 
 namespace DvmConsole.Configuration.Yaml;
 
@@ -54,7 +55,9 @@ internal sealed class RevisionMetadataState
 
 internal sealed class DraftState
 {
+    public ConfigurationDraftEditorState? EditorState { get; set; }
     public Guid Id { get; set; }
+    public Guid? ContentRevision { get; set; }
     public Guid? BasedOnRevision { get; set; }
     public string Name { get; set; } = string.Empty;
     public bool IsDirty { get; set; }

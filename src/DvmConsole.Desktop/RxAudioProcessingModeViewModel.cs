@@ -123,20 +123,6 @@ public sealed class RxAudioProcessingModeViewModel :
             CompressorMakeupGainDb = (double)CompressorMakeupGainDb
         };
 
-    internal ReceiveAudioProcessingOptions ToVocoderOptions()
-        => new()
-        {
-            HighPassFilterEnabled = HighPassFilterEnabled,
-            HighPassFrequencyHz = (float)HighPassFrequencyHz,
-            PeakingFilterEnabled = PeakingFilterEnabled,
-            PeakingFrequencyHz = (float)PeakingFrequencyHz,
-            PeakingGainDb = (float)PeakingGainDb,
-            CompressorEnabled = CompressorEnabled,
-            CompressorRatio = (float)CompressorRatio,
-            CompressorThresholdDbfs = (float)CompressorThresholdDbfs,
-            CompressorMakeupGainDb = (float)CompressorMakeupGainDb
-        };
-
     private void SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
     {
         if (EqualityComparer<T>.Default.Equals(field, value))

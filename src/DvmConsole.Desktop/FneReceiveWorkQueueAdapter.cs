@@ -60,11 +60,6 @@ internal static class FneReceiveWorkQueueAdapter
         FneTrafficFrame traffic,
         long applicationBoundaryTimestamp)
     {
-        ArgumentNullException.ThrowIfNull(traffic);
-        return new RadioMediaIngressFrame(
-            traffic,
-            applicationBoundaryTimestamp,
-            traffic.TransportIngressTimestamp,
-            RadioFrameEncryptionResolver.TryResolve(traffic));
+        return RadioMediaIngressFrame.FromFrame(traffic, applicationBoundaryTimestamp);
     }
 }

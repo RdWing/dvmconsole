@@ -6,6 +6,139 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-14
+
+Changes since 0.7.0.
+
+### Added
+
+- Launch the public iPhone and iPad beta on
+  [TestFlight](https://testflight.apple.com/join/KuYtQqja).
+- Sign and notarize both macOS packages with Developer ID, including stapled
+  tickets for offline Gatekeeper verification.
+- Add iOS and iPadOS consoles using the shared radio, audio, recording, tone,
+  and patch runtime. iPhone uses List; iPad supports Cards and List, with a
+  saved layout choice and List fallback in narrow windows.
+- Add touch Configuration Library and full-width tablet Studio. Create a new
+  configuration, enter aliases and encryption keys, attach companion files, edit
+  channels, undo changes, and review saved revisions without importing a
+  codeplug first. Recover incomplete drafts and partially entered key records.
+- Export configuration ZIP bundles from desktop and mobile and import them
+  through mobile Files, including iCloud Drive. Confirm secret-bearing exports;
+  sanitized YAML excludes companions. Choose when to load an imported
+  configuration; operator settings, layouts, and recordings remain local.
+- Import and export tone patterns across desktop and mobile. Mobile includes
+  DTMF, QCII paging, imported alert audio, and an assignable console alert
+  button.
+- Add mobile Connections, per-FNE receive buffering, microphone gain/EQ/AGC and
+  presets, per-protocol receive processing, hold/toggle PTT, talk-permit tone,
+  and receive-muting preferences, saved separately for each configuration.
+- Add mobile groups and patches, multi-select group TX selection, web-stream
+  playback, and P25 subscriber commands with confirmation for inhibit actions.
+- Add unified mobile call and recording History with playback, filters and
+  export; retention controls; searchable diagnostics and Help; and a branded
+  About page. Show receiving-channel and caller details on the lock screen.
+
+### Changed
+
+- Let an annotated release tag own the full build/test/publish flow when pushed
+  together with `neo`, avoiding a second full branch build. TestFlight delivery
+  requires completed desktop and iOS qualification.
+- Reuse the completed managed build for the Windows source smoke check.
+- Show the mobile RX-enabled channel count and active channel names at the top;
+  use adaptive receiving dots and channel names in FNE and zone list headings.
+- Reduce microphone conversion allocations on iOS by reusing sample buffers;
+  share the conversion path with macOS while preserving owned samples for
+  consumers that retain audio. Replace iOS capture polling with native wakeups.
+- Coalesce rapid volume and balance adjustments, speed up large History updates,
+  and defer tablet Cards construction until needed.
+- Separate desktop audio policy and settings responsibilities, narrow runtime
+  dependencies, and remove unused platform adapters.
+- Organize mobile List by collapsible FNE and zone, omit redundant single-zone
+  headings, and use multiple columns on wide tablet displays. Keep expansion
+  and scrolling stable, and jump to receiving channels from console status.
+- Add colored FNE/zone tabs and activity markers to iPad Cards, horizontally
+  scrollable connection pills in the title row, and independent grid placement
+  within a zone. Place SECURE in the card header to keep volume sliders stable.
+- Refine touch spacing, typography, controls, Settings navigation, Studio actions,
+  Help topic selection, History filters, and diagnostic row spacing.
+- Preserve mobile receive, recording, volume, balance, encryption and transmit
+  selections per configuration. Checkpoint Studio drafts and layout choices on
+  backgrounding; offer Save Copy when a newer configuration revision exists.
+- Release manual PTT on backgrounding, interruption, lost touch capture, route
+  loss or navigation. Request microphone permission on demand, retain the iOS
+  system output route, and do not restore interrupted transmit intent.
+- Share runtime ownership and coalesced presentation updates across hosts,
+  retaining independent call lifetimes, local playback processing, and TAR.
+
+### Fixed
+
+- Restore microphone access in signed macOS builds by adding the Hardened
+  Runtime audio-input entitlement. Packaging now checks the signed entitlement
+  and microphone permission description before notarization.
+- Preserve Apple's notarization error and request details when a submission
+  fails or returns no JSON.
+- Draw dragged mobile List rows above their neighbors.
+- Keep mobile List rows stable during PTT by showing mute status in the existing
+  caller summary instead of adding a line beneath expanded controls.
+- Keep your place when expanding a channel in a long List.
+- Present mobile Studio save and reload confirmations in centered modal dialogs
+  that block the editor until accepted or canceled.
+- Let iPad Cards snap to independent grid positions, including empty space,
+  preserving gaps and neighboring cards. Save card positions per configuration.
+- Support long-press insertion in mobile List within a zone, shifting surrounding
+  rows and saving the order independently from Cards.
+- Keep the visible Event History record at its scroll position during consecutive
+  incoming calls. Preserve newest-first following at the top and restore recycled
+  rows in virtualized History and Debug Logs.
+- Recover paused mobile listening when returning to the app or using the console
+  speaker control, without restoring interrupted transmit intent.
+- Extend the mobile shell background through the status-bar and home-indicator
+  safe areas, removing black bands while preserving control spacing.
+- Preserve newer console state when overlapping refreshes finish out of order,
+  and complete pending audio settings writes before configuration rollback.
+- Keep tablet Cards in the selected layout at larger text sizes, improve receive
+  contrast and History accessibility, and open the requested mobile Help topic
+  or Audio settings destination.
+- Require a second tap on the same recording Delete button, labeled Confirm?,
+  before deleting; cancel confirmation when leaving the view or changing sessions.
+- Correct mobile slider, PTT and card-reordering gestures, including visible drag
+  feedback and reliable release handling.
+- Allow saved recordings to play on iOS while all live sources are stopped,
+  release temporary audio after playback, and discard playback for retired devices.
+- Honor microphone gain up to 400%. Label the mobile control Mic gain and use
+  symmetric −12 to +12 dB bounds, 0.25 dB steps and one-decimal display for dB controls.
+  Keep patch-source audio independent of local receive enhancements.
+- Preserve queued Windows playback when completing input, keeping completion,
+  drain and immediate-stop behavior consistent across audio backends.
+- Mobile recording cleanup failures preserve restored listening. Configuration
+  activation reloads device-wide recording and buffering policies after handoff.
+- Busy desktop screens no longer delay receive-call history creation and timeout
+  cleanup; delayed display updates preserve completed call state.
+- Mobile Help follows heading links within and between topics, including
+  duplicate and Unicode headings, and reports missing headings in the reader.
+- Mobile Cards now connects hold-to-talk to the shared transmit controller and
+  releases on touch capture loss, navigation, layout changes, and keyboard
+  release or focus loss. Retiring console views reject new transmit commands.
+- Keep mobile Settings and tool-page Back controls visible while scrolling.
+- Keep the mobile channel recording-playback indicator in sync with playback,
+  including completion and explicit stop.
+- Show and clear mobile channel mute reasons when output mute changes.
+- Honor the configured patch source-ID policy in shared mobile sessions.
+- Wait for the same document cleanup when mobile Studio receives repeated close requests.
+- Reject cancelled patch source work before it can start an outbound transmitter.
+- Preserve the previous complete Configuration Studio draft when a checkpoint write fails, including its companion files.
+- Open the selected Studio hierarchy item when it is tapped again from another editor page.
+- Cancel pending microphone startup before manual transmit cleanup so a revoked readiness wait cannot activate a late call.
+- Include unchanged key and alias files when saving a managed configuration copy.
+- Keep transmit-history encryption metadata tied to the admitted transmission.
+- Reject recording attachments from another call lifetime when session episode
+  numbers are reused.
+- Preserve paused listening when a configuration replacement rolls back.
+- Keep a forced settings flush from missing its debounce cancellation.
+- Preserve saved tone patterns longer than 30 seconds during import/export,
+  matching saved-preset playback support.
+
 ## [0.7.0] - 2026-09-09
 
 Changes since 0.6.2.
@@ -1142,7 +1275,8 @@ Changes since 0.6.2.
 - Add patches, multi-select groups, call history, recordings, web streams, clocks, layouts, themes, startup behavior, and in-application operator documentation.
 - Add support for local and KMM-provided P25 encryption keys while preserving compatibility with existing variable-length AES key material.
 
-[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/RdWing/dvmconsole/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/RdWing/dvmconsole/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/RdWing/dvmconsole/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/RdWing/dvmconsole/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/RdWing/dvmconsole/compare/v0.6.0...v0.6.1

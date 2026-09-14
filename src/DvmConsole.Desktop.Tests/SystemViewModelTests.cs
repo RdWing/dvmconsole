@@ -25,6 +25,45 @@ namespace DvmConsole.Desktop.Tests;
 public sealed partial class SystemViewModelTests
 {
     [Fact]
+    public async Task ConfiguredSessionUsesApplicationTopologyWithMatchingDesktopChannelIds()
+    {
+        string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
+        string settingsPath = CreateSettingsPath();
+        try
+        {
+            await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
+                codeplugPath, new UserSettingsStore(settingsPath));
+            Assert.NotNull(viewModel.PreparedTopology);
+            Assert.Same(viewModel.PreparedTopology, DesktopConsoleSnapshotProjector.BuildTopology(viewModel));
+            Assert.Equal(
+                viewModel.Zones.SelectMany(zone => zone.Channels).Select(channel => channel.Id).Distinct(),
+                viewModel.PreparedTopology.Channels.Select(channel => channel.Id));
+        }
+        finally
+        {
+            CleanupSettingsPath(settingsPath);
+        }
+    }
+
+    [Fact]
+    public void ChannelViewUsesProvidedApplicationRuntimeAndOperatorState()
+    {
+        var configuration = new ChannelConfiguration { Name = "Dispatch", System = "Test", Mode = "p25", Tgid = "100" };
+        var state = new ConsoleChannelState(ChannelRuntimeDefinition.FromConfiguration(configuration));
+        var channel = new ChannelViewModel(configuration, sessionState: state);
+        Assert.Same(state.Operator, channel.OperatorState);
+        channel.SetRecordingEnabled(true);
+        channel.SetAudioEnabled(true);
+        Assert.True(state.Operator.Snapshot.RecordingEnabled);
+        Assert.True(state.Operator.Snapshot.AudioEnabled);
+        channel.SetTransmitEnabled(true, 42);
+        Assert.Equal(ChannelRuntimeState.Transmitting, state.Runtime.State);
+        Assert.True(state.Operator.Snapshot.TransmitEnabled);
+        channel.SetTransmitEnabled(false);
+        Assert.False(state.Operator.Snapshot.TransmitEnabled);
+    }
+
+    [Fact]
     public async Task ReceiveScopesDistinguishAllSystemsFromSelectedZone()
     {
         string codeplugPath = Path.Combine(AppContext.BaseDirectory, "TestData", "multiple-systems.yml");
@@ -67,7 +106,7 @@ public sealed partial class SystemViewModelTests
                 audioFactory,
                 new NativeVocoderFactory(),
                 NetworkDisabledDemo: true);
-            await using MainWindowViewModel viewModel = new ConsoleSessionFactory(dependencies).Create(
+            await using MainWindowViewModel viewModel = await new ConsoleSessionFactory(dependencies).CreateAsync(
                 new ConsoleSessionLoader(store).Load(codeplugPath));
 
             await viewModel.EnableAllReceiveAsync();
@@ -102,7 +141,7 @@ public sealed partial class SystemViewModelTests
                 new FailingFirstPlaybackFactory(failFirst: false),
                 new NativeVocoderFactory(),
                 NetworkDisabledDemo: true);
-            await using MainWindowViewModel viewModel = new ConsoleSessionFactory(dependencies).Create(
+            await using MainWindowViewModel viewModel = await new ConsoleSessionFactory(dependencies).CreateAsync(
                 new ConsoleSessionLoader(store).Load(codeplugPath));
             viewModel.SelectedSystem = viewModel.Systems[0];
             ZoneViewModel selectedZone = viewModel.Systems[0].Zones[1];
@@ -155,7 +194,7 @@ public sealed partial class SystemViewModelTests
                 new FailingFirstPlaybackFactory(failFirst: false),
                 new NativeVocoderFactory(),
                 NetworkDisabledDemo: true);
-            await using MainWindowViewModel viewModel = new ConsoleSessionFactory(dependencies).Create(
+            await using MainWindowViewModel viewModel = await new ConsoleSessionFactory(dependencies).CreateAsync(
                 new ConsoleSessionLoader(store).Load(codeplugPath));
             SystemViewModel system = viewModel.Systems[0];
             ChannelViewModel channel = system.Channels[0];
@@ -195,7 +234,7 @@ public sealed partial class SystemViewModelTests
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 codeplugPath,
-                new UserSettingsStore(settingsPath));
+                new UserSettingsStore(settingsPath), uiDispatcher: new ImmediateUiDispatcher());
             SystemViewModel system = viewModel.Systems[0];
             viewModel.SelectedSystem = system;
             system.SelectedZone = system.Zones.Single(zone => zone.Name == "Operations");
@@ -382,7 +421,7 @@ public sealed partial class SystemViewModelTests
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 path,
-                new UserSettingsStore(settingsPath));
+                new UserSettingsStore(settingsPath), uiDispatcher: new ImmediateUiDispatcher());
             SystemViewModel alpha = viewModel.Systems[0];
             SystemViewModel beta = viewModel.Systems[1];
 
@@ -454,7 +493,7 @@ public sealed partial class SystemViewModelTests
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 path,
-                new UserSettingsStore(settingsPath));
+                new UserSettingsStore(settingsPath), uiDispatcher: new ImmediateUiDispatcher());
             SystemViewModel alpha = viewModel.Systems[0];
             viewModel.ProcessTraffic(alpha, new FneTrafficFrame(
                 FneTrafficProtocol.Dmr, 1, 42, 101, 0, "GROUP", "VOICE", "VOICE", 1, 701,
@@ -498,7 +537,7 @@ public sealed partial class SystemViewModelTests
         {
             await using MainWindowViewModel viewModel = MainWindowViewModel.Load(
                 path,
-                new UserSettingsStore(settingsPath));
+                new UserSettingsStore(settingsPath), uiDispatcher: new ImmediateUiDispatcher());
             SystemViewModel alpha = viewModel.Systems[0];
             ChannelViewModel enabled = alpha.Channels.Single(channel => channel.Name == "Alpha Dispatch");
             enabled.SetAudioEnabled(true);
@@ -649,6 +688,9 @@ public sealed partial class SystemViewModelTests
             ChannelViewModel channel = viewModel.Systems[0].Channels[0];
 
             viewModel.SetRecordingIgnoredSubscribers(channel, [1001, 42, 1001, 0]);
+            Assert.False(channel.SessionState.RecordingSubscribers.Allows(42));
+            Assert.True(channel.SessionState.RecordingSubscribers.Allows(43));
+            Assert.True(channel.SessionState.RecordingSubscribers.Allows(0));
 
             await viewModel.FlushUserSettingsAsync();
             Assert.Equal([42u, 1001u], store.Load().RecordingIgnoredSubscriberIds[channel.SettingsKey]);

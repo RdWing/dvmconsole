@@ -15,6 +15,9 @@ namespace DvmConsole.Presentation;
 
 public sealed partial class ConfigurationStudioZonesView : UserControl
 {
+    private bool compactTouchHeight;
+    private bool inspectorExpanded;
+    private bool compactInspectorNavigation;
     private ConfigurationStudioViewModel? subscribedViewModel;
     private int queuedSelectionCommitVersion;
     private int queuedChannelScrollVersion;
@@ -50,6 +53,9 @@ public sealed partial class ConfigurationStudioZonesView : UserControl
         };
     }
 
+    public void SetLiveLayoutVisible(bool visible)
+        => this.FindControl<Border>("liveZoneLayoutDrawer")!.IsVisible = visible;
+
     public event EventHandler<ConfigurationStudioEditCommandEventArgs>? EditCommandRequested;
 
     private ConfigurationStudioViewModel? ViewModel => DataContext as ConfigurationStudioViewModel;
@@ -62,6 +68,105 @@ public sealed partial class ConfigurationStudioZonesView : UserControl
             .Select(row => row.Channel)
             .Distinct()
             .ToArray() ?? [];
+    }
+
+    private void HandleInspectorNavigation(object? sender, RoutedEventArgs e)
+    {
+        inspectorExpanded = !inspectorExpanded;
+        ApplyInspectorNavigation();
+        if (compactInspectorNavigation && inspectorExpanded)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!IsLoaded || !compactInspectorNavigation || !inspectorExpanded) return;
+                // The inspector also contains zone settings. Opening channel
+                // details should put the selected channel fields in view.
+                UpdateLayout();
+                InspectorScroll.Offset = new Vector(0, ChannelSettingsHeading.Bounds.Top);
+            }, DispatcherPriority.Background);
+        }
+    }
+
+    private void ApplyInspectorNavigation()
+    {
+        bool compactNavigation = compactInspectorNavigation;
+        bool expanded = compactNavigation && inspectorExpanded;
+        OpenInspector.IsVisible = compactNavigation;
+        InspectorNavigation.IsVisible = expanded;
+        InspectorNavigation.Content = "‹ Channels";
+        Avalonia.Automation.AutomationProperties.SetName(InspectorNavigation, "Return to channel list");
+        ChannelPane.IsVisible = !expanded;
+        Grid.SetRowSpan(ChannelPane, compactNavigation ? 2 : 1);
+        ChannelInspector.IsVisible = !compactNavigation || expanded;
+        Grid.SetRow(ChannelInspector, expanded ? 0 : stackedInspectorLayout ? 1 : 0);
+        Grid.SetRowSpan(ChannelInspector, expanded ? 2 : 1);
+    }
+
+    private void HandleChannelRowTapped(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: ConfigurationChannelRow row } || ViewModel is not { } model)
+            return;
+        model.SelectedChannelRow = row;
+        if (!inspectorExpanded && compactInspectorNavigation)
+            HandleInspectorNavigation(sender, e);
+        e.Handled = true;
+    }
+
+    private void HandleTouchActions(object? sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } model) return;
+        var items = new StackPanel { Spacing = 4, MinWidth = 240 };
+        var flyout = new Flyout
+        {
+            Content = new ScrollViewer
+            {
+                Content = items,
+                MaxHeight = Math.Max(160, Bounds.Height * 0.7)
+            }
+        };
+        flyout.FlyoutPresenterClasses.Add("studio-actions");
+        void Group(string title) => items.Children.Add(new TextBlock
+        {
+            Classes = { "studio-action-heading" },
+            Text = title,
+            FontWeight = Avalonia.Media.FontWeight.SemiBold,
+            Margin = new Thickness(8, 12, 8, 4)
+        });
+        void Action(string label, ConfigurationStudioEditCommand command, bool enabled = true)
+        {
+            var button = new Button
+            {
+                Content = label,
+                MinHeight = 44,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+                IsEnabled = model.CanEdit && enabled
+            };
+            button.Classes.Add("studio-action");
+            if (command is ConfigurationStudioEditCommand.DeleteChannel or ConfigurationStudioEditCommand.DeleteZone)
+                button.Classes.Add("destructive");
+            button.Click += (_, _) =>
+            {
+                flyout.Hide();
+                EditCommandRequested?.Invoke(this, new(command, GetSelectedChannelRows()));
+            };
+            items.Children.Add(button);
+        }
+        bool selected = GetSelectedChannelRows().Count > 0;
+        Group("Channels");
+        Action("Add Channel", ConfigurationStudioEditCommand.AddChannel);
+        Action("Duplicate Channel", ConfigurationStudioEditCommand.DuplicateChannel, selected);
+        Action("Move Up", ConfigurationStudioEditCommand.MoveChannelUp, selected);
+        Action("Move Down", ConfigurationStudioEditCommand.MoveChannelDown, selected);
+        Action("Set RX Only", ConfigurationStudioEditCommand.SetSelectedRowsRxOnly, selected);
+        Action("Allow Transmit", ConfigurationStudioEditCommand.SetSelectedRowsTxCapable, selected);
+        Action("Apply Card Size", ConfigurationStudioEditCommand.ApplySelectedCardSize, selected);
+        Action("Delete Channel…", ConfigurationStudioEditCommand.DeleteChannel, selected);
+        Group("Zones");
+        Action("Add Zone", ConfigurationStudioEditCommand.AddZone);
+        Action("Duplicate Zone", ConfigurationStudioEditCommand.DuplicateZone);
+        Action("Delete Zone…", ConfigurationStudioEditCommand.DeleteZone);
+        flyout.ShowAt(TouchZoneActions);
     }
 
     private void HandleEditMenuClick(object? sender, RoutedEventArgs e)
@@ -324,14 +429,18 @@ public sealed partial class ConfigurationStudioZonesView : UserControl
 
     private void ApplyResponsiveLayout(double width)
     {
+        bool touchHost = this.GetVisualAncestors().OfType<ConfigurationStudioView>().FirstOrDefault()?.UseTouchLayout == true;
         ConfigurationStudioResponsiveLayout responsive =
-            ConfigurationStudioResponsiveLayoutPolicy.Evaluate(width, Bounds.Height);
-        bool useNarrow = responsive.UsePhoneChannelList;
+            ConfigurationStudioResponsiveLayoutPolicy.Evaluate(width, Bounds.Height, touchHost);
+        bool useDetailPages = touchHost && responsive.StackInspector;
+        bool useNarrow = responsive.UsePhoneChannelList || touchHost && width < 860;
         bool stackInspector = responsive.StackInspector;
-        bool useSingleColumn = useNarrow;
+        bool useSingleColumn = width is > 0 and < ConfigurationStudioResponsiveLayoutPolicy.PhoneChannelListWidth;
         bool usePhone = responsive.UseTouchTargets;
         bool enteringNarrow = useNarrow && (!responsiveLayoutInitialized || !narrowLayout);
         bool layoutChanged = !responsiveLayoutInitialized ||
+            compactInspectorNavigation != useDetailPages ||
+            compactTouchHeight != responsive.UseCompactHeight ||
             useNarrow != narrowLayout ||
             stackInspector != stackedInspectorLayout ||
             usePhone != phoneLayout;
@@ -343,7 +452,7 @@ public sealed partial class ConfigurationStudioZonesView : UserControl
         Border? headerBorder = this.FindControl<Border>("ZoneHeader");
         TextBlock? heading = this.FindControl<TextBlock>("ZoneHeading");
         TextBox? search = this.FindControl<TextBox>("ChannelSearchBox");
-        Menu? menu = this.FindControl<Menu>("ZoneEditMenu");
+        Grid? menu = this.FindControl<Grid>("ZoneActionHost");
         Grid? desktopTable = this.FindControl<Grid>("DesktopChannelTable");
         ScrollViewer? desktopTableScroller = this.FindControl<ScrollViewer>("DesktopChannelTableScroller");
         ListBox? narrowList = this.FindControl<ListBox>("narrowChannelList");
@@ -359,19 +468,25 @@ public sealed partial class ConfigurationStudioZonesView : UserControl
         if (!layoutChanged)
             return;
 
-        if (enteringNarrow && ViewModel is { } viewModel)
+        if ((enteringNarrow || responsive.UseCompactHeight && !compactTouchHeight) && ViewModel is { } viewModel)
             viewModel.IsZonePreviewExpanded = false;
 
         IReadOnlyList<ChannelConfiguration> selectedChannels = GetSelectedChannelRows();
         narrowLayout = useNarrow;
+        compactInspectorNavigation = useDetailPages;
         stackedInspectorLayout = stackInspector;
         phoneLayout = usePhone;
+        compactTouchHeight = responsive.UseCompactHeight;
         responsiveLayoutInitialized = true;
         Classes.Set("phone", usePhone);
+        Classes.Set("touch-host", touchHost);
+        ZoneEditMenu.IsVisible = !touchHost;
+        TouchZoneActions.IsVisible = touchHost;
         ApplyPhoneTouchTargets(usePhone, inspector, search);
 
         layout.ColumnDefinitions = new ColumnDefinitions(stackInspector ? "*" : "*,316");
-        layout.RowDefinitions = new RowDefinitions(stackInspector ? "55*,45*" : "*");
+        layout.RowDefinitions = new RowDefinitions(stackInspector
+            ? responsive.UseCompactHeight ? "65*,35*" : "55*,45*" : "*");
         Grid.SetColumn(inspector, stackInspector ? 0 : 1);
         Grid.SetRow(inspector, stackInspector ? 1 : 0);
         inspector.BorderThickness = stackInspector ? new Thickness(0, 1, 0, 0) : new Thickness(1, 0, 0, 0);
@@ -399,6 +514,7 @@ public sealed partial class ConfigurationStudioZonesView : UserControl
         desktopTableScroller.IsVisible = !useNarrow;
         narrowList.IsVisible = useNarrow;
         RestoreSelectedRows(selectedChannels);
+        ApplyInspectorNavigation();
         QueueSelectedChannelScroll();
     }
 

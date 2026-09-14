@@ -182,7 +182,7 @@ public sealed class App : Avalonia.Application
     internal static string ResolveDemoConfigurationPath(string baseDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
-        return Path.GetFullPath(Path.Combine(baseDirectory, "Demo", "codeplug.yml"));
+        return Path.GetFullPath(Path.Combine(DvmConsole.Storage.BundledResources.Root(baseDirectory), "Demo", "codeplug.yml"));
     }
 
     private static async Task SmokeWindowsAsync(
@@ -370,41 +370,47 @@ public sealed class App : Avalonia.Application
             return Task.FromResult<string?>(path);
         };
 
-        studio.Show(smokeHost);
-        await WaitForRenderAsync();
         try
         {
-            await SmokeStudioNavigationAsync(studio, exercised);
-            await SmokeStudioSystemActionsAsync(studio, exercised);
-            await SmokeStudioZoneActionsAsync(studio, exercised);
-            await SmokeStudioStreamActionsAsync(studio, exercised);
-            await SmokeStudioGroupActionsAsync(studio, exercised);
-            await SmokeStudioKeyActionsAsync(studio, exercised);
-            await SmokeStudioFileActionsAsync(studio, messages, exportPaths, exercised);
-            await SmokeStudioFooterActionsAsync(studio, messages, exportPaths, exercised);
+            studio.Show(smokeHost);
+            await WaitForRenderAsync();
+            try
+            {
+                await SmokeStudioNavigationAsync(studio, exercised);
+                await SmokeStudioSystemActionsAsync(studio, exercised);
+                await SmokeStudioZoneActionsAsync(studio, exercised);
+                await SmokeStudioStreamActionsAsync(studio, exercised);
+                await SmokeStudioGroupActionsAsync(studio, exercised);
+                await SmokeStudioKeyActionsAsync(studio, exercised);
+                await SmokeStudioFileActionsAsync(studio, messages, exportPaths, exercised);
+                await SmokeStudioFooterActionsAsync(studio, messages, exportPaths, exercised);
+            }
+            finally
+            {
+                if (studio.IsVisible)
+                    studio.CloseForSessionReplacement();
+            }
+
+            ConfigurationStudioWindow closeStudio = smokeHost.CreateConfigurationStudioForCapture(
+                ConfigurationStudioSection.Groups);
+            closeStudio.DialogConfirmationOverride = (_, _, _) => Task.FromResult(true);
+            closeStudio.MessageOverride = (_, _) => Task.CompletedTask;
+            closeStudio.Show(smokeHost);
+            await WaitForRenderAsync();
+            await ClickStudioButtonAsync(
+                closeStudio,
+                "Apply operator group changes and close",
+                exercised);
+            await WaitUntilAsync(
+                () => !closeStudio.IsVisible,
+                "Apply & close did not close Configuration Studio.");
+
+            RequireStudioActionCoverage(exercised);
         }
         finally
         {
-            if (studio.IsVisible)
-                studio.CloseForSessionReplacement();
+            smokeHost.Close();
         }
-
-        ConfigurationStudioWindow closeStudio = smokeHost.CreateConfigurationStudioForCapture(
-            ConfigurationStudioSection.Groups);
-        closeStudio.DialogConfirmationOverride = (_, _, _) => Task.FromResult(true);
-        closeStudio.MessageOverride = (_, _) => Task.CompletedTask;
-        closeStudio.Show(smokeHost);
-        await WaitForRenderAsync();
-        await ClickStudioButtonAsync(
-            closeStudio,
-            "Apply operator group changes and close",
-            exercised);
-        await WaitUntilAsync(
-            () => !closeStudio.IsVisible,
-            "Apply & close did not close Configuration Studio.");
-
-        RequireStudioActionCoverage(exercised);
-        smokeHost.Close();
     }
 
     private static async Task SmokeStudioNavigationAsync(
@@ -716,17 +722,41 @@ public sealed class App : Avalonia.Application
 
         int messageCount = messages.Count;
         await ClickStudioButtonAsync(studio, "Save configuration copy", exercised);
-        await WaitUntilAsync(
-            () => messages.Skip(messageCount).Any(message => message.Title == "Configuration saved") && !viewModel.IsDirty,
-            "Save a Copy did not commit the isolated managed copy.");
+        await AwaitSaveCommandAsync("Save a Copy");
+        Require(
+            messages.Skip(messageCount).Any(message => message.Title == "Configuration saved") && !viewModel.IsDirty,
+            "Save a Copy did not commit the isolated managed copy. " + DescribeStudioSaveState());
 
         viewModel.AddGroup();
         Require(viewModel.IsDirty, "The review-and-save smoke could not create a dirty draft.");
         messageCount = messages.Count;
         await ClickStudioButtonAsync(studio, "Review and save configuration", exercised);
-        await WaitUntilAsync(
-            () => messages.Skip(messageCount).Any(message => message.Title == "Configuration saved") && !viewModel.IsDirty,
-            "Review & Save did not commit the isolated managed revision.");
+        await AwaitSaveCommandAsync("Review & Save");
+        Require(
+            messages.Skip(messageCount).Any(message => message.Title == "Configuration saved") && !viewModel.IsDirty,
+            "Review & Save did not commit the isolated managed revision. " + DescribeStudioSaveState());
+
+        async Task AwaitSaveCommandAsync(string action)
+        {
+            Task completion = studio.SaveCommandCompletionForCapture
+                ?? throw new InvalidOperationException($"{action} did not start a save command.");
+            try
+            {
+                // Save includes asynchronous settings flush and managed-library I/O.
+                // Observe its completion; a rendered message is not a completion barrier.
+                await completion.WaitAsync(TimeSpan.FromSeconds(30));
+            }
+            catch (TimeoutException exception)
+            {
+                throw new InvalidOperationException(
+                    $"{action} save command did not finish. {DescribeStudioSaveState()}", exception);
+            }
+        }
+
+        string DescribeStudioSaveState()
+            => $"Dirty: {viewModel.IsDirty}; errors: {viewModel.HasErrors}. " +
+               string.Join(" | ", messages.Skip(messageCount).Select(message => $"{message.Title}: {message.Message}")) +
+               " Validation: " + string.Join(" | ", viewModel.ValidationIssues.Select(issue => $"{issue.Path}: {issue.Message}"));
     }
 
     private static async Task ClickExportButtonAsync(
@@ -776,6 +806,7 @@ public sealed class App : Avalonia.Application
     {
         Button[] matches = root.GetVisualDescendants()
             .OfType<Button>()
+            .Where(button => button.IsEffectivelyVisible)
             .Where(button => AutomationProperties.GetName(button) == automationName)
             .Where(button => predicate?.Invoke(button) ?? true)
             .ToArray();
@@ -791,7 +822,7 @@ public sealed class App : Avalonia.Application
         await WaitForRenderAsync();
     }
 
-    private static async Task WaitUntilAsync(Func<bool> condition, string failureMessage)
+    private static async Task WaitUntilAsync(Func<bool> condition, string failureMessage, Func<string>? failureDetails = null)
     {
         DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(8);
         while (!condition() && DateTimeOffset.UtcNow < deadline)
@@ -800,7 +831,7 @@ public sealed class App : Avalonia.Application
             await Task.Delay(40);
         }
         if (!condition())
-            throw new InvalidOperationException(failureMessage);
+            throw new InvalidOperationException(failureMessage + (failureDetails is null ? string.Empty : " " + failureDetails()));
     }
 
     private static void Require(bool condition, string message)

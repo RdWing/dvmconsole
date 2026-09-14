@@ -15,6 +15,8 @@ permissions:
 
 jobs:
   source-validation:
+    outputs:
+      build: ${{ steps.owner.outputs.build }}
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source and fnecore
@@ -25,6 +27,21 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
+      - name: Choose build owner
+        id: owner
+        shell: bash
+        run: |
+          build=true
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/neo ]]; then
+            version="$(python3 -c 'import xml.etree.ElementTree as E; print(E.parse("src/Directory.Build.props").findtext(".//VersionPrefix"))')"
+            tagged_commit="$(git ls-remote --tags origin "refs/tags/v${version}^{}" | cut -f1)"
+            if [[ "$tagged_commit" == "$GITHUB_SHA" ]]; then
+              build=false
+              echo 'The matching annotated release tag owns build, test and publication.'
+            fi
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
       - name: Verify first-party source headers
         shell: bash
         run: scripts/verify-source-headers.sh
@@ -37,7 +54,15 @@ jobs:
         shell: bash
         run: python scripts/verify-documentation.py --root docs/user-guide
 
+  ios-checks:
+    if: needs.source-validation.outputs.build == 'true'
+    needs: source-validation
+    uses: ./.github/workflows/ios.yml
+    with:
+      source_ref: ${{ github.sha }}
+
   test-and-publish:
+    if: needs.source-validation.outputs.build == 'true'
     needs: source-validation
     name: ${{ matrix.os }} / ${{ matrix.rid }}
     runs-on: ${{ matrix.os }}
@@ -262,7 +287,9 @@ jobs:
 
       - name: Run solution tests
         shell: bash
-        run: dotnet test dvmconsole.sln --no-restore --configuration Release -p:UseSharedCompilation=false --logger "trx;LogFileName=${{ matrix.rid }}.trx"
+        # Avoid overlapping project builds and native/audio test hosts on small
+        # runners; preserve concurrency explicitly exercised inside each suite.
+        run: dotnet test dvmconsole.sln --no-restore --disable-build-servers --configuration Release -m:1 -p:UseSharedCompilation=false --logger "trx;LogFileName=${{ matrix.rid }}.trx"
 
       - name: Probe live PipeWire ABI and device enumeration
         if: startsWith(matrix.rid, 'linux-')
@@ -281,7 +308,7 @@ jobs:
           $result = Join-Path $env:RUNNER_TEMP "avalonia-window-smoke.result"
           .\scripts\invoke-smoke-with-timeout.ps1 `
             -FilePath dotnet `
-            -ArgumentList @("run", "--project", "src/DvmConsole.Desktop/DvmConsole.Desktop.csproj", "--no-restore", "--configuration", "Release", "--", "--smoke-windows", "--smoke-result=$result", "configs/codeplug.example.yml") `
+            -ArgumentList @("run", "--project", "src/DvmConsole.Desktop/DvmConsole.Desktop.csproj", "--no-build", "--no-restore", "--configuration", "Release", "--", "--smoke-windows", "--smoke-result=$result", "configs/codeplug.example.yml") `
             -ResultPath $result `
             -LogPath $log
 
@@ -576,6 +603,8 @@ jobs:
           retention-days: 7
 
   dependency-advisories:
+    needs: source-validation
+    if: needs.source-validation.outputs.build == 'true'
     name: Dependency advisories
     runs-on: ubuntu-24.04
     steps:
@@ -624,10 +653,102 @@ jobs:
           cargo install cargo-audit --version 0.22.0 --locked
           cargo audit --file native/vocoder/Cargo.lock
 
+  notarize-macos:
+    name: Sign and notarize / ${{ matrix.rid }}
+    if: github.event_name == 'push' && github.repository == 'RdWing/dvmconsole'
+    needs: [test-and-publish, dependency-advisories]
+    environment: macos-distribution
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            rid: osx-arm64
+          - os: macos-15-intel
+            rid: osx-x64
+    steps:
+      - name: Check out verified source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Verify source belongs to neo
+        shell: bash
+        run: |
+          git fetch --no-tags origin '+refs/heads/neo:refs/remotes/origin/neo'
+          git merge-base --is-ancestor HEAD refs/remotes/origin/neo
+      - name: Download reproducibility-verified unsigned package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dvmconsole-package-${{ matrix.rid }}
+          path: unsigned-package
+      - name: Resolve package filename
+        shell: bash
+        run: |
+          shopt -s nullglob
+          packages=(unsigned-package/*.zip)
+          [[ ${#packages[@]} == 1 ]]
+          name="$(basename "${packages[0]}")"
+          echo "DVM_PACKAGE_NAME=$name" >> "$GITHUB_ENV"
+          echo "DVM_PACKAGE_VERSION=${name#dvmconsole-}" | sed 's/-${{ matrix.rid }}.zip$//' >> "$GITHUB_ENV"
+      - name: Sign, notarize, staple and assess extracted package
+        shell: bash
+        env:
+          MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: |
+          scripts/notarize-macos-ci.sh "unsigned-package/$DVM_PACKAGE_NAME" \
+            "signed-package/$DVM_PACKAGE_NAME" --evidence "$RUNNER_TEMP/notarization"
+      - name: Smoke signed package on native architecture
+        shell: bash
+        run: |
+          ditto -x -k "signed-package/$DVM_PACKAGE_NAME" "$RUNNER_TEMP/signed-smoke"
+          scripts/smoke-desktop-macos.sh "$RUNNER_TEMP/signed-smoke/DVMConsole.app" \
+            configs/codeplug.example.yml "$RUNNER_TEMP/signed-smoke.log"
+      - name: Generate signed-package SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          file: signed-package/${{ env.DVM_PACKAGE_NAME }}
+          format: spdx-json
+          output-file: signed-package/dvmconsole-${{ env.DVM_PACKAGE_VERSION }}-${{ matrix.rid }}.spdx.json
+          syft-version: v1.51.0
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Validate signed-package SBOM
+        shell: bash
+        run: |
+          sbom="signed-package/dvmconsole-${DVM_PACKAGE_VERSION}-${{ matrix.rid }}.spdx.json"
+          python3 scripts/release_metadata.py ensure-first-party-sbom --sbom "$sbom" \
+            --version "$DVM_PACKAGE_VERSION" --target "${{ matrix.rid }}"
+          python3 scripts/release_metadata.py validate-sbom --sbom "$sbom" \
+            --required-package-license DvmConsole=AGPL-3.0-only \
+            --required-package-license DvmConsole.PlatformAudio=AGPL-3.0-only \
+            --required-package-license dvmconsole-vocoder-native=AGPL-3.0-only
+      - name: Upload notarized distribution artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dvmconsole-notarized-${{ matrix.rid }}
+          path: signed-package/*
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload notarization and smoke evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: notarization-evidence-${{ matrix.rid }}
+          path: |
+            ${{ runner.temp }}/notarization/*
+            ${{ runner.temp }}/signed-smoke.log*
+          if-no-files-found: warn
+          retention-days: 7
+
   publish-release:
     name: Publish tagged release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test-and-publish, dependency-advisories]
+    needs: [test-and-publish, ios-checks, dependency-advisories, notarize-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -667,6 +788,14 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: dvmconsole-sbom-*
+          path: release-artifacts
+          merge-multiple: true
+
+      # Replace only the two Mac ZIPs and their SBOMs before checksums/attestations.
+      - name: Download notarized Mac packages and matching SBOMs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: dvmconsole-notarized-*
           path: release-artifacts
           merge-multiple: true
 
@@ -901,3 +1030,18 @@ jobs:
           python -c 'import json,sys; release=json.load(open(sys.argv[1], encoding="utf-8")); expected_prerelease=sys.argv[2] == "true"; sys.exit(0 if release["isDraft"] is False and release["isPrerelease"] is expected_prerelease else "Verified release did not publish with the expected prerelease state.")' \
             "$RUNNER_TEMP/published-release-state.json" \
             "$expected_prerelease"
+
+  delivery-qualification:
+    name: Delivery qualification
+    needs: [test-and-publish, ios-checks, dependency-advisories, notarize-macos, publish-release]
+    if: >-
+      always() &&
+      needs.test-and-publish.result == 'success' &&
+      needs.ios-checks.result == 'success' &&
+      needs.dependency-advisories.result == 'success' &&
+      needs.notarize-macos.result == 'success' &&
+      (needs.publish-release.result == 'success' ||
+       (github.ref == 'refs/heads/neo' && needs.publish-release.result == 'skipped'))
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo 'This commit completed every required desktop and iOS check.'

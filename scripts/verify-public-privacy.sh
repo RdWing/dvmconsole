@@ -33,7 +33,7 @@ verify_known_key_fixture() {
     local tracked="$1"
     local path="$ROOT_DIR/$tracked"
     while IFS= read -r material; do
-        case "${material^^}" in
+        case "$(printf '%s' "$material" | tr '[:lower:]' '[:upper:]')" in
             000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F|\
             202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F|\
             0011223344|1234)
@@ -49,7 +49,17 @@ verify_known_key_fixture() {
 while IFS= read -r tracked; do
     normalized="/${tracked//\\//}/"
     base="${tracked##*/}"
+    case "$tracked" in
+        BenchmarkDotNet.Artifacts/*|artifacts/*)
+            printf 'Tracked generated build or test output: %s\n' "$tracked" >&2
+            failure=1
+            ;;
+    esac
     case "$base" in
+        *.mobileprovision|*.p12|*.pfx)
+            printf 'Tracked signing material: %s\n' "$tracked" >&2
+            failure=1
+            ;;
         *.clear)
             case "$tracked" in
                 configs/keys.example.clear|configs/keys.demo.clear)

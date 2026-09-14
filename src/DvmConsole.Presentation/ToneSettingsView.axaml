@@ -22,8 +22,8 @@
   </UserControl.Styles>
   <Grid RowDefinitions="Auto,*">
     <StackPanel Margin="10,10,10,0" Spacing="8">
-      <TextBlock Classes="heading" Text="Tones and DTMF" />
-      <WrapPanel ItemSpacing="6" LineSpacing="6">
+      <TextBlock x:Name="ToneSettingsHeading" Classes="heading" Text="Tones and DTMF" />
+      <WrapPanel x:Name="ToneFamilyNavigation" ItemSpacing="6" LineSpacing="6">
         <Button Content="DTMF" Tag="DtmfSection" AutomationProperties.Name="Go to DTMF" Click="HandleSectionClick" />
         <Button Content="Patterns" Tag="TonePatternSection" AutomationProperties.Name="Go to tone patterns" Click="HandleSectionClick" />
         <Button x:Name="customAudioSectionLink" Content="Custom audio" Tag="CustomAudioSection" AutomationProperties.Name="Go to custom audio" Click="HandleSectionClick" />
@@ -92,6 +92,7 @@
               <TextBlock Classes="caption" Text="{Binding AlertTargetSummary}"
                          ToolTip.Tip="{Binding AlertTargetDetails}" AutomationProperties.HelpText="{Binding AlertTargetDetails}" />
             </WrapPanel>
+            <StackPanel x:Name="PatternEditorBody" Spacing="8">
             <TextBlock Classes="caption"
                        Text="Build an ordered pattern of 300 to 2500 Hz tones and silent holds. Every step remains in one call."
                        TextWrapping="Wrap"/>
@@ -131,6 +132,12 @@
                        AutomationProperties.Name="Tone preset name"/>
               <Button Content="Save preset" Command="{Binding SaveTonePresetCommand}" AutomationProperties.Name="Save tone preset"/>
             </WrapPanel>
+            </StackPanel>
+            <WrapPanel x:Name="PatternExchangeActions" ItemSpacing="8" LineSpacing="8">
+              <Button Content="Import patterns" AutomationProperties.Name="Import tone patterns" Click="HandleImportPatternsClick"/>
+              <Button Content="Export patterns" AutomationProperties.Name="Export tone patterns" Click="HandleExportPatternsClick"/>
+            </WrapPanel>
+            <TextBlock x:Name="PatternExchangeStatus" TextWrapping="Wrap"/>
             <TextBox Width="300"
                      HorizontalAlignment="Left"
                      Watermark="Filter tone presets"

@@ -33,15 +33,15 @@
         "type": "Project",
         "dependencies": {
           "Concentus.Oggfile": "[1.0.7, )",
-          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Abstractions": "[0.8.0, )",
           "NLayer": "[3.0.0, )"
         }
       },
       "dvmconsole.audio.macos": {
         "type": "Project",
         "dependencies": {
-          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
-          "DvmConsole.Audio.Core": "[0.7.0, )"
+          "DvmConsole.Audio.Abstractions": "[0.8.0, )",
+          "DvmConsole.Audio.Core": "[0.8.0, )"
         }
       }
     },

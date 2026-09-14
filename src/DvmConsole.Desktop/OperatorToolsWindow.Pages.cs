@@ -68,7 +68,14 @@ public sealed partial class OperatorToolsWindow
 
     private ToneSettingsView CreateToneSettingsView()
     {
-        var view = new ToneSettingsView();
+        var view = new ToneSettingsView
+        {
+            ExportPatterns = () => viewModel?.ExportTonePatterns(),
+            ImportPatternsAsync = document => { viewModel?.ImportTonePatterns(document); return Task.CompletedTask; }
+        };
+        var picker = new DvmConsole.Host.TonePatternFilePicker(view);
+        view.PickImportDocumentAsync = picker.ImportAsync;
+        view.SaveExportDocumentAsync = picker.ExportAsync;
         view.UseDtmfPresetRequested += HandleSharedUseDtmfPresetRequested;
         view.SendDtmfPresetRequested += HandleSharedSendDtmfPresetRequested;
         view.DeleteDtmfPresetRequested += HandleSharedDeleteDtmfPresetRequested;

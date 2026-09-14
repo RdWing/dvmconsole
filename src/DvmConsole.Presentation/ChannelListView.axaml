@@ -7,12 +7,101 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:presentation="using:DvmConsole.Presentation"
     x:DataType="presentation:ConsoleListViewModel">
+  <UserControl.Resources>
+    <presentation:ConsoleSelectionBrushConverter x:Key="TarBackground" Kind="Recording"/>
+    <presentation:ConsoleSelectionBrushConverter x:Key="TarBorder" Kind="Recording" Border="True"/>
+    <presentation:ConsoleSelectionBrushConverter x:Key="TxBackground" Kind="Transmit"/>
+    <presentation:ConsoleSelectionBrushConverter x:Key="TxBorder" Kind="Transmit" Border="True"/>
+    <presentation:ConsoleSelectionBrushConverter x:Key="PageBackground" Kind="Page"/>
+    <presentation:ConsoleSelectionBrushConverter x:Key="PageBorder" Kind="Page" Border="True"/>
+    <presentation:ConsoleSelectionBrushConverter x:Key="AlertBackground" Kind="Alert"/>
+    <presentation:ConsoleSelectionBrushConverter x:Key="AlertBorder" Kind="Alert" Border="True"/>
+  </UserControl.Resources>
   <UserControl.Styles>
+      <Style Selector="ListBoxItem" x:DataType="presentation:IConsoleListRow"><Setter Property="AutomationProperties.Name" Value="{Binding Name}"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/><Setter Property="MinHeight" Value="0"/><Setter Property="KeyboardNavigation.TabNavigation" Value="Continue"/></Style>
+
+    <Style Selector="Button.group-disclosure"><Setter Property="Margin" Value="12,2,4,2"/><Setter Property="Padding" Value="8,4"/></Style>
+    <Style Selector="Button.group-disclosure.system-heading">
+      <Setter Property="Margin" Value="12,2,4,2"/>
+      <Setter Property="FontSize" Value="{DynamicResource ChannelListHeadingFontSize}"/>
+    </Style>
+    <Style Selector="Button.ptt"><Setter Property="MinHeight" Value="44"/><Setter Property="Grid.Column" Value="3"/><Setter Property="MinWidth" Value="64"/></Style>
+    <Style Selector="Button.list-rx"><Setter Property="MinHeight" Value="44"/><Setter Property="MinWidth" Value="52"/></Style>
+    <Style Selector="presentation|AudioLevelMeter.list-meter"><Setter Property="Grid.Column" Value="2"/><Setter Property="Width" Value="100"/><Setter Property="Height" Value="5"/></Style>
+    <Style Selector="Border.list-details"><Setter Property="Margin" Value="60,6,0,0"/></Style>
+    <Style Selector="presentation|ChannelListView.compact presentation|AudioLevelMeter.list-meter">
+      <Setter Property="Grid.Column" Value="1"/><Setter Property="Grid.Row" Value="1"/>
+      <Setter Property="Width" Value="NaN"/><Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="Margin" Value="0,5,0,0"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.compact Button.list-rx, presentation|ChannelListView.compact Button.ptt">
+      <Setter Property="Grid.RowSpan" Value="2"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <!-- Match the mockup: the meter belongs to the details column; RX/PTT
+         center against the complete details stack, including its meter. -->
+    <Style Selector="presentation|ChannelListView.touch presentation|AudioLevelMeter.list-meter">
+      <Setter Property="Grid.Column" Value="1"/><Setter Property="Grid.Row" Value="1"/>
+      <Setter Property="Height" Value="4"/><Setter Property="Width" Value="NaN"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/><Setter Property="Margin" Value="0,7,0,0"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Button.list-rx, presentation|ChannelListView.touch Button.ptt">
+      <Setter Property="Grid.RowSpan" Value="2"/><Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.group-status"><Setter Property="IsVisible" Value="False"/></Style>
+    <Style Selector="Grid.list-summary"><Setter Property="ColumnSpacing" Value="8"/></Style>
+    <Style Selector="presentation|ChannelListView.touch Grid.list-summary"><Setter Property="ColumnSpacing" Value="0"/></Style>
+    <Style Selector="presentation|ChannelListView.touch Button.group-status" x:DataType="presentation:ConsoleListGroupViewModel">
+      <Setter Property="IsVisible" Value="{Binding IsSystem}"/><Setter Property="FontSize" Value="{DynamicResource ChannelListDetailFontSize}"/>
+      <Setter Property="Foreground" Value="{DynamicResource PrimaryTextBrush}"/>
+      <Setter Property="Background" Value="{DynamicResource ButtonBackgroundBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Button.group-status.connected">
+      <Setter Property="Foreground" Value="{DynamicResource MobileConnectedBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource MobileConnectedBrush}"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Button.group-status.connecting">
+      <Setter Property="Foreground" Value="{DynamicResource MobileConnectingBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource MobileConnectingBrush}"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Button.group-status.disconnected">
+      <Setter Property="Foreground" Value="{DynamicResource MobileDisconnectedBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource MobileDisconnectedBrush}"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch WrapPanel.channel-actions">
+      <Setter Property="HorizontalAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Border.group-rx-dot, TextBlock.group-rx-label"><Setter Property="IsVisible" Value="False"/></Style>
+    <Style Selector="presentation|ChannelListView.touch Border.group-rx-dot.receiving">
+      <Setter Property="IsVisible" Value="True"/><Setter Property="Background" Value="{DynamicResource MobileConnectedBrush}"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch TextBlock.group-rx-label.receiving">
+      <Setter Property="IsVisible" Value="True"/><Setter Property="Foreground" Value="{DynamicResource MobileConnectedBrush}"/>
+      <Setter Property="FontSize" Value="{DynamicResource ChannelListDetailFontSize}"/>
+    </Style>
+    <Style Selector="PathIcon.group-chevron"><Setter Property="IsVisible" Value="False"/></Style>
+    <Style Selector="presentation|ChannelListView.touch TextBlock.group-arrow"><Setter Property="IsVisible" Value="False"/></Style>
+    <Style Selector="presentation|ChannelListView.touch PathIcon.group-chevron">
+      <Setter Property="IsVisible" Value="True"/><Setter Property="RenderTransform" Value="rotate(-90deg)"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch PathIcon.group-chevron.expanded"><Setter Property="RenderTransform" Value="rotate(0deg)"/></Style>
+    <Style Selector="TextBlock.channel-detail"><Setter Property="Opacity" Value="0.75"/></Style>
+    <Style Selector="TextBlock.compact-caller"><Setter Property="Opacity" Value="0.72"/></Style>
+    <Style Selector="presentation|ChannelListView.touch TextBlock.channel-detail">
+      <Setter Property="Opacity" Value="1"/><Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}"/>
+    </Style>
+    <Style Selector="TextBlock.compact-caller"><Setter Property="IsVisible" Value="False"/></Style>
+    <Style Selector="presentation|ChannelListView.compact TextBlock.compact-caller"><Setter Property="IsVisible" Value="True"/></Style>
+    <Style Selector="presentation|ChannelListView.touch TextBlock.compact-caller"><Setter Property="IsVisible" Value="True"/></Style>
+    <Style Selector="presentation|ChannelListView.compact TextBlock.list-secondary"><Setter Property="IsVisible" Value="False"/></Style>
+    <Style Selector="presentation|ChannelListView.compact Border.list-details"><Setter Property="Margin" Value="0,6,0,0"/></Style>
     <StyleInclude Source="avares://DvmConsole.Presentation/CompactSliderStyles.axaml" />
     <Style Selector="Button.list-control">
+      <Setter Property="CornerRadius" Value="3"/>
       <Setter Property="Template">
         <ControlTemplate>
-          <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="3" Padding="{TemplateBinding Padding}">
+          <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
             <ContentPresenter Content="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}" HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"/>
           </Border>
         </ControlTemplate>
@@ -20,45 +109,170 @@
     </Style>
     <Style Selector="Button.list-rx.rx-enabled"><Setter Property="Background" Value="#0F6D3B"/><Setter Property="BorderBrush" Value="#35D07F"/></Style>
     <Style Selector="Button.list-rx.rx-active"><Setter Property="Background" Value="#0B4D8A"/><Setter Property="BorderBrush" Value="#49A8FF"/></Style>
-    <Style Selector="Button.list-selector.armed"><Setter Property="Background" Value="{DynamicResource OperationalSelectionSurfaceBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource OperationalSelectionBorderBrush}"/><Setter Property="Foreground" Value="{DynamicResource OperationalStateTextBrush}"/></Style>
     <Style Selector="Button.list-secure.armed"><Setter Property="Background" Value="#92400E"/><Setter Property="BorderBrush" Value="#F59E0B"/><Setter Property="Foreground" Value="White"/></Style>
+    <Style Selector="TextBlock.group-name"><Setter Property="FontWeight" Value="SemiBold"/></Style>
+    <Style Selector="TextBlock.channel-name"><Setter Property="FontWeight" Value="SemiBold"/></Style>
+    <Style Selector="Border.channel-list-row">
+      <Setter Property="Margin" Value="0,0,0,4"/><Setter Property="Padding" Value="7"/>
+      <Setter Property="CornerRadius" Value="7"/>
+      <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}"/>
+    </Style>
+    <Style Selector="Border.list-details">
+      <Setter Property="Padding" Value="7"/><Setter Property="Background" Value="{DynamicResource ActivityBackgroundBrush}"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Border.channel-list-row">
+      <Setter Property="Padding" Value="12"/><Setter Property="Margin" Value="0,0,0,10"/><Setter Property="CornerRadius" Value="10"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Border.channel-list-row.listening">
+      <Setter Property="Background" Value="{DynamicResource MobileListeningSurfaceBrush}"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource MobileListeningBorderBrush}"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Border.list-details">
+      <Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="0,12,0,0"/><Setter Property="Background" Value="Transparent"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Button.list-control">
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+            <ContentPresenter Content="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"
+                              FontFamily="{TemplateBinding FontFamily}" FontSize="{TemplateBinding FontSize}" FontWeight="{TemplateBinding FontWeight}"
+                              HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"/>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+      <Setter Property="CornerRadius" Value="8"/><Setter Property="FontSize" Value="{DynamicResource ChannelListDetailFontSize}"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Button.list-rx, presentation|ChannelListView.touch Button.ptt">
+      <Setter Property="FontSize" Value="{DynamicResource MobileChannelNameFontSize}"/>
+      <Setter Property="FontFamily" Value="{DynamicResource MobileSemiboldFontFamily}"/>
+      <Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Height" Value="NaN"/><Setter Property="MinHeight" Value="46"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource MobilePrimaryButtonBorderBrush}"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Button.list-rx"><Setter Property="Width" Value="NaN"/><Setter Property="MinWidth" Value="48"/><Setter Property="Margin" Value="0,0,10,0"/></Style>
+    <Style Selector="presentation|ChannelListView.touch Button.ptt"><Setter Property="Width" Value="NaN"/><Setter Property="MinWidth" Value="62"/><Setter Property="Margin" Value="10,0,0,0"/></Style>
+    <Style Selector="TextBlock.touch-metadata"><Setter Property="IsVisible" Value="False"/></Style>
+    <Style Selector="presentation|ChannelListView.touch TextBlock.touch-metadata"><Setter Property="IsVisible" Value="True"/></Style>
+    <Style Selector="presentation|ChannelListView.touch Grid.desktop-metadata"><Setter Property="IsVisible" Value="False"/></Style>
+    <Style Selector="presentation|ChannelListView.touch Button.list-rx.rx-enabled, presentation|ChannelListView.touch Button.list-rx.rx-active">
+      <Setter Property="Background" Value="#136B45"/><Setter Property="Foreground" Value="#E4EAF1"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch TextBlock.channel-name, presentation|ChannelListView.touch TextBlock.group-name">
+      <Setter Property="FontSize" Value="{DynamicResource MobileChannelNameFontSize}"/>
+      <Setter Property="FontFamily" Value="{DynamicResource MobileBoldFontFamily}"/><Setter Property="FontWeight" Value="Bold"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch TextBlock.group-name">
+      <Setter Property="LineHeight" Value="{DynamicResource MobileChannelNameLineHeight}"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Border.list-details TextBlock">
+      <Setter Property="FontSize" Value="{DynamicResource ChannelListDetailFontSize}"/>
+      <Setter Property="LineHeight" Value="{DynamicResource MobileChannelDetailLineHeight}"/>
+    </Style>
+    <Style Selector="Grid.details-layout"><Setter Property="RowSpacing" Value="5"/></Style>
+    <Style Selector="presentation|ChannelListView.touch Grid.details-layout"><Setter Property="RowSpacing" Value="0"/></Style>
+    <Style Selector="presentation|ChannelListView.touch Button.group-disclosure.system-heading">
+      <Setter Property="Margin" Value="0,0,0,0"/><Setter Property="Padding" Value="0,4"/><Setter Property="FontSize" Value="{DynamicResource ChannelListHeadingFontSize}"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Button.row-disclosure">
+      <Setter Property="FontSize" Value="{DynamicResource MobileChannelNameFontSize}"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch TextBlock.channel-name">
+      <Setter Property="LineHeight" Value="{DynamicResource MobileChannelNameLineHeight}"/><Setter Property="FontWeight" Value="Bold"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch TextBlock.channel-detail">
+      <Setter Property="LineHeight" Value="{DynamicResource MobileChannelDetailLineHeight}"/><Setter Property="FontWeight" Value="Normal"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Button.list-selector, presentation|ChannelListView.touch Button.list-tar, presentation|ChannelListView.touch Button.list-secure">
+      <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="presentation|ChannelListView.touch Button.group-status">
+      <!-- Inset the visible button without reducing its touch target. -->
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Background="Transparent">
+            <Border Margin="0,4" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{TemplateBinding CornerRadius}" Padding="10,0">
+              <ContentPresenter Content="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}"
+                                FontFamily="{TemplateBinding FontFamily}" FontSize="{TemplateBinding FontSize}" FontWeight="{TemplateBinding FontWeight}"
+                                HorizontalContentAlignment="Center" VerticalContentAlignment="Center"/>
+            </Border>
+          </Border>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <!-- Touch selection belongs to the channel controls, not a second rectangle behind the row. -->
+    <Style Selector="presentation|ChannelListView.touch ListBoxItem /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="Transparent"/>
+    </Style>
     <Style Selector="Button.row-disclosure"><Setter Property="BorderBrush" Value="Transparent"/></Style>
     <Style Selector="Button.list-control:focus-visible"><Setter Property="BorderBrush" Value="{DynamicResource OperationalSelectionBorderBrush}"/></Style>
   </UserControl.Styles>
-  <ListBox Classes="channel-list" ItemsSource="{Binding Items}" SelectionMode="Single" KeyboardNavigation.TabNavigation="Continue" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
-    <ListBox.Styles>
-      <Style Selector="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/><Setter Property="MinHeight" Value="0"/><Setter Property="KeyboardNavigation.TabNavigation" Value="Continue"/></Style>
-    </ListBox.Styles>
+  <Grid x:Name="ListColumns" ColumnDefinitions="*">
+  <ListBox x:Name="channelRows" Classes="channel-list" ItemsSource="{Binding VisibleRows}" AutoScrollToSelectedItem="False" ScrollViewer.BringIntoViewOnFocusChange="False" SelectionMode="Single" KeyboardNavigation.TabNavigation="Continue" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto">
+
     <ListBox.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
-    <ListBox.ItemTemplate>
-      <DataTemplate x:DataType="presentation:ChannelListItemViewModel">
+    <ListBox.DataTemplates>
+      <DataTemplate DataType="presentation:ConsoleListGroupViewModel" x:DataType="presentation:ConsoleListGroupViewModel">
+        <Grid ColumnDefinitions="*,Auto">
+        <Button Classes="list-control group-disclosure" Classes.system-heading="{Binding IsSystem}"
+                HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" MinHeight="44"
+                Background="Transparent" BorderThickness="0"
+                AutomationProperties.Name="{Binding AccessibilityText}" Click="HandleGroupClick">
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+            <TextBlock Classes="group-arrow" Text="{Binding DisclosureText}" VerticalAlignment="Center"/>
+            <PathIcon Classes="group-chevron" Classes.expanded="{Binding IsExpanded}" Width="10" Height="6" VerticalAlignment="Center" Data="M0 0 L5 4 L10 0 L10 2 L5 6 L0 2 Z"/>
+            <WrapPanel Grid.Column="1" Orientation="Horizontal">
+              <TextBlock Classes="group-name" Text="{Binding Name}" TextWrapping="Wrap" VerticalAlignment="Center"/>
+              <Border Classes="group-rx-dot" Classes.receiving="{Binding ShowReceiveDot}" Width="7" Height="7" CornerRadius="4" Margin="8,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
+              <TextBlock Classes="group-rx-label" Classes.receiving="{Binding ShowReceiveNames}" Text="{Binding ReceiveActivityText}" ToolTip.Tip="{Binding ReceiveActivityText}" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+            </WrapPanel>
+          </Grid>
+        </Button>
+        <Button Grid.Column="1" Classes="list-control group-status" Classes.connected="{Binding IsConnected}" Classes.connecting="{Binding IsConnecting}" Classes.disconnected="{Binding IsDisconnected}" Content="{Binding ConnectionText}"
+                MinHeight="44" Padding="10,4" Margin="8,0,0,0" BorderThickness="1"
+                IsEnabled="{Binding CanToggleConnection}" AutomationProperties.Name="{Binding ConnectionActionText}"
+                Click="HandleConnectionClick"/>
+        </Grid>
+      </DataTemplate>
+      <DataTemplate DataType="presentation:ChannelListItemViewModel" x:DataType="presentation:ChannelListItemViewModel">
         <StackPanel>
-          <TextBlock Margin="4,10,4,2" FontSize="16" FontWeight="Bold" Text="{Binding SystemHeading}" IsVisible="{Binding ShowsSystemHeading}"/>
-          <TextBlock Margin="12,4,4,4" FontSize="13" FontWeight="SemiBold" Opacity="0.8" Text="{Binding ZoneHeading}" IsVisible="{Binding ShowsZoneHeading}"/>
-          <Border Classes="channel-list-row" Margin="0,0,0,4" Padding="7" MinHeight="52" CornerRadius="7" BorderThickness="1" Background="{DynamicResource CardBackgroundBrush}" BorderBrush="{DynamicResource ControlBorderBrush}" PointerPressed="HandleRowPointerPressed" PointerReleased="HandleRowPointerReleased" DetachedFromVisualTree="HandleRowDetached">
+          <Border Gestures.IsHoldingEnabled="True" Classes="channel-list-row" Classes.listening="{Binding ReceiveEnabled}" MinHeight="52" BorderThickness="1" PointerPressed="HandleRowPointerPressed" PointerReleased="HandleRowPointerReleased" DetachedFromVisualTree="HandleRowDetached">
             <Grid RowDefinitions="Auto,Auto">
-              <Grid ColumnDefinitions="Auto,*,100,Auto" ColumnSpacing="8" VerticalAlignment="Center">
-                <Button Classes="list-control list-rx" Classes.rx-enabled="{Binding ReceiveEnabled}" Classes.rx-active="{Binding ReceiveActive}" MinWidth="52" MinHeight="44" Content="{Binding ReceiveButtonText}" AutomationProperties.Name="{Binding Name, StringFormat='Toggle receive for {0}'}" Click="HandleReceiveClick"/>
+              <Grid Classes="list-summary" ColumnDefinitions="Auto,*,Auto,Auto" RowDefinitions="Auto,Auto" VerticalAlignment="Center">
+                <Button Classes="list-control list-rx" Classes.rx-enabled="{Binding ReceiveEnabled}" Classes.rx-active="{Binding ReceiveActive}" Content="{Binding ReceiveButtonText}" AutomationProperties.Name="{Binding Name, StringFormat='Toggle receive for {0}'}" Click="HandleReceiveClick"/>
                 <Button Grid.Column="1" Classes="list-control row-disclosure" Padding="0" Background="Transparent" BorderThickness="1" HorizontalContentAlignment="Stretch" VerticalAlignment="Center" MinWidth="0" AutomationProperties.Name="{Binding Name, StringFormat='Expand or collapse {0}'}" Click="HandleDisclosureClick">
                   <StackPanel MinWidth="0">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="5"><TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/><TextBlock Grid.Column="1" FontSize="11" Text="{Binding StateText}" TextTrimming="CharacterEllipsis"/></Grid>
-                    <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="5"><TextBlock FontSize="11" Opacity="0.75" Text="{Binding TalkgroupText}"/><TextBlock Grid.Column="1" FontSize="11" Opacity="0.75" Text="{Binding ProtocolText}"/><TextBlock Grid.Column="3" FontSize="11" Opacity="0.72" Text="{Binding LastCallerText}" TextTrimming="CharacterEllipsis"/></Grid>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="5"><TextBlock Classes="channel-name" Text="{Binding Name}" TextTrimming="CharacterEllipsis"/><TextBlock Classes="list-secondary" Grid.Column="1" FontSize="{DynamicResource ChannelListDetailFontSize}" Text="{Binding StateText}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/></Grid>
+                    <TextBlock Classes="touch-metadata channel-detail" FontSize="{DynamicResource ChannelListDetailFontSize}" Text="{Binding ChannelMetadataText}" TextWrapping="Wrap"/>
+                    <Grid Classes="desktop-metadata" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="5"><TextBlock Classes="channel-detail" FontSize="{DynamicResource ChannelListDetailFontSize}" Text="{Binding TalkgroupText}"/><TextBlock Grid.Column="1" FontSize="{DynamicResource ChannelListDetailFontSize}" Opacity="0.75" Text="{Binding ProtocolText}"/><TextBlock Classes="list-secondary" Grid.Column="3" FontSize="{DynamicResource ChannelListDetailFontSize}" Opacity="0.72" Text="{Binding LastCallerText}" TextTrimming="CharacterEllipsis"/></Grid>
+                    <TextBlock Classes="compact-caller channel-detail" FontSize="{DynamicResource ChannelListDetailFontSize}" Text="{Binding CallerDetailText}" TextTrimming="CharacterEllipsis"/>
                   </StackPanel>
                 </Button>
-                <presentation:AudioLevelMeter Grid.Column="2" Width="100" Height="5" Meter="{Binding Meter}" ColorizePeak="False" VerticalAlignment="Center" AutomationProperties.Name="Channel audio level"/>
-                <Button Grid.Column="3" Classes="list-control ptt" MinWidth="64" MinHeight="44" Content="{Binding PttText}" IsEnabled="{Binding IsPttEnabled}" AutomationProperties.Name="{Binding Name, StringFormat='Push to talk on {0}'}" LostFocus="HandlePttLostFocus"/>
+                <presentation:AudioLevelMeter Classes="list-meter" Meter="{Binding Meter}" ColorizePeak="False" VerticalAlignment="Center" AutomationProperties.Name="Channel audio level"/>
+                <Button Classes="list-control ptt" Content="{Binding PttText}" IsEnabled="{Binding IsPttEnabled}" AutomationProperties.Name="{Binding Name, StringFormat='Push to talk on {0}'}" LostFocus="HandlePttLostFocus" AttachedToVisualTree="HandlePttAttached" DetachedFromVisualTree="HandlePttDetached"/>
               </Grid>
-              <Border Grid.Row="1" Margin="60,6,0,0" Padding="7" CornerRadius="5" Background="{DynamicResource ActivityBackgroundBrush}" IsVisible="{Binding IsExpanded}">
-                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12" RowSpacing="5">
-                  <WrapPanel Grid.ColumnSpan="2" Orientation="Horizontal" ItemSpacing="5" LineSpacing="5">
-                    <Button Classes="list-control list-selector" MinWidth="52" MinHeight="44" Content="TX" IsEnabled="{Binding CanSelectTransmitTargets}" Classes.armed="{Binding IsTransmitSelected}" AutomationProperties.Name="{Binding Name, StringFormat='Select transmit for {0}'}" Click="HandleTransmitSelectionClick"/>
-                    <Button Classes="list-control list-selector" MinWidth="58" MinHeight="44" Content="PAGE" IsEnabled="{Binding CanSelectTransmitTargets}" Classes.armed="{Binding IsPageSelected}" AutomationProperties.Name="{Binding Name, StringFormat='Select paging for {0}'}" Click="HandlePageSelectionClick"/>
-                    <Button Classes="list-control list-selector" MinWidth="62" MinHeight="44" Content="ALERT" IsEnabled="{Binding CanSelectTransmitTargets}" Classes.armed="{Binding IsAlertSelected}" AutomationProperties.Name="{Binding Name, StringFormat='Select alert for {0}'}" Click="HandleAlertSelectionClick"/>
+              <Border Classes="list-details" Grid.Row="1" CornerRadius="5" IsVisible="{Binding IsExpanded}">
+                <Grid Classes="details-layout" ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="12">
+                  <WrapPanel Classes="channel-actions" Grid.ColumnSpan="2" Orientation="Horizontal" ItemSpacing="5" LineSpacing="5">
+                    <Button Classes="list-control list-selector" MinWidth="52" MinHeight="44" Content="TX" IsEnabled="{Binding CanSelectTransmitTargets}" Classes.armed="{Binding IsTransmitSelected}" AutomationProperties.Name="{Binding Name, StringFormat='Select transmit for {0}'}" Click="HandleTransmitSelectionClick">
+                      <Button.Background><MultiBinding Converter="{StaticResource TxBackground}"><Binding Path="IsTransmitSelected"/><Binding Path="ActualThemeVariant" RelativeSource="{RelativeSource Self}"/><Binding Path="UseTouchText"/></MultiBinding></Button.Background>
+                      <Button.BorderBrush><MultiBinding Converter="{StaticResource TxBorder}"><Binding Path="IsTransmitSelected"/><Binding Path="ActualThemeVariant" RelativeSource="{RelativeSource Self}"/><Binding Path="UseTouchText"/></MultiBinding></Button.BorderBrush>
+                    </Button>
+                    <Button Classes="list-control list-selector" MinWidth="58" MinHeight="44" Content="PAGE" IsEnabled="{Binding CanSelectTransmitTargets}" Classes.armed="{Binding IsPageSelected}" AutomationProperties.Name="{Binding Name, StringFormat='Select paging for {0}'}" Click="HandlePageSelectionClick">
+                      <Button.Background><MultiBinding Converter="{StaticResource PageBackground}"><Binding Path="IsPageSelected"/><Binding Path="ActualThemeVariant" RelativeSource="{RelativeSource Self}"/><Binding Path="UseTouchText"/></MultiBinding></Button.Background>
+                      <Button.BorderBrush><MultiBinding Converter="{StaticResource PageBorder}"><Binding Path="IsPageSelected"/><Binding Path="ActualThemeVariant" RelativeSource="{RelativeSource Self}"/><Binding Path="UseTouchText"/></MultiBinding></Button.BorderBrush>
+                    </Button>
+                    <Button Classes="list-control list-selector" MinWidth="62" MinHeight="44" Content="ALERT" IsEnabled="{Binding CanSelectTransmitTargets}" Classes.armed="{Binding IsAlertSelected}" AutomationProperties.Name="{Binding Name, StringFormat='Select alert for {0}'}" Click="HandleAlertSelectionClick">
+                      <Button.Background><MultiBinding Converter="{StaticResource AlertBackground}"><Binding Path="IsAlertSelected"/><Binding Path="ActualThemeVariant" RelativeSource="{RelativeSource Self}"/><Binding Path="UseTouchText"/></MultiBinding></Button.Background>
+                      <Button.BorderBrush><MultiBinding Converter="{StaticResource AlertBorder}"><Binding Path="IsAlertSelected"/><Binding Path="ActualThemeVariant" RelativeSource="{RelativeSource Self}"/><Binding Path="UseTouchText"/></MultiBinding></Button.BorderBrush>
+                    </Button>
+                    <Button Classes="list-control list-tar" MinWidth="52" MinHeight="44" Content="TAR" IsEnabled="{Binding CanRecord}" AutomationProperties.Name="{Binding Name, StringFormat='Toggle Talkgroup Audio Recording for {0}'}" AutomationProperties.HelpText="{Binding TarText}" ToolTip.Tip="{Binding TarText}" Click="HandleRecordingClick">
+                      <Button.Background><MultiBinding Converter="{StaticResource TarBackground}"><Binding Path="IsRecordingEnabled"/><Binding Path="ActualThemeVariant" RelativeSource="{RelativeSource Self}"/><Binding Path="UseTouchText"/></MultiBinding></Button.Background>
+                      <Button.BorderBrush><MultiBinding Converter="{StaticResource TarBorder}"><Binding Path="IsRecordingEnabled"/><Binding Path="ActualThemeVariant" RelativeSource="{RelativeSource Self}"/><Binding Path="UseTouchText"/></MultiBinding></Button.BorderBrush>
+                    </Button>
                     <Button Classes="list-control list-secure" MinWidth="72" MinHeight="44" Content="SECURE" IsVisible="{Binding CanToggleEncryption}" IsEnabled="{Binding CanToggleEncryption}" Classes.armed="{Binding IsTransmitEncrypted}" AutomationProperties.Name="{Binding Name, StringFormat='Toggle secure transmit for {0}'}" Click="HandleEncryptionClick"/>
                   </WrapPanel>
                   <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Foreground="#E5484D" Text="{Binding AuthorityText}" TextWrapping="Wrap" IsVisible="{Binding HasAuthorityFailure}"/>
                   <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Spacing="1">
-                    <TextBlock Text="{Binding VolumeText}"/>
                     <presentation:NeutralSnapSlider Classes="compact-slider touch-slider"
                                                     Minimum="-1"
                                                     Maximum="1"
@@ -70,7 +284,7 @@
                                                     OperatorValueChanged="HandleVolumeChanged"/>
                   </StackPanel>
                   <WrapPanel Grid.Row="3" Grid.ColumnSpan="2" Orientation="Horizontal" ItemSpacing="12" LineSpacing="3">
-                    <TextBlock Text="{Binding ReceiveEncryptionText}" IsVisible="{Binding HasReceiveEncryptionObservation}"/><TextBlock Text="{Binding TarText}" IsVisible="{Binding IsTarStatusVisible}"/><TextBlock Text="{Binding PlaybackText}" IsVisible="{Binding IsPlaybackStatusVisible}"/><TextBlock Text="{Binding MuteText}" TextWrapping="Wrap" IsVisible="{Binding IsMuteStatusVisible}"/><TextBlock Text="{Binding PatchText}" TextWrapping="Wrap" IsVisible="{Binding IsPatchStatusVisible}"/><TextBlock Text="{Binding RouteText}" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding ReceiveEncryptionText}" IsVisible="{Binding HasReceiveEncryptionObservation}"/><TextBlock Foreground="#E5484D" Text="{Binding TarText}" IsVisible="{Binding HasRecordingFault}"/><TextBlock Text="{Binding PlaybackText}" IsVisible="{Binding IsPlaybackStatusVisible}"/><TextBlock Text="{Binding MuteText}" TextWrapping="Wrap" IsVisible="{Binding ShowMuteDetails}"/><TextBlock Text="{Binding PatchText}" TextWrapping="Wrap" IsVisible="{Binding IsPatchStatusVisible}"/>
                   </WrapPanel>
                   <TextBlock Grid.Row="4" Grid.ColumnSpan="2" Foreground="#E5484D" Text="{Binding DiagnosticText}" TextWrapping="Wrap" IsVisible="{Binding HasDiagnostic}"/>
                 </Grid>
@@ -79,6 +293,7 @@
           </Border>
         </StackPanel>
       </DataTemplate>
-    </ListBox.ItemTemplate>
+    </ListBox.DataTemplates>
   </ListBox>
+  </Grid>
 </UserControl>

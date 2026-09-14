@@ -33,7 +33,7 @@
         "type": "Project",
         "dependencies": {
           "Concentus.Oggfile": "[1.0.7, )",
-          "DvmConsole.Audio.Abstractions": "[0.7.0, )",
+          "DvmConsole.Audio.Abstractions": "[0.8.0, )",
           "NLayer": "[3.0.0, )"
         }
       }

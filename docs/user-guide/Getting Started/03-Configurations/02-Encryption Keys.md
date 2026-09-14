@@ -8,14 +8,15 @@ connects, the console requests every configured P25 Phase 1 algorithm and key
 ID through KMM. A valid key from that FNE takes precedence over the local YAML
 fallback. DMR and NXDN privacy keys come from the local YAML file.
 
-Open **File > Configuration Studio**, then select **Encryption Keys** to edit
-the referenced local key file. For a new entry, choose its owning FNE system,
-then the protocol and algorithm. Match the channel's protocol, algorithm, and
-key ID; the same numeric ID on a different FNE does not share its key. Studio
-fills in the protocol-specific algorithm ID for you. For example, P25 Phase 1
-AES-256 uses `0x84`, while DMR AES-256 uses `0x05`. The table shows both the
-name and ID so the saved value is easy to check. The inspector never displays
-key material as plain text.
+To add or edit local keys on desktop, open **File > Configuration Studio** and
+select **Encryption Keys**. On mobile, use **Settings → Edit active
+configuration → Browse → Encryption Keys**. For a new entry, choose its owning
+FNE system, then the protocol and algorithm. Match the channel's protocol,
+algorithm, and key ID; the same numeric ID on a different FNE does not share its
+key. Studio fills in the protocol-specific algorithm ID for you. For example,
+P25 Phase 1 AES-256 uses `0x84`, while DMR AES-256 uses `0x05`. The table shows
+both the name and ID so the saved value is easy to check. The inspector never
+displays key material as plain text.
 
 Key IDs are hexadecimal. Studio keeps `0x` in front of the field and accepts
 the digits that follow it. The key file table also shows IDs with the prefix.
@@ -154,7 +155,8 @@ selectable_encryption: true
 
 When enabled, the resource card shows **SELECT** beside the TAR indicator.
 Click **SELECT** to switch transmission between encrypted and clear for that
-system and talkgroup.
+system and talkgroup. Mobile uses the **SECURE** control in the card header or
+expanded List row.
 
 DVM Console saves the selected clear or encrypted state across restarts. The key
 and algorithm still come from the codeplug. **CLEAR** sends clear audio, while

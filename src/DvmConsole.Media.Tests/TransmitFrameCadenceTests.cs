@@ -136,6 +136,34 @@ public sealed class TransmitFrameCadenceTests
             delay.Durations[0]);
     }
 
+    [Fact]
+    public async Task SystemTimerRoundsFractionalDeadlineUpAndRemainsCancelable()
+    {
+        var time = new TimerRecordingTimeProvider();
+        var cadence = new TransmitFrameCadence(TimeSpan.FromMilliseconds(0.5), time);
+        await cadence.WaitForNextFrameAsync();
+        using var cancellation = new CancellationTokenSource();
+        Task waiting = cadence.WaitForNextFrameAsync(cancellation.Token).AsTask();
+        Assert.Equal(TimeSpan.FromMilliseconds(1), time.DueTime);
+        Assert.False(waiting.IsCompleted);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+    }
+
+    private sealed class TimerRecordingTimeProvider : TimeProvider
+    {
+        public TimeSpan DueTime { get; private set; }
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+        public override long GetTimestamp() => 0;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            DueTime = dueTime;
+            // Leave completion to cancellation; this tests the actual Task.Delay
+            // timer boundary without relying on wall-clock scheduling.
+            return base.CreateTimer(callback, state, Timeout.InfiniteTimeSpan, period);
+        }
+    }
+
     private sealed class RecordingDelay(
         ManualTimeProvider time,
         TimeSpan? overshoot = null)

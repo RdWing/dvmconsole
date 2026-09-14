@@ -15,8 +15,8 @@ described below. The 1200 × 630 social-card pair is retained as earlier artwork
 - `dvm-console-neo-social-card.svg`: editable project and release social preview.
 - `dvm-console-neo-social-card.png`: rendered 1200 x 630 social preview.
 
-The compatibility-facing application assets are generated from these sources
-at `src/DvmConsole.Desktop/Assets/DVMConsole.png`,
+The packaged application icons are generated from these sources and stored at
+`src/DvmConsole.Desktop/Assets/DVMConsole.png`,
 `src/DvmConsole.Desktop/Assets/DVMConsole.ico`, and
 `packaging/macos/DVMConsole.icns`.
 
@@ -32,18 +32,17 @@ life-safety operation.
 
 ## NEO wordmark direction
 
-The README and new social preview use the large cyan NEO wordmark, with blue
-input and green output accents on a dark ink field. The headline is
+The README and current social preview use the large cyan NEO wordmark, with blue
+input and green output accents on a dark background. The headline is
 **Many channels. One console.** Use **DVM Console NEO** in prose and keep the
 existing routed-N application icon for small sizes.
 
 - `dvm-console-neo-readme-banner.png`: 1896 × 830 README header.
 - `dvm-console-neo-social-preview.png`: 1731 × 909 social artwork, approximately
-  1.91:1, including macOS, Windows, and Linux.
+  1.91:1, including macOS, Windows, Linux, iOS, and iPadOS.
 
-These two PNGs are generated raster artwork developed from the existing mark
-and the selected NEO wordmark concept. They are not exports from the legacy
-social-card SVG. The older `dvm-console-neo-social-card.svg` and matching PNG
+These two PNGs combine the existing mark with the NEO wordmark. They were created
+separately from the older social-card SVG. The older `dvm-console-neo-social-card.svg` and matching PNG
 remain as previous artwork; use `dvm-console-neo-social-preview.png` for new
 social previews. Uploading it as the repository's social image is a separate
 GitHub settings action.
@@ -54,3 +53,8 @@ come from the public demo and remain unmodified. Supporting copy and links
 belong in Markdown so they stay readable on narrow screens and in both themes.
 The banner is repository artwork; it does not change in-app operational colors,
 controls, or the packaged application icon.
+
+The v0.8.0 social preview lists all five platforms. iPhone and iPad builds are
+available through the [public TestFlight beta](https://testflight.apple.com/join/KuYtQqja).
+Keep availability details in the README and release notes so they can be updated
+without changing the artwork. The README banner is platform-neutral.

@@ -1,0 +1,20 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Style Selector="Button.ptt"><Setter Property="Height" Value="24" /><Setter Property="HorizontalAlignment" Value="Stretch" /><Setter Property="HorizontalContentAlignment" Value="Center" /><Setter Property="VerticalContentAlignment" Value="Center" /><Setter Property="Padding" Value="3,0" /><Setter Property="FontWeight" Value="SemiBold" /><Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}" /></Style>
+    <Style Selector="Button.ptt:pointerover"><Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}" /></Style>
+    <Style Selector="Button.ptt:pointerover /template/ ContentPresenter#PART_ContentPresenter"><Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}" /></Style>
+    <Style Selector="Button.ptt:pressed"><Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}" /></Style>
+    <Style Selector="Button.ptt:pressed /template/ ContentPresenter#PART_ContentPresenter"><Setter Property="Background" Value="{DynamicResource PttBackgroundBrush}" /></Style>
+    <Style Selector="Button.channel-action">
+      <Setter Property="CornerRadius" Value="3" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+            <ContentPresenter Content="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}" HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+          </Border>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="Button.channel-action:disabled"><Setter Property="Opacity" Value="0.55" /></Style>
+</Styles>

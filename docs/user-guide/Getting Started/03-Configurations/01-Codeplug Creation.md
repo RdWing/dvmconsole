@@ -1,12 +1,15 @@
 # Configuration Studio and codeplugs
 
-Configuration Studio edits a copy kept in the Configuration Library. Import
-and export use YAML, but edits do not change the original file. DVM Console
-copies the YAML and approved companion files into the library, gives the
-configuration a stable ID, and saves each revision without changing earlier
-ones. Your edits stay in a draft until you review and save them.
+Build and edit your configuration in Studio. Your changes stay in a draft until
+you review and save them, and earlier saved revisions remain available in the
+Configuration Library.
 
-Open the current codeplug from:
+You can import and export YAML. When you import a configuration, Console NEO
+copies the YAML and approved companion files into the library and assigns a
+stable configuration ID. Studio edits that copy, leaving your original files
+untouched.
+
+On desktop, open the current codeplug from:
 
 ```
 File > Configuration Studio
@@ -32,7 +35,17 @@ an imported source file.
 
 No preexisting YAML, alias file, or key file is required.
 
-1. Choose **File > New Configuration**, then **FNE Systems > Add FNE**.
+On iPhone and iPad, tap the top-right settings gear, open **Configuration
+Library**, then select **New configuration**. To edit the active configuration,
+choose **Edit active configuration** in Settings. Use **Browse** inside Studio to
+reach **Encryption Keys** and **Files & Interoperability**. Their **Add** actions
+accept new keys and aliases directly and create the required companion files
+inside the configuration bundle. Importing an existing file is optional.
+Incomplete mobile drafts can be checkpointed and resumed; validation must pass
+before they become saved revisions or can be loaded into the console.
+
+1. Create a configuration using the Library on mobile or **File > New
+   Configuration** on desktop, then choose **FNE Systems > Add FNE**.
 2. Enter the FNE name, address, port, peer ID, console RID, and credentials
    supplied for your system. A starter zone is created with the FNE.
 3. Select **Add channel**. Name the zone and channel, enter the destination ID,
@@ -60,8 +73,8 @@ FNE; check **Assigned FNE system** before adding its channels.
 
 ## Importing an existing codeplug
 
-Version 0.7.0 uses a separate NEO application-data directory and never opens the
-ambiguous WPF-era directory as live storage. When the new store is empty, the
+Desktop NEO uses the separate application-data directory introduced in 0.7.0.
+It never opens the ambiguous WPF-era directory as live storage. When the new store is empty, the
 first-launch assistant can copy selected settings, profiles, managed
 configurations, companions, and referenced assets into NEO. Nothing is selected
 by default, and recordings, logs, unknown files, and the old directory are left
@@ -145,7 +158,7 @@ also include a slot. The valid card sizes are `small`, `normal`, and `large`.
 The channel list has its own scrollbar, so the layout drawer never hides rows
 that still need editing.
 
-On desktop-sized Studio windows, edit the channel name, destination ID, mode,
+On desktop, edit the channel name, destination ID, mode,
 DMR slot, encryption algorithm, receive-only state, and card size directly in
 the table. Selecting or focusing an inline editor also selects that channel;
 the table and right-side inspector stay synchronized and share the same
@@ -153,7 +166,8 @@ validation and Undo/Redo history. Use the inspector for key ID, selectable
 encryption, and resource color. Desktop-sized windows keep the full grid and
 use horizontal scrolling when its columns need more room. Only phone-width
 viewports switch to a compact two-line channel summary; the selected channel's
-fields remain available in the inspector below it.
+fields remain available in the inspector below it. Mobile uses touch rows with
+the selected channel's fields in the inspector.
 
 The resource-color picker leaves each swatch visible. The selected swatch uses
 an accent outline instead of replacing the chosen color with the accent color.
@@ -226,7 +240,10 @@ members.
 
 Select **Review & Save** when the draft is ready. The review lists the managed
 YAML, referenced key or alias companions, and configuration-scoped operator
-state that will be committed.
+settings that will be saved. On mobile, the review opens in a centered dialog
+above the editor. Choose **Save** to confirm or **Cancel** to keep editing.
+After saving, a separate dialog offers to disconnect and load the saved
+configuration; canceling that prompt leaves the current session running.
 
 If the draft has an error, **Review & Save** opens the validation drawer. Select
 an issue to open the record that needs attention. Warnings remain visible but
@@ -273,6 +290,17 @@ current configuration ID, active revision, or which Studio edits count as unsave
 
 Review the sanitized copy before sharing it. Site-specific names may still be
 meaningful even after credentials and identifiers are removed.
+
+## Configuration ZIP bundles
+
+For transfer to another device, desktop **Configuration Library → Export Bundle…**
+and mobile **Save bundle to Files…** package a saved configuration and its
+available companions into one ZIP. Full bundles can include passwords and keys;
+confirm their inclusion and keep the file private. Mobile **Import from Files**
+accepts the ZIP directly. Layouts, operator preferences and recordings are not
+included. Saving a bundle to iCloud Drive transfers a file, not a live synced
+configuration. See the [mobile guide](../04-Operations/05-iOS%20and%20iPadOS.md)
+for the receiving-device steps.
 
 ## Moving a configuration to another computer
 

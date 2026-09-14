@@ -96,7 +96,6 @@ public sealed class ArchitectureBoundaryTests
         [
             typeof(ConnectionSessionController),
             typeof(PatchRoutingController),
-            typeof(ReceivePresentationController),
             typeof(ReceiveSessionController),
             typeof(RecordingCommandController),
             typeof(ShellLayoutController),
@@ -116,7 +115,7 @@ public sealed class ArchitectureBoundaryTests
     }
 
     [Fact]
-    public void SessionCompositionProvidesTheRequiredControllerTypes()
+    public void SessionCompositionAndSharedReceiveRuntimeProvideTheRequiredControllerTypes()
     {
         string[] controllerNames =
         [
@@ -127,7 +126,6 @@ public sealed class ArchitectureBoundaryTests
             nameof(PatchRoutingController),
             nameof(PttSessionController),
             nameof(ReceiveOutputController),
-            nameof(ReceivePresentationController),
             nameof(ReceiveSessionController),
             nameof(RecordingCommandController),
             nameof(RuntimeHealthController),
@@ -141,7 +139,12 @@ public sealed class ArchitectureBoundaryTests
         string[] providedTypes = typeof(MainWindowSessionComposition)
             .GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
             .Select(method => method.ReturnType.Name)
+            .Concat(typeof(ConsoleOperationalRuntime).GetProperties().Select(property => property.PropertyType.Name))
+            .Concat(typeof(ConsoleReceiveRuntime).GetProperties().Select(property => property.PropertyType.Name))
+            .Concat(typeof(ConsoleTransmitRuntime).GetProperties().Select(property => property.PropertyType.Name))
+            .Concat(typeof(ConsolePatchRuntime).GetProperties().Select(property => property.PropertyType.Name))
             .ToArray();
+        Assert.Equal("DvmConsole.Application", typeof(ConsoleReceiveRuntime).Assembly.GetName().Name);
         Assert.All(controllerNames, name => Assert.Contains(name, providedTypes));
     }
 
@@ -172,6 +175,7 @@ public sealed class ArchitectureBoundaryTests
                 "DvmConsole.Configuration.Yaml",
                 "DvmConsole.Core",
                 "DvmConsole.FneClient",
+                "DvmConsole.FneIntegration",
                 "DvmConsole.Media",
                 "DvmConsole.Operations",
                 "DvmConsole.Presentation",
@@ -182,6 +186,7 @@ public sealed class ArchitectureBoundaryTests
                 "DvmConsole.Vocoder.Native"
             ],
             ["DvmConsole.Fne"] = [],
+            ["DvmConsole.FneIntegration"] = ["DvmConsole.Application", "DvmConsole.FneClient"],
             ["DvmConsole.FneClient"] = ["DvmConsole.Core", "DvmConsole.Fne"],
             ["DvmConsole.Media"] =
                 ["DvmConsole.Audio.Abstractions", "DvmConsole.Audio.Core", "DvmConsole.Core", "DvmConsole.Fne", "DvmConsole.Vocoder.Abstractions"],
@@ -337,7 +342,7 @@ public sealed class ArchitectureBoundaryTests
     {
         string runtimePath = Path.Combine(
             FindSourceRoot(),
-            "DvmConsole.Desktop",
+            "DvmConsole.Application",
             "ConsoleSessionRuntime.cs");
         string source = File.ReadAllText(runtimePath);
 
@@ -541,7 +546,7 @@ public sealed class ArchitectureBoundaryTests
         string mainViewModel = File.ReadAllText(Path.Combine(desktopRoot, "MainWindowViewModel.cs"));
         string pttController = File.ReadAllText(Path.Combine(desktopRoot, "PttSessionController.cs"));
         string systemViewModel = File.ReadAllText(Path.Combine(desktopRoot, "SystemViewModel.cs"));
-        string radioFactory = File.ReadAllText(Path.Combine(desktopRoot, "FneRadioSessionFactory.cs"));
+        string radioFactory = File.ReadAllText(Path.Combine(FindSourceRoot(), "DvmConsole.FneIntegration", "FneRadioSessionFactory.cs"));
 
         Assert.Contains("IAudioBackendFactory audioBackendFactory", mainViewModel, StringComparison.Ordinal);
         Assert.Contains("IVocoderFactory vocoderFactory", mainViewModel, StringComparison.Ordinal);
@@ -553,7 +558,19 @@ public sealed class ArchitectureBoundaryTests
         Assert.DoesNotContain("new SoftwareVocoderBackend", mainViewModel, StringComparison.Ordinal);
         Assert.Contains("Func<string, int, IPttInputSourceFactory>", pttController, StringComparison.Ordinal);
         Assert.Contains("IFneRadioSessionFactory? radioSessionFactory", systemViewModel, StringComparison.Ordinal);
-        Assert.Contains("radioSession = factory.Create();", systemViewModel, StringComparison.Ordinal);
+        Assert.Contains("radioSession = preparedRadioSession ?? factory.Create();", systemViewModel, StringComparison.Ordinal);
+        string composition = File.ReadAllText(Path.Combine(desktopRoot, "ConsoleSessionComposition.cs"));
+        Assert.Contains("FneConsoleRadioSessions.Prepare(", composition, StringComparison.Ordinal);
+        Assert.Contains("await ConsoleLiveSessionFactory.CreateAsync(", composition, StringComparison.Ordinal);
+        Assert.DoesNotContain("await ConsoleRadioSessions.CreateAsync(", composition, StringComparison.Ordinal);
+        string sharedFactory = File.ReadAllText(Path.Combine(FindSourceRoot(), "DvmConsole.Application", "ConsoleLiveSessionFactory.cs"));
+        Assert.Contains("await ConsoleRadioSessions.CreateAsync(", sharedFactory, StringComparison.Ordinal);
+        Assert.DoesNotContain("DvmConsole.Desktop", sharedFactory, StringComparison.Ordinal);
+        string integration = File.ReadAllText(Path.Combine(FindSourceRoot(), "DvmConsole.FneIntegration", "FneConsoleRadioSessions.cs"));
+        Assert.Contains("ConsoleRadioSessions.CreateAsync(state, plan", integration, StringComparison.Ordinal);
+        Assert.DoesNotContain("ChannelViewModel", integration, StringComparison.Ordinal);
+        string radioOwner = File.ReadAllText(Path.Combine(FindSourceRoot(), "DvmConsole.Application", "ConsoleRadioSessions.cs"));
+        Assert.Contains("binding.Factory.CreateAsync(", radioOwner, StringComparison.Ordinal);
         Assert.DoesNotContain("GetAwaiter().GetResult()", systemViewModel, StringComparison.Ordinal);
         Assert.DoesNotContain("new FneRadioSessionAdapter", systemViewModel, StringComparison.Ordinal);
         Assert.DoesNotContain("FneTrafficReceived +=", systemViewModel, StringComparison.Ordinal);
@@ -562,8 +579,14 @@ public sealed class ArchitectureBoundaryTests
         string sessionSetup = File.ReadAllText(Path.Combine(
             desktopRoot,
             "MainWindowViewModel.SessionSetup.cs"));
-        Assert.Contains("radioIngress.TrafficReceived +=", sessionSetup, StringComparison.Ordinal);
-        Assert.Contains("radioIngress.AuthorityChanged +=", sessionSetup, StringComparison.Ordinal);
+        Assert.DoesNotContain("radioIngress.TrafficReceived +=", sessionSetup, StringComparison.Ordinal);
+        Assert.DoesNotContain("radioIngress.AuthorityChanged +=", sessionSetup, StringComparison.Ordinal);
+        string sharedIngress = File.ReadAllText(Path.Combine(FindSourceRoot(), "DvmConsole.Application", "ConsoleOperationalRuntime.RadioLifecycle.cs"));
+        Assert.Contains("RadioIngress.TrafficReceived += ports.Traffic", sharedIngress, StringComparison.Ordinal);
+        Assert.Contains("RadioIngress.AuthorityChanged += ports.Authority", sharedIngress, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConsoleLiveMediaFactory.Initialize", mainViewModel, StringComparison.Ordinal);
+        Assert.DoesNotContain("operationalRuntime.InitializeReceive(", mainViewModel, StringComparison.Ordinal);
+        Assert.DoesNotContain("operationalRuntime.InitializeTransmitControls(", mainViewModel, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -721,10 +744,10 @@ public sealed class ArchitectureBoundaryTests
             ("DvmConsole.Application", "PcmLevelWindowAccumulator.cs"),
             ("DvmConsole.Application", "LatestBooleanStateReconciler.cs"),
             ("DvmConsole.Application", "P25KeyRequestCoordinator.cs"),
-            ("DvmConsole.Desktop", "CallRecordingManager.cs"),
+            ("DvmConsole.Storage", "CallRecordingManager.cs"),
             ("DvmConsole.Desktop", "RecordingPlaybackCoordinator.cs"),
-            ("DvmConsole.Desktop", "RecordingFinalizationResult.cs"),
-            ("DvmConsole.Desktop", "IFneTrafficEndpoint.cs")
+            ("DvmConsole.Storage", "RecordingFinalizationResult.cs"),
+            ("DvmConsole.FneIntegration", "IFneTrafficEndpoint.cs")
         ];
         string[] violations = serviceFiles
             .Where(service =>
@@ -748,7 +771,7 @@ public sealed class ArchitectureBoundaryTests
         string sourceRoot = FindSourceRoot();
         (string Project, string File)[] serviceFiles =
         [
-            ("DvmConsole.Desktop", "CallRecordingManager.cs"),
+            ("DvmConsole.Storage", "CallRecordingManager.cs"),
             ("DvmConsole.Application", "ChannelReceiveAudioCoordinator.cs"),
             ("DvmConsole.Application", "ChannelReceiveWorkQueue.cs"),
             ("DvmConsole.Application", "PatchSourceDecodeCoordinator.cs"),

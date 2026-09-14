@@ -31,7 +31,7 @@ public sealed partial class MainWindow : Window, IOperatorCommandSurface
     private readonly UserSettingsStore sessionUserSettingsStore;
     private readonly ManagedConfigurationLibrary configurationLibrary;
     private readonly ManagedConfigurationCommandController configurationCommands;
-    private readonly DesktopConfigurationMaterializer configurationMaterializer;
+    private readonly ManagedConfigurationMaterializer configurationMaterializer;
     private readonly OperatorViewStore operatorViewStore;
     private readonly LatestOperatorViewWriter operatorViewWriter;
     private readonly OperatorViewSettings operatorViewSettings;
@@ -139,179 +139,188 @@ public sealed partial class MainWindow : Window, IOperatorCommandSurface
         UserSettingsStore sessionUserSettingsStore,
         OperatorViewStore operatorViewStore,
         bool demoMode)
-        : this(configurationPath, sessionUserSettingsStore, operatorViewStore, demoMode, null)
+        : this(DesktopStartupSession.PrepareAsync(configurationPath, sessionUserSettingsStore, demoMode)
+            .GetAwaiter().GetResult(), sessionUserSettingsStore, operatorViewStore, demoMode)
     {
     }
 
     private MainWindow(
-        string? configurationPath,
+        DesktopStartupSession startup,
         UserSettingsStore sessionUserSettingsStore,
         OperatorViewStore operatorViewStore,
-        bool demoMode,
-        DesktopConfigurationStoreContext? configurationStores)
+        bool demoMode)
     {
-        this.sessionUserSettingsStore = sessionUserSettingsStore ??
-            throw new ArgumentNullException(nameof(sessionUserSettingsStore));
-        this.operatorViewStore = operatorViewStore ??
-            throw new ArgumentNullException(nameof(operatorViewStore));
-        this.demoMode = demoMode;
-        string appDataRoot = Path.GetDirectoryName(this.sessionUserSettingsStore.Path) ?? AppContext.BaseDirectory;
-        shutdownTiming = new ShutdownTimingRecorder(appDataRoot);
-        DesktopConfigurationStoreContext stores = configurationStores ??
-            DesktopConfigurationStoreContext.Create(appDataRoot);
-        configurationLibrary = stores.Library;
-        configurationCommands = stores.Commands;
-        configurationMaterializer = stores.Materializer;
-        bool migrateLegacyConfigurationOperatorState;
-        (configurationPath, activeConfiguration, migrateLegacyConfigurationOperatorState) =
-            ResolveInitialConfiguration(configurationPath);
-        InitializeComponent();
-        // Avalonia can leave named controls declared inside nested MenuItems
-        // unresolved when the compiled XAML is loaded from a published
-        // self-contained apphost. Resolve them from the window name scope
-        // before the startup menu refreshes run.
-        recentManagedConfigurationsMenu ??= this.FindControl<MenuItem>("recentManagedConfigurationsMenu")
-            ?? throw new InvalidOperationException("The managed recent configurations menu was not initialized.");
-        namedSettingsProfileLoadMenu ??= this.FindControl<MenuItem>("namedSettingsProfileLoadMenu");
-        namedSettingsProfileDeleteMenu ??= this.FindControl<MenuItem>("namedSettingsProfileDeleteMenu");
-        toolbarClocks ??= this.FindControl<ItemsControl>("toolbarClocks")
-            ?? throw new InvalidOperationException("The responsive toolbar clocks were not initialized.");
-        toolbarAlertToneShortcuts ??= this.FindControl<ItemsControl>("toolbarAlertToneShortcuts")
-            ?? throw new InvalidOperationException("The responsive alert shortcuts were not initialized.");
-        toolbarTonesLauncher ??= this.FindControl<Button>("toolbarTonesLauncher")
-            ?? throw new InvalidOperationException("The responsive tones launcher was not initialized.");
-        toolbarOverflowMenu ??= this.FindControl<Menu>("toolbarOverflowMenu")
-            ?? throw new InvalidOperationException("The responsive toolbar overflow was not initialized.");
-        mainShellGrid ??= this.FindControl<Grid>("mainShellGrid")
-            ?? throw new InvalidOperationException("The main shell grid was not initialized.");
-        engineeringHealthMenuItem ??= this.FindControl<MenuItem>("engineeringHealthMenuItem")
-            ?? throw new InvalidOperationException("The Engineering Health menu item was not initialized.");
-        engineeringHealthSplitter ??= this.FindControl<GridSplitter>("engineeringHealthSplitter")
-            ?? throw new InvalidOperationException("The Engineering Health splitter was not initialized.");
-        engineeringHealthPane ??= this.FindControl<EngineeringHealthPane>("engineeringHealthPane")
-            ?? throw new InvalidOperationException("The Engineering Health pane was not initialized.");
-        fullStatusBar ??= this.FindControl<Grid>("fullStatusBar")
-            ?? throw new InvalidOperationException("The full status bar was not initialized.");
-        compactStatusBar ??= this.FindControl<Button>("compactStatusBar")
-            ?? throw new InvalidOperationException("The compact status bar was not initialized.");
-        responsiveStatus = new ResponsiveStatusController(
-            fullStatusBar,
-            compactStatusBar);
-        channelRendererHost ??= this.FindControl<ContentControl>("channelRendererHost")
-            ?? throw new InvalidOperationException("The channel renderer host was not initialized.");
-        cardsRendererMenuItem ??= this.FindControl<MenuItem>("cardsRendererMenuItem")
-            ?? throw new InvalidOperationException("The Cards renderer menu item was not initialized.");
-        listRendererMenuItem ??= this.FindControl<MenuItem>("listRendererMenuItem")
-            ?? throw new InvalidOperationException("The List renderer menu item was not initialized.");
-        activityCallHistoryList ??= this.FindControl<ItemsControl>("activityCallHistoryList")
-            ?? throw new InvalidOperationException("The Activity history list was not initialized.");
-        MainWindowViewModel initialViewModel = LoadSessionViewModel(
-            configurationPath,
-            activeConfiguration,
-            migrateLegacyConfigurationOperatorState);
-        PopulatePttKeyMenus(initialViewModel);
-        operatorViewSettings = LoadOperatorViewSettings();
-        operatorViewWriter = new LatestOperatorViewWriter(
-            this.operatorViewStore.Save,
-            exception => DesktopCrashLog.Write("Operator view persistence", exception));
-        engineeringHealthViewModel = new EngineeringHealthViewModel(initialViewModel);
-        engineeringHealthPane.DataContext = engineeringHealthViewModel;
-        mainWindowPlacement = new MainWindowPlacementController(this, initialViewModel.MainWindowPlacement);
-        mainWindowPlacement.PrepareSize();
-        var activityViewportAnchor = new ScrollViewportAnchor<CallHistoryEntry>(
-            () => activityScrollViewer,
-            () => activityCallHistoryList.GetVisualDescendants()
-                .OfType<Border>()
-                .Where(border => border.Classes.Contains("activity-call-card")),
-            control => control.DataContext as CallHistoryEntry);
-        activityHistoryViewport = new ActivityHistoryViewportController(
-            activityCallHistoryList,
-            activityViewportAnchor);
-        channelCardInteractions = new ChannelCardInteractionController(this, () => viewModel);
-        cardsRenderer = CreateCardsRenderer(initialViewModel);
-        sessionHost = new MainWindowSessionHost(
-            initialViewModel,
-            activityHistoryViewport.HandleCollectionChanging,
-            replacement => AvaloniaStorageThreading.Invoke(() => ApplySessionDataContext(replacement)),
-            () => AvaloniaStorageThreading.Invoke(CloseModelessViewModelWindows),
-            () => AvaloniaStorageThreading.Invoke(CloseAllModelessWindows));
-        settingsTransfer = new SettingsTransferCoordinator(CaptureSettingsTransferSession);
-        sessionHost.ReplacementFollowUpFailed += HandleSessionReplacementFollowUpFailed;
-        listRenderer = new ChannelListView();
-        listRenderer.Attach(sessionHost.ApplicationSession, channelPtt, () => viewModel.TogglePttMode);
-        channelRenderer = new ChannelRendererController(
-            operatorViewSettings,
-            channelRendererHost,
-            cardsRenderer,
-            listRenderer,
-            cardsRendererMenuItem,
-            listRendererMenuItem);
-        applicationLifecycle = new DesktopApplicationLifecycle(this);
-        pttLifecycleBinding = new ChannelPttLifecycleBinding(
-            applicationLifecycle,
-            ReleaseAllChannelPttAsync,
-            exception => DesktopCrashLog.Write("Lifecycle PTT release", exception));
-        channelRenderer.Apply(Width);
-        pttKeyRouter = new WindowPttKeyRouter(() => viewModel);
-        operatorCommands = new OperatorCommandController(this);
-        ApplyEngineeringHealthVisibility();
-        AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
-        AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
-        AddHandler(InputElement.GotFocusEvent, HandlePttFocusChanged, RoutingStrategies.Bubble, true);
-        AddHandler(InputElement.LostFocusEvent, HandlePttFocusChanged, RoutingStrategies.Bubble, true);
-        AddHandler(InputElement.PointerPressedEvent, HandlePttPointerPressed, RoutingStrategies.Tunnel, true);
-        AddHandler(InputElement.PointerReleasedEvent, HandlePttPointerReleased, RoutingStrategies.Tunnel, true);
-        AddHandler(InputElement.PointerCaptureLostEvent, HandlePttPointerCaptureLost, RoutingStrategies.Bubble, true);
-        MainWindowMenuBuilder.ReplaceRecentManagedConfigurationItems(
-            recentManagedConfigurationsMenu,
-            [],
-            "No recently opened configurations",
-            HandleOpenRecentManagedConfigurationClick);
-        RefreshNamedSettingsProfileMenus();
-        Opened += async (_, _) =>
+        try
         {
-            RefreshResponsiveToolbarVisibility(Bounds.Width);
-            mainWindowPlacement.RestorePosition();
-            mainWindowPlacement.StartTracking();
-            ConfigureTransientScrollBars(activityScrollViewer);
-            await sessionHost.StartAsync();
-            await RegisterLegacyConfigurationCandidatesAsync();
-            if (pendingStartupActiveConfiguration is { } pendingActive)
+            this.sessionUserSettingsStore = sessionUserSettingsStore ??
+                throw new ArgumentNullException(nameof(sessionUserSettingsStore));
+            this.operatorViewStore = operatorViewStore ??
+                throw new ArgumentNullException(nameof(operatorViewStore));
+            this.demoMode = demoMode;
+            shutdownTiming = startup.ShutdownTiming;
+            configurationLibrary = startup.Stores.Library;
+            configurationCommands = startup.Stores.Commands;
+            configurationMaterializer = startup.Stores.Materializer;
+            activeConfiguration = startup.ActiveConfiguration;
+            activeMaterializationLease = startup.Materialization;
+            pendingStartupActiveConfiguration = startup.PendingActiveConfiguration;
+            pendingStartupConfigurationImportPath = startup.PendingImportPath;
+            InitializeComponent();
+            // Avalonia can leave named controls declared inside nested MenuItems
+            // unresolved when the compiled XAML is loaded from a published
+            // self-contained apphost. Resolve them from the window name scope
+            // before the startup menu refreshes run.
+            recentManagedConfigurationsMenu ??= this.FindControl<MenuItem>("recentManagedConfigurationsMenu")
+                ?? throw new InvalidOperationException("The managed recent configurations menu was not initialized.");
+            namedSettingsProfileLoadMenu ??= this.FindControl<MenuItem>("namedSettingsProfileLoadMenu");
+            namedSettingsProfileDeleteMenu ??= this.FindControl<MenuItem>("namedSettingsProfileDeleteMenu");
+            toolbarClocks ??= this.FindControl<ItemsControl>("toolbarClocks")
+                ?? throw new InvalidOperationException("The responsive toolbar clocks were not initialized.");
+            toolbarAlertToneShortcuts ??= this.FindControl<ItemsControl>("toolbarAlertToneShortcuts")
+                ?? throw new InvalidOperationException("The responsive alert shortcuts were not initialized.");
+            toolbarTonesLauncher ??= this.FindControl<Button>("toolbarTonesLauncher")
+                ?? throw new InvalidOperationException("The responsive tones launcher was not initialized.");
+            toolbarOverflowMenu ??= this.FindControl<Menu>("toolbarOverflowMenu")
+                ?? throw new InvalidOperationException("The responsive toolbar overflow was not initialized.");
+            mainShellGrid ??= this.FindControl<Grid>("mainShellGrid")
+                ?? throw new InvalidOperationException("The main shell grid was not initialized.");
+            engineeringHealthMenuItem ??= this.FindControl<MenuItem>("engineeringHealthMenuItem")
+                ?? throw new InvalidOperationException("The Engineering Health menu item was not initialized.");
+            engineeringHealthSplitter ??= this.FindControl<GridSplitter>("engineeringHealthSplitter")
+                ?? throw new InvalidOperationException("The Engineering Health splitter was not initialized.");
+            engineeringHealthPane ??= this.FindControl<EngineeringHealthPane>("engineeringHealthPane")
+                ?? throw new InvalidOperationException("The Engineering Health pane was not initialized.");
+            fullStatusBar ??= this.FindControl<Grid>("fullStatusBar")
+                ?? throw new InvalidOperationException("The full status bar was not initialized.");
+            compactStatusBar ??= this.FindControl<Button>("compactStatusBar")
+                ?? throw new InvalidOperationException("The compact status bar was not initialized.");
+            responsiveStatus = new ResponsiveStatusController(
+                fullStatusBar,
+                compactStatusBar);
+            channelRendererHost ??= this.FindControl<ContentControl>("channelRendererHost")
+                ?? throw new InvalidOperationException("The channel renderer host was not initialized.");
+            cardsRendererMenuItem ??= this.FindControl<MenuItem>("cardsRendererMenuItem")
+                ?? throw new InvalidOperationException("The Cards renderer menu item was not initialized.");
+            listRendererMenuItem ??= this.FindControl<MenuItem>("listRendererMenuItem")
+                ?? throw new InvalidOperationException("The List renderer menu item was not initialized.");
+            activityCallHistoryList ??= this.FindControl<ItemsControl>("activityCallHistoryList")
+                ?? throw new InvalidOperationException("The Activity history list was not initialized.");
+            if (!startup.IsInitialized)
+                startup.InitializeViewModelAsync().GetAwaiter().GetResult();
+            MainWindowViewModel initialViewModel = startup.ViewModel;
+            PopulatePttKeyMenus(initialViewModel);
+            operatorViewSettings = LoadOperatorViewSettings();
+            operatorViewWriter = new LatestOperatorViewWriter(
+                this.operatorViewStore.Save,
+                exception => DesktopCrashLog.Write("Operator view persistence", exception));
+            engineeringHealthViewModel = new EngineeringHealthViewModel(initialViewModel);
+            engineeringHealthPane.DataContext = engineeringHealthViewModel;
+            mainWindowPlacement = new MainWindowPlacementController(this, initialViewModel.MainWindowPlacement);
+            mainWindowPlacement.PrepareSize();
+            var activityViewportAnchor = new ScrollViewportAnchor<CallHistoryEntry>(
+                () => activityScrollViewer,
+                () => activityCallHistoryList.GetVisualDescendants()
+                    .OfType<Border>()
+                    .Where(border => border.Classes.Contains("activity-call-card")),
+                control => control.DataContext as CallHistoryEntry,
+                itemExists: item => activityCallHistoryList.Items.Contains(item));
+            activityHistoryViewport = new ActivityHistoryViewportController(
+                activityCallHistoryList,
+                activityViewportAnchor);
+            channelCardInteractions = new ChannelCardInteractionController(this, () => viewModel);
+            cardsRenderer = CreateCardsRenderer(initialViewModel);
+            sessionHost = new MainWindowSessionHost(
+                initialViewModel,
+                activityHistoryViewport.HandleCollectionChanging,
+                replacement => AvaloniaStorageThreading.Invoke(() => ApplySessionDataContext(replacement)),
+                () => AvaloniaStorageThreading.Invoke(CloseModelessViewModelWindows),
+                () => AvaloniaStorageThreading.Invoke(CloseAllModelessWindows));
+            settingsTransfer = new SettingsTransferCoordinator(CaptureSettingsTransferSession);
+            sessionHost.ReplacementFollowUpFailed += HandleSessionReplacementFollowUpFailed;
+            listRenderer = new ChannelListView();
+            listRenderer.Attach(sessionHost.ApplicationSession, channelPtt, () => viewModel.TogglePttMode);
+            channelRenderer = new ChannelRendererController(
+                operatorViewSettings,
+                channelRendererHost,
+                cardsRenderer,
+                listRenderer,
+                cardsRendererMenuItem,
+                listRendererMenuItem);
+            applicationLifecycle = new DesktopApplicationLifecycle(this);
+            pttLifecycleBinding = new ChannelPttLifecycleBinding(
+                applicationLifecycle,
+                ReleaseAllChannelPttAsync,
+                exception => DesktopCrashLog.Write("Lifecycle PTT release", exception));
+            channelRenderer.Apply(Width);
+            pttKeyRouter = new WindowPttKeyRouter(() => viewModel);
+            operatorCommands = new OperatorCommandController(this);
+            ApplyEngineeringHealthVisibility();
+            AddHandler(InputElement.KeyDownEvent, HandleKeyDown, RoutingStrategies.Tunnel);
+            AddHandler(InputElement.KeyUpEvent, HandleKeyUp, RoutingStrategies.Tunnel);
+            AddHandler(InputElement.GotFocusEvent, HandlePttFocusChanged, RoutingStrategies.Bubble, true);
+            AddHandler(InputElement.LostFocusEvent, HandlePttFocusChanged, RoutingStrategies.Bubble, true);
+            AddHandler(InputElement.PointerPressedEvent, HandlePttPointerPressed, RoutingStrategies.Tunnel, true);
+            AddHandler(InputElement.PointerReleasedEvent, HandlePttPointerReleased, RoutingStrategies.Tunnel, true);
+            AddHandler(InputElement.PointerCaptureLostEvent, HandlePttPointerCaptureLost, RoutingStrategies.Bubble, true);
+            MainWindowMenuBuilder.ReplaceRecentManagedConfigurationItems(
+                recentManagedConfigurationsMenu,
+                [],
+                "No recently opened configurations",
+                HandleOpenRecentManagedConfigurationClick);
+            RefreshNamedSettingsProfileMenus();
+            Opened += async (_, _) =>
             {
-                pendingStartupActiveConfiguration = null;
-                await ActivateManagedConfigurationAsync(pendingActive);
-            }
-            else if (pendingStartupConfigurationImportPath is { } pendingImport)
+                RefreshResponsiveToolbarVisibility(Bounds.Width);
+                mainWindowPlacement.RestorePosition();
+                mainWindowPlacement.StartTracking();
+                ConfigureTransientScrollBars(activityScrollViewer);
+                await sessionHost.StartAsync();
+                await RegisterLegacyConfigurationCandidatesAsync();
+                if (pendingStartupActiveConfiguration is { } pendingActive)
+                {
+                    pendingStartupActiveConfiguration = null;
+                    await ActivateManagedConfigurationAsync(pendingActive);
+                }
+                else if (pendingStartupConfigurationImportPath is { } pendingImport)
+                {
+                    pendingStartupConfigurationImportPath = null;
+                    await OpenCodeplugAsync(pendingImport);
+                }
+                await RefreshRecentManagedConfigurationMenuAsync();
+            };
+            Closing += HandleClosing;
+            Activated += (_, _) => UpdatePttFocusSuppression();
+            Deactivated += async (_, _) =>
             {
-                pendingStartupConfigurationImportPath = null;
-                await OpenCodeplugAsync(pendingImport);
-            }
-            await RefreshRecentManagedConfigurationMenuAsync();
-        };
-        Closing += HandleClosing;
-        Activated += (_, _) => UpdatePttFocusSuppression();
-        Deactivated += async (_, _) =>
+                pttKeyRouter.UpdateInputFocus(null, isWindowActive: false);
+                if (Volatile.Read(ref shutdownStarted) != 0)
+                    return;
+                try
+                {
+                    await sessionHost.FlushSettingsIfActiveAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (ObjectDisposedException) when (Volatile.Read(ref shutdownStarted) != 0)
+                {
+                    // Hiding the window during shutdown raises Deactivated. The
+                    // session may finish disposing before an in-flight flush resumes.
+                }
+                catch (Exception exception) when (
+                    exception is IOException or UnauthorizedAccessException)
+                {
+                    DesktopCrashLog.Write("Operator settings persistence", exception);
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                        viewModel.ReportUserSettingsPersistenceFailure(exception));
+                }
+            };
+            startup.TransferOwnership();
+        }
+        catch
         {
-            pttKeyRouter.UpdateInputFocus(null, isWindowActive: false);
-            if (Volatile.Read(ref shutdownStarted) != 0)
-                return;
-            try
-            {
-                await sessionHost.FlushSettingsIfActiveAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (ObjectDisposedException) when (Volatile.Read(ref shutdownStarted) != 0)
-            {
-                // Hiding the window during shutdown raises Deactivated. The
-                // session may finish disposing before an in-flight flush resumes.
-            }
-            catch (Exception exception) when (
-                exception is IOException or UnauthorizedAccessException)
-            {
-                DesktopCrashLog.Write("Operator settings persistence", exception);
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                    viewModel.ReportUserSettingsPersistenceFailure(exception));
-            }
-        };
+            // Async startup awaits this same cleanup. Compatibility constructors
+            // cannot await, but must still retire resources if window setup fails.
+            TaskObservation.Observe(startup.DisposeAsync().AsTask());
+            throw;
+        }
     }
 
     internal static async Task<MainWindow> CreateAsync(
@@ -323,109 +332,37 @@ public sealed partial class MainWindow : Window, IOperatorCommandSurface
     {
         ArgumentNullException.ThrowIfNull(sessionUserSettingsStore);
         ArgumentNullException.ThrowIfNull(operatorViewStore);
-        string appDataRoot = Path.GetDirectoryName(sessionUserSettingsStore.Path) ?? AppContext.BaseDirectory;
-        DesktopConfigurationStoreContext stores = await DesktopConfigurationStoreContext.CreateAsync(
-            appDataRoot,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-        return await Dispatcher.UIThread.InvokeAsync(() => new MainWindow(
-                configurationPath,
-                sessionUserSettingsStore,
-                operatorViewStore,
-                demoMode,
-                stores));
+        var startup = await DesktopStartupSession.PrepareAsync(configurationPath,
+            sessionUserSettingsStore, demoMode, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await AvaloniaStorageThreading.InvokeAsync(() => startup.InitializeViewModelAsync(cancellationToken));
+            return await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return new MainWindow(startup, sessionUserSettingsStore, operatorViewStore, demoMode);
+            });
+        }
+        catch (Exception windowFailure)
+        {
+            await ConsoleSessionConstruction.RollbackAsync(windowFailure, startup.DisposeAsync).ConfigureAwait(false);
+            throw;
+        }
     }
 
-    private MainWindowViewModel LoadSessionViewModel(
-        string? configurationPath,
-        ConfigurationReference? configurationReference = null,
-        bool migrateLegacyConfigurationOperatorState = false)
+    private async Task<MainWindowViewModel> LoadSessionViewModelAsync(
+        string? configurationPath, ConfigurationReference? configurationReference = null)
     {
-        MainWindowViewModel loaded = MainWindowViewModel.Load(
-            configurationPath,
-            sessionUserSettingsStore,
-            networkDisabledDemo: demoMode,
-            configurationReference: configurationReference,
-            useLegacyPathFallback: false,
-            migrateLegacyConfigurationOperatorState: migrateLegacyConfigurationOperatorState,
+        MainWindowViewModel loaded = await MainWindowViewModel.LoadAsync(configurationPath,
+            sessionUserSettingsStore, networkDisabledDemo: demoMode,
+            configurationReference: configurationReference, useLegacyPathFallback: false,
             serviceDisposalObserved: shutdownTiming.ObserveService);
-        if (demoMode)
-            loaded.InitializeDemoScenario();
+        if (demoMode) loaded.InitializeDemoScenario();
         return loaded;
     }
 
-    private (string? Path, ConfigurationReference? Reference, bool MigrateLegacyOperatorState) ResolveInitialConfiguration(
-        string? requestedPath)
-    {
-        UserSettings startupSettings = sessionUserSettingsStore.Load();
-        bool persistedStartup = LegacyOperatorStateAttributionPolicy
-            .ShouldAttributeToOpenedConfiguration(
-                requestedPath,
-                startupSettings.LastCodeplugPath);
-        if (string.IsNullOrWhiteSpace(requestedPath))
-        {
-            ConfigurationReference? active = configurationLibrary.Active;
-            if (active is not null)
-            {
-                pendingStartupActiveConfiguration = active;
-                return (null, null, false);
-            }
-            requestedPath = startupSettings.LastCodeplugPath;
-        }
-
-        if (string.IsNullOrWhiteSpace(requestedPath))
-            return (null, null, false);
-
-        string legacyPath = Path.GetFullPath(requestedPath);
-        if (demoMode)
-            return ResolveImmediateDemoConfiguration(legacyPath, persistedStartup);
-
-        pendingStartupConfigurationImportPath = legacyPath;
-        return (legacyPath, null, false);
-    }
-
-    private (string Path, ConfigurationReference? Reference, bool MigrateLegacyOperatorState)
-        ResolveImmediateDemoConfiguration(string legacyPath, bool persistedStartup)
-    {
-        try
-        {
-            // The deterministic demo is an explicit offline/test mode whose
-            // Show() contract requires a complete managed identity. Normal
-            // operator startup takes the asynchronous Opened path above.
-            ConfigurationImportResult imported = configurationLibrary.ImportAsync(
-                    new DesktopConfigurationDocumentSet(legacyPath),
-                    new ConfigurationImportOptions())
-                .AsTask().GetAwaiter().GetResult();
-            configurationLibrary.ActivateAsync(imported.Reference)
-                .AsTask().GetAwaiter().GetResult();
-            IConfigurationMaterializationLease materialization = configurationMaterializer
-                .MaterializeAsync(imported.Reference)
-                .AsTask().GetAwaiter().GetResult();
-            MigrateLegacyOperatorState(legacyPath, materialization.Path);
-            activeMaterializationLease = materialization;
-            return (materialization.Path, imported.Reference, persistedStartup);
-        }
-        catch (Exception exception) when (
-            exception is IOException or InvalidDataException or UnauthorizedAccessException or
-            ConfigurationImportConflictException or ConfigurationExternalCompanionsConfirmationRequiredException)
-        {
-            DesktopCrashLog.Write("Demo configuration library import", exception);
-            return (legacyPath, null, false);
-        }
-    }
-
     private void MigrateLegacyOperatorState(string legacyPath, string managedPath)
-    {
-        if (FileSystemPathIdentity.AreEquivalent(legacyPath, managedPath))
-        {
-            return;
-        }
-
-        UserSettings settings = sessionUserSettingsStore.Load();
-        _ = CodeplugGroupStateStore.CopyForSaveAs(settings, legacyPath, managedPath);
-        _ = CodeplugStudioStateStore.CopyForSaveAs(settings, legacyPath, managedPath);
-        sessionUserSettingsStore.Save(settings);
-    }
+        => DesktopStartupSession.MigrateOperatorState(sessionUserSettingsStore, legacyPath, managedPath);
 
     private async Task RegisterLegacyConfigurationCandidatesAsync()
     {
@@ -855,7 +792,7 @@ public sealed partial class MainWindow : Window, IOperatorCommandSurface
 
     private async Task OpenCodeplugAsync(string path)
     {
-        var source = new DesktopConfigurationDocumentSet(path);
+        var source = new FileConfigurationDocumentSet(path);
         await OpenCodeplugAsync(source, path);
     }
 
@@ -879,7 +816,7 @@ public sealed partial class MainWindow : Window, IOperatorCommandSurface
             string managedPath = materialization.Path;
             if (!string.IsNullOrWhiteSpace(legacyPath))
                 MigrateLegacyOperatorState(legacyPath, managedPath);
-            replacement = LoadSessionViewModel(managedPath, imported.Reference);
+            replacement = await LoadSessionViewModelAsync(managedPath, imported.Reference);
         }
         catch (OperationCanceledException)
         {
@@ -1146,7 +1083,13 @@ public sealed partial class MainWindow : Window, IOperatorCommandSurface
         await sessionHost.PrepareForReplacementAsync();
         IConfigurationMaterializationLease materialization =
             await configurationMaterializer.MaterializeAsync(configuration);
-        MainWindowViewModel replacement = LoadSessionViewModel(materialization.Path, configuration);
+        MainWindowViewModel replacement;
+        try { replacement = await LoadSessionViewModelAsync(materialization.Path, configuration); }
+        catch
+        {
+            await materialization.DisposeAsync();
+            throw;
+        }
         if (!replacement.IsCodeplugLoaded)
         {
             string error = replacement.StatusText;
@@ -1511,7 +1454,7 @@ public sealed partial class MainWindow : Window, IOperatorCommandSurface
         ConfigurationReference? configuration = activeConfiguration;
         return new DesktopSettingsTransferSession(
             owner, sessionHost,
-            () => LoadSessionViewModel(path, configuration),
+            () => LoadSessionViewModelAsync(path, configuration),
             ReplaceViewModelAsync);
     }
 

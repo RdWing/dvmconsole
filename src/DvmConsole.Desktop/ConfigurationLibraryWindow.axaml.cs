@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 using Avalonia.Controls;
+using Avalonia.Platform.Storage;
+using DvmConsole.Storage;
 using DvmConsole.Application;
 using DvmConsole.Presentation;
 
@@ -130,6 +132,41 @@ public sealed partial class ConfigurationLibraryWindow : Window
         {
             viewModel.IsBusy = false;
         }
+    }
+
+    private async void HandleExportBundleRequested(object? sender, ConfigurationLibraryItemEventArgs e)
+    {
+        if (viewModel.IsBusy) return;
+        viewModel.IsBusy = true;
+        try
+        {
+            if (!await ConfirmAsync("Export configuration bundle",
+                "The ZIP contains this saved revision, aliases and companion files, including passwords and encryption keys. Store it only in a location you trust.",
+                "Export full bundle")) return;
+            using IStorageFile? destination = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Export configuration bundle",
+                SuggestedFileName = $"configuration-{e.Item.Summary.Id}.zip",
+                DefaultExtension = "zip",
+                FileTypeChoices = [new FilePickerFileType("Configuration bundle") { Patterns = ["*.zip"] }]
+            });
+            if (destination is null) return;
+            await using var archive = new ConfigurationExportArchive(Path.Combine(Path.GetTempPath(), "dvmconsole-exports"));
+            await library.ExportAsync(new ConfigurationReference(e.Item.Summary.Id, e.Item.Summary.CurrentRevision),
+                archive, new ConfigurationExportOptions(Sanitized: false, IncludeCompanions: true));
+            IReadableDocument document = await archive.CreateArchiveAsync();
+            await using Stream input = await document.OpenReadAsync();
+            await using Stream output = await destination.OpenWriteAsync();
+            if (output.CanSeek) output.SetLength(0);
+            await input.CopyToAsync(output);
+            await output.FlushAsync();
+            await ShowMessageAsync("Bundle exported", "On iPhone or iPad, use Configuration Library → Import from Files and select the ZIP.");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            await ShowMessageAsync("Bundle could not be exported", exception.Message);
+        }
+        finally { viewModel.IsBusy = false; }
     }
 
     private async Task RefreshCoreAsync()

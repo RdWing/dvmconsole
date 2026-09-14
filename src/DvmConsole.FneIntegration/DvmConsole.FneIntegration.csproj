@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../DvmConsole.Application/DvmConsole.Application.csproj" />
+    <ProjectReference Include="../DvmConsole.FneClient/DvmConsole.FneClient.csproj" />
+  </ItemGroup>
+</Project>

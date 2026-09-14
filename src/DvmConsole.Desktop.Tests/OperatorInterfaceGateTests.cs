@@ -237,7 +237,10 @@ public sealed class OperatorInterfaceGateTests
     public void ClassicChannelPttColorDoesNotChangeForTransientPointerStates()
     {
         XDocument shell = XDocument.Parse(ReadDesktopSource("MainWindow.axaml"));
-        XElement[] pttPointerStyles = shell.Descendants()
+        Assert.Contains(shell.Descendants(), element => element.Name.LocalName == "StyleInclude" &&
+            Attribute(element, "Source") == "avares://DvmConsole.Presentation/ConsoleChannelButtonStyles.axaml");
+        XDocument shared = XDocument.Parse(ReadPresentationSource("ConsoleChannelButtonStyles.axaml"));
+        XElement[] pttPointerStyles = shared.Descendants().Concat(shell.Descendants())
             .Where(element => element.Name.LocalName == "Style")
             .Where(element => Attribute(element, "Selector") is string selector &&
                 selector.StartsWith("Button.ptt:", StringComparison.Ordinal))
@@ -282,13 +285,17 @@ public sealed class OperatorInterfaceGateTests
         XDocument sharedGroups = XDocument.Parse(ReadPresentationSource("ConfigurationStudioGroupsView.axaml"));
         XElement applyAndClose = sharedGroups.Descendants().Single(element =>
             Attribute(element, "Name") == "applyOperatorChangesAndCloseButton");
-        XElement yamlSave = studio.Descendants().Single(element =>
-            Attribute(element, "Click") == "HandleReviewAndSaveClick");
+        XElement[] yamlSaves = studio.Descendants().Where(element =>
+            Attribute(element, "Click") == "HandleReviewAndSaveClick").ToArray();
 
         Assert.Equal("Apply & close", Attribute(applyAndClose, "Content"));
         Assert.Equal("HandleApplyOperatorGroupsAndCloseClick", Attribute(applyAndClose, "Click"));
-        Assert.Equal("{Binding ReviewSaveButtonText}", Attribute(yamlSave, "Content"));
-        Assert.Equal("{Binding CanSaveDraft}", Attribute(yamlSave, "IsEnabled"));
+        Assert.Equal(2, yamlSaves.Length);
+        Assert.All(yamlSaves, yamlSave =>
+        {
+            Assert.Equal("{Binding ReviewSaveButtonText}", Attribute(yamlSave, "Content"));
+            Assert.Equal("{Binding CanSaveDraft}", Attribute(yamlSave, "IsEnabled"));
+        });
     }
 
     [Fact]
@@ -460,7 +467,7 @@ public sealed class OperatorInterfaceGateTests
     [Fact]
     public void SemanticTokensMeetTextAndNonTextContrastTargetsInBothThemes()
     {
-        XDocument document = XDocument.Parse(ReadDesktopSource("App.axaml"));
+        XDocument document = XDocument.Parse(ReadPresentationSource("ConsolePalette.axaml"));
         XElement[] themes = document.Descendants()
             .Where(element => element.Name.LocalName == "ResourceDictionary")
             .Where(element => Attribute(element, "Key") is "Light" or "Dark")

@@ -11,6 +11,23 @@ namespace DvmConsole.Desktop.Tests;
 public sealed class ChannelAudioMeterPipelineTests
 {
     [Fact]
+    public void SharedRuntimeCoalescesReceiveStreamsBeforePublishingTransmit()
+    {
+        ChannelViewModel channel = CreateReceivingChannel(FneTrafficProtocol.P25, streamId: 7);
+        var updates = new List<ChannelAudioMeterUpdate>();
+        var runtime = new ChannelAudioMeterRuntime(updates.Add, updates.Add);
+        runtime.Observe(channel, 7, Enumerable.Repeat((short)8_000, 160).ToArray(), ChannelAudioDirection.Receive);
+        runtime.Observe(channel, 8, Enumerable.Repeat((short)1_000, 160).ToArray(), ChannelAudioDirection.Receive);
+        runtime.Observe(channel, 9, Enumerable.Repeat((short)2_000, 160).ToArray(), ChannelAudioDirection.Transmit);
+        runtime.Advance();
+        Assert.Equal(2, updates.Count);
+        Assert.Equal(ChannelAudioDirection.Receive, updates[0].Direction);
+        Assert.True(updates[0].Level > updates[1].Level);
+        Assert.Equal(ChannelAudioDirection.Transmit, updates[1].Direction);
+        Assert.Equal(9u, updates[1].StreamId);
+    }
+
+    [Fact]
     public void SignalsOnlyTheTransitionFromIdleAndReturnsToIdleAfterDecay()
     {
         ChannelViewModel channel = CreateReceivingChannel(FneTrafficProtocol.P25, streamId: 7);

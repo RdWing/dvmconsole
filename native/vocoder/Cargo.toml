@@ -8,7 +8,7 @@ description = "Private native vocoder adapter for DVM Console"
 
 [lib]
 name = "dvmconsole_vocoder"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib", "rlib", "staticlib"]
 
 [dependencies]
 blip25-vocoder = "=1.0.0"

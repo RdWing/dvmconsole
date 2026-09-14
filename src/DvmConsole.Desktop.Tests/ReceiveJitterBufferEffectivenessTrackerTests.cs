@@ -27,6 +27,23 @@ public sealed class ReceiveJitterBufferEffectivenessTrackerTests
         Assert.Equal(new ReceiveJitterBufferEffectiveness(1, 1), tracker.GetSnapshot("Beta"));
     }
 
+    [Fact]
+    public void ConnectionLossResetsOnlyItsOwnLearningOnce()
+    {
+        var runtime = new ConsoleOperationalRuntime(new ConsoleSessionServices(), []);
+        var alpha = SystemId.FromName("Alpha");
+        Assert.True(runtime.ObserveConnectionState(alpha, "Alpha", RadioConnectionState.Connected).Changed);
+        runtime.JitterEffectiveness.Observe("Alpha", Timing(true, 2));
+        runtime.JitterEffectiveness.Observe("Beta", Timing(true, 1));
+        var loss = runtime.ObserveConnectionState(alpha, "Alpha", RadioConnectionState.Disconnected);
+        Assert.True(loss.LostConnection);
+        Assert.Equal(default, runtime.JitterEffectiveness.GetSnapshot("Alpha"));
+        Assert.Equal(new ReceiveJitterBufferEffectiveness(1, 1), runtime.JitterEffectiveness.GetSnapshot("Beta"));
+        Assert.Equal(new ConsoleConnectionChange(false, false),
+            runtime.ObserveConnectionState(alpha, "Alpha", RadioConnectionState.Disconnected));
+        Assert.False(runtime.ObserveConnectionState(alpha, "Alpha", RadioConnectionState.Connected).LostConnection);
+    }
+
     private static ReceiveWorkItemTiming Timing(bool reordered, int deadlineMisses)
         => new(
             new FneTrafficFrame(

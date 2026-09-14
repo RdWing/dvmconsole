@@ -18,7 +18,7 @@ public sealed class AlertToneViewModelTests
             Name = "Dispatch",
             AssetId = assetId.ToString(),
             FileName = "dispatch.wav"
-        });
+        }, DesktopAlertToneFiles.Instance);
 
         Assert.True(viewModel.IsAvailable);
         Assert.Equal("Managed asset · dispatch.wav", viewModel.StorageText);
@@ -33,7 +33,7 @@ public sealed class AlertToneViewModelTests
         {
             Name = "Dispatch",
             FilePath = path
-        });
+        }, DesktopAlertToneFiles.Instance);
 
         Assert.Equal(path, viewModel.StorageText);
     }

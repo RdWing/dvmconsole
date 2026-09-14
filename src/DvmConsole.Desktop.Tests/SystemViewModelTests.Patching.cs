@@ -90,7 +90,15 @@ public sealed partial class SystemViewModelTests
             Assert.Equal("Edit members (2 selected)", group.MemberEditorHeader);
 
             group.SelectedSource = beta;
+            group.IsEnabled = true;
             viewModel.ApplyPatchGroup(group);
+            Assert.Equal("Beta", Assert.Single(viewModel.GetActivePatchSourceChannels()).Definition.SystemName);
+            group.SelectedSource = group.SourceOptions.Single(member => member.Channel.SystemName == "Alpha");
+            Assert.Equal("Beta", Assert.Single(viewModel.GetActivePatchSourceChannels()).Definition.SystemName);
+            group.IsEnabled = false;
+            Assert.Single(viewModel.GetActivePatchSourceChannels());
+            group.IsEnabled = true;
+            group.SelectedSource = beta;
             await viewModel.FlushUserSettingsAsync();
 
             UserSettings saved = store.Load();

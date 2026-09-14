@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-ios</TargetFramework>
+    <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>DvmConsole.Audio</RootNamespace>
+    <RuntimeIdentifier Condition="'$(DvmConsoleIosRuntime)' != ''">$(DvmConsoleIosRuntime)</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">iossimulator-arm64</RuntimeIdentifier>
+    <NuGetLockFilePath>packages.$(RuntimeIdentifier).lock.json</NuGetLockFilePath>
+    <IosAudioRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../native/dvmaudio-ios'))</IosAudioRoot>
+    <IosAudioSdk Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64'">iphonesimulator</IosAudioSdk>
+    <IosAudioTriple Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64'">arm64-apple-ios$(SupportedOSPlatformVersion)-simulator</IosAudioTriple>
+    <IosAudioSdk Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">iphoneos</IosAudioSdk>
+    <IosAudioTriple Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">arm64-apple-ios$(SupportedOSPlatformVersion)</IosAudioTriple>
+    <IosAudioOutput>$(IosAudioRoot)/build/$(RuntimeIdentifier)/$(Configuration)</IosAudioOutput>
+    <IosAudioOptimization Condition="'$(Configuration)' == 'Release'">-O2</IosAudioOptimization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../DvmConsole.Audio.Abstractions/DvmConsole.Audio.Abstractions.csproj" />
+    <ProjectReference Include="../DvmConsole.Audio.Core/DvmConsole.Audio.Core.csproj" />
+  </ItemGroup>
+  <Target Name="BuildIosRemoteIo" BeforeTargets="PrepareForBuild"
+          Inputs="$(MSBuildProjectFullPath);$(IosAudioRoot)/dvmaudio_ios.c;$(IosAudioRoot)/dvmaudio_ios.h;$(IosAudioRoot)/../dvmaudio/dvm_pcm_ring.c;$(IosAudioRoot)/../dvmaudio/dvm_pcm_ring.h;$(IosAudioRoot)/../dvmaudio/dvm_capture_signal.c;$(IosAudioRoot)/../dvmaudio/dvm_capture_signal.h;$(IosAudioRoot)/../dvmaudio/dvm_playback_continuity.h"
+          Outputs="$(IosAudioOutput)/libdvmaudio_ios.a">
+    <Error Condition="'$(IosAudioSdk)' == ''" Text="RemoteIO supports ARM64 iOS simulator and device builds." />
+    <MakeDir Directories="$(IosAudioOutput)" />
+    <Exec Command="xcrun --sdk $(IosAudioSdk) clang -target $(IosAudioTriple) -std=c11 -Wall -Wextra -Werror $(IosAudioOptimization) -c &quot;$(IosAudioRoot)/dvmaudio_ios.c&quot; -o &quot;$(IosAudioOutput)/dvmaudio_ios.o&quot;" />
+    <Exec Command="xcrun --sdk $(IosAudioSdk) clang -target $(IosAudioTriple) -std=c11 -Wall -Wextra -Werror $(IosAudioOptimization) -c &quot;$(IosAudioRoot)/../dvmaudio/dvm_pcm_ring.c&quot; -o &quot;$(IosAudioOutput)/dvm_pcm_ring.o&quot;" />
+    <Exec Command="xcrun --sdk $(IosAudioSdk) clang -target $(IosAudioTriple) -std=c11 -Wall -Wextra -Werror $(IosAudioOptimization) -c &quot;$(IosAudioRoot)/../dvmaudio/dvm_capture_signal.c&quot; -o &quot;$(IosAudioOutput)/dvm_capture_signal.o&quot;" />
+    <Exec Command="xcrun ar rcs &quot;$(IosAudioOutput)/libdvmaudio_ios.a&quot; &quot;$(IosAudioOutput)/dvmaudio_ios.o&quot; &quot;$(IosAudioOutput)/dvm_pcm_ring.o&quot; &quot;$(IosAudioOutput)/dvm_capture_signal.o&quot;" />
+  </Target>
+</Project>

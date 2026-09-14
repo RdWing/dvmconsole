@@ -10,8 +10,13 @@
   <ItemGroup>
     <InternalsVisibleTo Include="DvmConsole.Configuration.Yaml" />
     <InternalsVisibleTo Include="DvmConsole.Application" />
+    <InternalsVisibleTo Include="DvmConsole.Mobile" />
+    <InternalsVisibleTo Include="DvmConsole.iOS" />
+    <InternalsVisibleTo Include="DvmConsole.Presentation" />
     <InternalsVisibleTo Include="DvmConsole" />
     <InternalsVisibleTo Include="DvmConsole.Storage" />
+    <InternalsVisibleTo Include="DvmConsole.Media" />
+    <InternalsVisibleTo Include="DvmConsole.Desktop.Tests" />
   </ItemGroup>
 
   <ItemGroup>

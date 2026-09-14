@@ -9,6 +9,7 @@
         MinWidth="420" MinHeight="420"
         WindowStartupLocation="CenterOwner">
   <presentation:ConfigurationLibraryView x:Name="libraryView"
+      ExportBundleRequested="HandleExportBundleRequested"
       RefreshRequested="HandleRefreshRequested"
       ActivateRequested="HandleActivateRequested"
       TrashRequested="HandleTrashRequested"

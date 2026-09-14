@@ -8,6 +8,15 @@ namespace DvmConsole.Vocoder.Tests;
 
 public sealed class SoftwareVocoderTests
 {
+    [Fact]
+    public void HostQualificationExercisesAllCodecEntryPoints()
+    {
+        var results = VocoderDiagnostics.Run(NativeVocoderLinkage.Dynamic);
+        Assert.Equal(4, results.Count);
+        if (Environment.GetEnvironmentVariable("DVM_VOCODER_QUALIFICATION_REPORT") is { Length: > 0 } report)
+            File.WriteAllLines(report, new[] { "PASS" }.Concat(results));
+    }
+
     [Theory]
     [InlineData(VocoderMode.DmrAmbe, 9)]
     [InlineData(VocoderMode.P25Imbe, 11)]

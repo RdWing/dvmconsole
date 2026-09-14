@@ -42,6 +42,19 @@ internal static class ReceiveJitterBufferConfigurationPolicy
         };
     }
 
+    public static ReceiveJitterBufferConfiguration GetConfiguration(
+        RadioMediaProtocol protocol, ConsoleReceiveBufferingOptions settings)
+        => protocol switch
+        {
+            RadioMediaProtocol.P25 => CreateConfiguration(P25PacketDuration, settings.P25Milliseconds,
+                RxJitterBufferSetting.MaximumP25Milliseconds, settings.P25Adaptive),
+            RadioMediaProtocol.Dmr => CreateConfiguration(DmrPacketDuration, settings.DmrMilliseconds,
+                RxJitterBufferSetting.MaximumDmrMilliseconds, settings.DmrAdaptive),
+            RadioMediaProtocol.Nxdn => CreateConfiguration(NxdnPacketDuration, settings.NxdnMilliseconds,
+                RxJitterBufferSetting.MaximumNxdnMilliseconds, settings.NxdnAdaptive),
+            _ => default
+        };
+
     private static ReceiveJitterBufferConfiguration CreateConfiguration(
         TimeSpan packetDuration,
         int configuredMilliseconds,

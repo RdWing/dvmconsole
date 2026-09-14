@@ -59,6 +59,39 @@ public sealed class ReceiveEpisodeCompletionCoordinatorTests
             [channel]));
     }
 
+    [Fact]
+    public async Task WorkerCancellationReachesPlaybackAndDoesNotFinalizeUndrainedRecording()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var port = new CancellablePort(cancellation.Token);
+        var coordinator = new ReceiveEpisodeCompletionCoordinator(port);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => coordinator.CompleteAsync(
+            new ReceiveEpisodeCompletion(12, 9, [9]), [CreateChannelId("cancelled", 400)]));
+        Assert.Equal(cancellation.Token, port.PlaybackToken);
+        Assert.False(port.RecordingStopped);
+    }
+
+    private sealed class CancellablePort(CancellationToken workerToken) :
+        IReceiveEpisodeCompletionPort, ICancellableReceiveEpisodeCompletionPort
+    {
+        public CancellationToken PlaybackToken { get; private set; }
+        public bool RecordingStopped { get; private set; }
+        public Task RunAfterStreamsAsync(ChannelId channel, IReadOnlyCollection<uint> streams, Func<Task> continuation)
+            => throw new InvalidOperationException("The cancellable worker path is required.");
+        public Task CompletePlaybackAsync(ChannelId channel, long episode)
+            => throw new InvalidOperationException("The cancellable playback path is required.");
+        public Task RunAfterStreamsAsync(ChannelId channel, IReadOnlyCollection<uint> streams,
+            Func<CancellationToken, Task> continuation) => continuation(workerToken);
+        public Task CompletePlaybackAsync(ChannelId channel, long episode, CancellationToken token)
+        {
+            PlaybackToken = token;
+            return Task.FromCanceled(token);
+        }
+        public ChannelId? ResolveRecordingTarget(ChannelId channel) => channel;
+        public void StopRecording(ChannelId channel, long episode) => RecordingStopped = true;
+    }
+
     private static ChannelId CreateChannelId(string instance, uint destinationId)
         => new(new ChannelSessionId(
             "System",

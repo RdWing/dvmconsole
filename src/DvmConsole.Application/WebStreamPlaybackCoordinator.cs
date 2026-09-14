@@ -34,6 +34,7 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
     private readonly Func<string?> getOutputDeviceId;
     private readonly Func<WebStreamPlaybackDescriptor, CancellationToken, Task<Stream>> openStream;
     private readonly Func<Stream, CancellationToken, Task<IAudioPcmStreamReader>> createDecoder;
+    private readonly Func<CancellationToken, ValueTask<IAudioPlayback>>? openSharedOutput;
     private readonly WebStreamPlaybackStatePublisher statePublisher;
     private readonly WebStreamOutputRoutePool outputRoutes = new();
     private IAudioBackend? audioBackend;
@@ -44,12 +45,14 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
         Func<string?> getOutputDeviceId,
         Func<WebStreamPlaybackDescriptor, CancellationToken, Task<Stream>>? openStream = null,
         Func<Stream, CancellationToken, Task<IAudioPcmStreamReader>>? createDecoder = null,
-        Func<WebStreamPlaybackState, ValueTask>? stateObserver = null)
+        Func<WebStreamPlaybackState, ValueTask>? stateObserver = null,
+        Func<CancellationToken, ValueTask<IAudioPlayback>>? openSharedOutput = null)
     {
         this.createAudioBackend = createAudioBackend ?? throw new ArgumentNullException(nameof(createAudioBackend));
         this.getOutputDeviceId = getOutputDeviceId ?? throw new ArgumentNullException(nameof(getOutputDeviceId));
         this.openStream = openStream ?? HttpWebStreamSource.OpenAsync;
         this.createDecoder = createDecoder ?? PcmStreamDecoder.OpenAsync;
+        this.openSharedOutput = openSharedOutput;
         statePublisher = new WebStreamPlaybackStatePublisher(
             stateObserver ?? (_ => ValueTask.CompletedTask));
     }
@@ -65,8 +68,8 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(stream);
         WebStreamPendingStart pending;
-        IAudioBackend backend;
-        AudioDeviceInfo output;
+        IAudioBackend? backend = null;
+        AudioDeviceInfo? output = null;
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -74,28 +77,31 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
             if (registry.ContainsOrPending(stream.Id))
                 return;
 
-            bool createdBackend = audioBackend is null;
-            backend = audioBackend ?? await Task.Run(
-                    createAudioBackend,
-                    CancellationToken.None)
-                .ConfigureAwait(false);
-            try
+            if (openSharedOutput is null)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                string? requestedOutput = stream.OutputDeviceId ?? getOutputDeviceId();
-                output = await Task.Run(
-                        () => ResolveOutputDevice(backend, requestedOutput),
+                bool createdBackend = audioBackend is null;
+                backend = audioBackend ?? await Task.Run(
+                        createAudioBackend,
                         CancellationToken.None)
                     .ConfigureAwait(false);
-                cancellationToken.ThrowIfCancellationRequested();
-                if (createdBackend)
-                    audioBackend = backend;
-            }
-            catch
-            {
-                if (createdBackend)
-                    backend.Dispose();
-                throw;
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    string? requestedOutput = stream.OutputDeviceId ?? getOutputDeviceId();
+                    output = await Task.Run(
+                            () => ResolveOutputDevice(backend, requestedOutput),
+                            CancellationToken.None)
+                        .ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (createdBackend)
+                        audioBackend = backend;
+                }
+                catch
+                {
+                    if (createdBackend)
+                        backend.Dispose();
+                    throw;
+                }
             }
             pending = new WebStreamPendingStart(cancellationToken);
             registry.AddPending(stream.Id, pending);
@@ -122,9 +128,11 @@ public sealed class WebStreamPlaybackCoordinator : IAsyncDisposable
             source = await openStream(stream, pending.Token).ConfigureAwait(false);
             reader = await createDecoder(source, pending.Token).ConfigureAwait(false);
             source = null;
-            playback = await outputRoutes.AcquireAsync(
-                    backend,
-                    output,
+            playback = openSharedOutput is not null
+                ? await openSharedOutput(pending.Token).ConfigureAwait(false)
+                : await outputRoutes.AcquireAsync(
+                    backend!,
+                    output!,
                     PcmAudioFormat.Voice8KhzMono16Bit,
                     $"Web stream: {stream.Name}",
                     pending.Token)

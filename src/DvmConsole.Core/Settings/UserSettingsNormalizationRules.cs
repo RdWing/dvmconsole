@@ -258,7 +258,7 @@ internal static class UserSettingsNormalizationRules
             _ => UserSettings.DvmConsoleAudioProcessingMode
         };
         settings.AudioInputAgcTargetDbfs = NormalizeBounded(settings.AudioInputAgcTargetDbfs, -25.0, -40.0, -12.0);
-        settings.AudioInputGain = NormalizeBounded(settings.AudioInputGain, 1.0, 0.25, 3.0);
+        settings.AudioInputGain = NormalizeBounded(settings.AudioInputGain, 1.0, 0.25, 4.0);
         settings.AudioInputEqLowGainDb = NormalizeBounded(settings.AudioInputEqLowGainDb, 0, -12, 12);
         settings.AudioInputEqMidGainDb = NormalizeBounded(settings.AudioInputEqMidGainDb, 0, -12, 12);
         settings.AudioInputEqHighGainDb = NormalizeBounded(settings.AudioInputEqHighGainDb, 0, -12, 12);
@@ -278,7 +278,7 @@ internal static class UserSettingsNormalizationRules
             .Select(preset => new AudioInputPresetSetting
             {
                 Name = string.IsNullOrWhiteSpace(preset.Name) ? "Mic Preset" : preset.Name.Trim(),
-                Gain = NormalizeBounded(preset.Gain, 1.0, 0.25, 3.0),
+                Gain = NormalizeBounded(preset.Gain, 1.0, 0.25, 4.0),
                 LowGainDb = NormalizeBounded(preset.LowGainDb, 0, -12, 12),
                 MidGainDb = NormalizeBounded(preset.MidGainDb, 0, -12, 12),
                 HighGainDb = NormalizeBounded(preset.HighGainDb, 0, -12, 12)

@@ -42,6 +42,17 @@
     </ResourceDictionary>
   </UserControl.Resources>
   <UserControl.Styles>
+    <Style Selector="presentation|ConfigurationStudioView.touch presentation|ConfigurationStudioKeysView Button,
+                     presentation|ConfigurationStudioView.touch presentation|ConfigurationStudioKeysView TextBox,
+                     presentation|ConfigurationStudioView.touch presentation|ConfigurationStudioKeysView ComboBox,
+                     presentation|ConfigurationStudioView.touch presentation|ConfigurationStudioFilesView Button,
+                     presentation|ConfigurationStudioView.touch presentation|ConfigurationStudioFilesView TextBox,
+                     presentation|ConfigurationStudioView.touch presentation|ConfigurationStudioFilesView ComboBox">
+      <Setter Property="MinHeight" Value="44"/>
+    </Style>
+    <Style Selector="presentation|ConfigurationStudioView.touch ListBox.dense-list">
+      <Setter Property="Background" Value="{DynamicResource StudioPanelBrush}"/>
+    </Style>
     <Style Selector="TextBlock">
       <Setter Property="Foreground" Value="{DynamicResource StudioPrimaryTextBrush}"/>
     </Style>
@@ -239,28 +250,28 @@
     </Style>
   </UserControl.Styles>
   <Grid x:Name="ShellLayout" RowDefinitions="45,*,74">
-    <Border Grid.Row="0" Background="{DynamicResource StudioTopBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1">
-      <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="15" FontWeight="Medium" Text="Configuration Studio"/>
+    <Border x:Name="StudioHeader" Grid.Row="0" Background="{DynamicResource StudioTopBrush}" BorderBrush="{DynamicResource StudioLineBrush}" BorderThickness="0,0,0,1">
+      <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="{DynamicResource StudioTitleFontSize}" FontWeight="Medium" Text="Configuration Studio"/>
     </Border>
     <Grid x:Name="Workspace" Grid.Row="1" ColumnDefinitions="286,*" MinHeight="0">
       <presentation:ConfigurationStudioNavigationView x:Name="Navigation" SectionRequested="HandleSharedSectionNavigationRequested" />
       <Grid x:Name="PageHost" Grid.Column="1" MinHeight="0" Background="{DynamicResource StudioCanvasBrush}">
-        <presentation:ConfigurationStudioOverviewView/>
-        <presentation:ConfigurationStudioSystemsView
+        <presentation:ConfigurationStudioOverviewView IsVisible="{Binding IsOverview}"/>
+        <presentation:ConfigurationStudioSystemsView IsVisible="{Binding IsSystems}"
             DeleteRequested="HandleSharedDeleteSystemRequested"/>
-        <presentation:ConfigurationStudioZonesView x:Name="zonesView"
+        <presentation:ConfigurationStudioZonesView IsVisible="{Binding IsZones}" x:Name="zonesView"
             EditCommandRequested="HandleSharedStudioEditCommandRequested"/>
-        <presentation:ConfigurationStudioStreamsView
+        <presentation:ConfigurationStudioStreamsView IsVisible="{Binding IsStreams}"
             DeleteRequested="HandleSharedDeleteStreamRequested"/>
-        <presentation:ConfigurationStudioGroupsView
+        <presentation:ConfigurationStudioGroupsView IsVisible="{Binding IsGroups}" x:Name="GroupsPage"
             DeleteRequested="HandleSharedDeleteGroupRequested"
             ApplyGroupRequested="HandleSharedApplyPatchGroupRequested"
             ApplyAllRequested="HandleSharedApplyAllOperatorGroupsRequested"
             ApplyAllAndCloseRequested="HandleSharedApplyOperatorGroupsAndCloseRequested"
             ToggleMultiSelectPttRequested="HandleSharedMultiSelectPttRequested"/>
-        <presentation:ConfigurationStudioKeysView
+        <presentation:ConfigurationStudioKeysView IsVisible="{Binding IsEncryptionKeys}" x:Name="KeysPage"
             DeleteRequested="HandleSharedDeleteKeyRequested"/>
-        <presentation:ConfigurationStudioFilesView
+        <presentation:ConfigurationStudioFilesView IsVisible="{Binding IsFiles}" x:Name="FilesPage"
             DeleteAliasRequested="HandleSharedDeleteAliasRequested"
             BrowseKeyFileRequested="HandleSharedBrowseKeyFileRequested"
             BrowseAliasFileRequested="HandleSharedBrowseAliasFileRequested"
@@ -331,6 +342,28 @@
           <Button Content="Export YAML" Click="HandleExportFullClick" AutomationProperties.Name="Export configuration YAML"/>
           <Button MinWidth="180" Content="{Binding ReviewSaveButtonText}" Click="HandleReviewAndSaveClick" IsEnabled="{Binding CanSaveDraft}" AutomationProperties.Name="Review and save configuration"/>
         </WrapPanel>
+      </Grid>
+    </Border>
+    <Border x:Name="TouchFooter" Grid.Row="2" IsVisible="False" Padding="8,4" Background="{DynamicResource StudioTopBrush}">
+      <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8">
+        <Button MinWidth="44" MinHeight="44" Click="HandleToggleValidationDrawerClick" AutomationProperties.Name="Configuration validation details">
+          <Ellipse Width="16" Height="16" Fill="{Binding ValidationIndicatorBrush}"/>
+        </Button>
+        <Button x:Name="TouchActionsButton" Grid.Column="1" Content="Actions" MinHeight="44" AutomationProperties.Name="Configuration actions">
+          <Button.Flyout>
+            <Flyout>
+              <StackPanel Spacing="4">
+                <Button Content="Undo" MinHeight="44" Click="HandleUndoClick" IsEnabled="{Binding CanUndo}"/>
+                <Button Content="Redo" MinHeight="44" Click="HandleRedoClick" IsEnabled="{Binding CanRedo}"/>
+                <Button Content="Save a Copy" MinHeight="44" Click="HandleSaveAsClick" IsEnabled="{Binding CanEdit}"/>
+                <Button Content="Export YAML" MinHeight="44" Click="HandleExportFullClick"/>
+              </StackPanel>
+            </Flyout>
+          </Button.Flyout>
+        </Button>
+        <Button Grid.Column="2" MinHeight="44" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                Content="{Binding ReviewSaveButtonText}" Click="HandleReviewAndSaveClick" IsEnabled="{Binding CanSaveDraft}"
+                AutomationProperties.Name="Review and save configuration"/>
       </Grid>
     </Border>
   </Grid>

@@ -40,7 +40,7 @@ public sealed class RuntimeHealthControllerTests
         Assert.Equal(3, active.Transmit.PeakDepth);
         Assert.Equal("permit cue / microphone blocked", active.Transmit.Stage);
         Assert.Equal("send failed", active.Transmit.LastError);
-        Assert.Equal(2, active.RecordingFinalization.Depth);
+        Assert.Equal(2, active.RecordingFinalization!.Depth);
         Assert.Equal(1, active.RouteRecoveryAttempts);
         Assert.Equal(TimeSpan.FromMilliseconds(25), active.LastRouteRecoveryDuration);
         Assert.Equal("restored", active.LastRouteRecoveryResult);
@@ -56,7 +56,7 @@ public sealed class RuntimeHealthControllerTests
 
         Assert.Equal(3, idle.Transmit.PeakDepth);
         Assert.Equal("idle", idle.Transmit.Stage);
-        Assert.Equal(2, idle.RecordingFinalization.PeakDepth);
+        Assert.Equal(2, idle.RecordingFinalization!.PeakDepth);
     }
 
     [Fact]
@@ -76,10 +76,10 @@ public sealed class RuntimeHealthControllerTests
         RuntimeHealthSnapshot failed = controller.Capture(CreateInput(now.AddSeconds(2)));
 
         Assert.Equal(2, source.ReadCount);
-        Assert.Equal(4, first.RecordingFinalization.Depth);
-        Assert.Equal(4, cached.RecordingFinalization.Depth);
-        Assert.Equal(4, failed.RecordingFinalization.Depth);
-        Assert.Equal("spool unavailable", failed.RecordingFinalization.LastError);
+        Assert.Equal(4, first.RecordingFinalization!.Depth);
+        Assert.Equal(4, cached.RecordingFinalization!.Depth);
+        Assert.Equal(4, failed.RecordingFinalization!.Depth);
+        Assert.Equal("spool unavailable", failed.RecordingFinalization!.LastError);
     }
 
     [Fact]

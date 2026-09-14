@@ -1,0 +1,86 @@
+<!-- SPDX-FileCopyrightText: 2025-2026 RdWing -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+      <x:Double x:Key="ChannelListHeadingFontSize">16</x:Double>
+      <x:Double x:Key="ChannelListZoneFontSize">13</x:Double>
+      <x:Double x:Key="ChannelListDetailFontSize">11</x:Double>
+      <x:Double x:Key="StudioSectionFontSize">16</x:Double>
+      <x:Double x:Key="StudioTitleFontSize">15</x:Double>
+      <x:Double x:Key="StudioBodyFontSize">14</x:Double>
+      <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+          <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#F3F5F7" />
+          <SolidColorBrush x:Key="ShellHeaderBrush" Color="#E4E8EC" />
+          <SolidColorBrush x:Key="PrimaryTextBrush" Color="#18212B" />
+          <SolidColorBrush x:Key="CardBackgroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="MutedTextBrush" Color="#4D5965" />
+          <SolidColorBrush x:Key="ButtonBackgroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="ButtonHoverBrush" Color="#DDE5ED" />
+          <SolidColorBrush x:Key="ControlBorderBrush" Color="#8996A3" />
+          <SolidColorBrush x:Key="PttBackgroundBrush" Color="#E2E8EF" />
+          <SolidColorBrush x:Key="SelectorBackgroundBrush" Color="#E8EDF3" />
+          <SolidColorBrush x:Key="TabTextBrush" Color="#40505F" />
+          <SolidColorBrush x:Key="SelectedTabTextBrush" Color="#111820" />
+          <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#E9EEF3" />
+          <SolidColorBrush x:Key="ActivityBackgroundBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="StatusBarBackgroundBrush" Color="#E1E7ED" />
+          <SolidColorBrush x:Key="SplitterBrush" Color="#8996A3" />
+          <SolidColorBrush x:Key="ClockTextBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="ClockBorderBrush" Color="#65717D" />
+          <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#FFF4D6" />
+          <SolidColorBrush x:Key="WarningBorderBrush" Color="#B47B18" />
+          <SolidColorBrush x:Key="OperationalTransmitSurfaceBrush" Color="#8C1D18" />
+          <SolidColorBrush x:Key="OperationalTransmitRailBrush" Color="#FDE8E7" />
+          <SolidColorBrush x:Key="OperationalTransmitBorderBrush" Color="#8C1D18" />
+          <SolidColorBrush x:Key="OperationalIdlePillBrush" Color="#38414C" />
+          <SolidColorBrush x:Key="OperationalMuteSurfaceBrush" Color="#8C1D18" />
+          <SolidColorBrush x:Key="OperationalMuteBorderBrush" Color="#8C1D18" />
+          <SolidColorBrush x:Key="OperationalAttentionSurfaceBrush" Color="#7A3E00" />
+          <SolidColorBrush x:Key="OperationalAttentionBorderBrush" Color="#7A3E00" />
+          <SolidColorBrush x:Key="OperationalSelectionSurfaceBrush" Color="#244E73" />
+          <SolidColorBrush x:Key="OperationalSelectionBorderBrush" Color="#005FB8" />
+          <SolidColorBrush x:Key="OperationalMeterTrackBrush" Color="#D0D8E0" />
+          <SolidColorBrush x:Key="OperationalMeterFillBrush" Color="#007A3D" />
+          <SolidColorBrush x:Key="OperationalStateTextBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="BrandAccentBrush" Color="#006A7A" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+          <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#0D1116" />
+          <SolidColorBrush x:Key="ShellHeaderBrush" Color="#1A2028" />
+          <SolidColorBrush x:Key="PrimaryTextBrush" Color="#DCE3EB" />
+          <SolidColorBrush x:Key="CardBackgroundBrush" Color="#151D26" />
+          <SolidColorBrush x:Key="MutedTextBrush" Color="#B7C0C9" />
+          <SolidColorBrush x:Key="ButtonBackgroundBrush" Color="#1A222D" />
+          <SolidColorBrush x:Key="ButtonHoverBrush" Color="#253446" />
+          <SolidColorBrush x:Key="ControlBorderBrush" Color="#273443" />
+          <SolidColorBrush x:Key="PttBackgroundBrush" Color="#17202B" />
+          <SolidColorBrush x:Key="SelectorBackgroundBrush" Color="#242938" />
+          <SolidColorBrush x:Key="TabTextBrush" Color="#AEB9C5" />
+          <SolidColorBrush x:Key="SelectedTabTextBrush" Color="#F4F7FA" />
+          <SolidColorBrush x:Key="SidebarBackgroundBrush" Color="#151C25" />
+          <SolidColorBrush x:Key="ActivityBackgroundBrush" Color="#1C2530" />
+          <SolidColorBrush x:Key="StatusBarBackgroundBrush" Color="#1A2028" />
+          <SolidColorBrush x:Key="SplitterBrush" Color="#25313D" />
+          <SolidColorBrush x:Key="ClockTextBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="ClockBorderBrush" Color="#3A4654" />
+          <SolidColorBrush x:Key="WarningBackgroundBrush" Color="#332A1A" />
+          <SolidColorBrush x:Key="WarningBorderBrush" Color="#7A5C28" />
+          <SolidColorBrush x:Key="OperationalTransmitSurfaceBrush" Color="#B42318" />
+          <SolidColorBrush x:Key="OperationalTransmitRailBrush" Color="#3A1514" />
+          <SolidColorBrush x:Key="OperationalTransmitBorderBrush" Color="#FFB4AB" />
+          <SolidColorBrush x:Key="OperationalIdlePillBrush" Color="#38414C" />
+          <SolidColorBrush x:Key="OperationalMuteSurfaceBrush" Color="#991B1B" />
+          <SolidColorBrush x:Key="OperationalMuteBorderBrush" Color="#FF8A80" />
+          <SolidColorBrush x:Key="OperationalAttentionSurfaceBrush" Color="#92400E" />
+          <SolidColorBrush x:Key="OperationalAttentionBorderBrush" Color="#F59E0B" />
+          <SolidColorBrush x:Key="OperationalSelectionSurfaceBrush" Color="#244E73" />
+          <SolidColorBrush x:Key="OperationalSelectionBorderBrush" Color="#6BB6F0" />
+          <SolidColorBrush x:Key="OperationalMeterTrackBrush" Color="#24303B" />
+          <SolidColorBrush x:Key="OperationalMeterFillBrush" Color="#35D07F" />
+          <SolidColorBrush x:Key="OperationalStateTextBrush" Color="#FFFFFF" />
+          <SolidColorBrush x:Key="BrandAccentBrush" Color="#22D3EE" />
+        </ResourceDictionary>
+      </ResourceDictionary.ThemeDictionaries>
+    </ResourceDictionary>

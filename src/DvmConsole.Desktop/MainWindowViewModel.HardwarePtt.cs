@@ -12,7 +12,7 @@ public sealed partial class MainWindowViewModel : IHardwarePttSequencePort
             $"Global PTT capture lost; reactivate the keyboard binding: {failure.Message}");
 
     bool IHardwarePttSequencePort.InputsAllowed
-        => !terminalFence.IsClosed && Volatile.Read(ref sessionInputSuppressed) == 0 &&
+        => !IsSessionInputSuppressed &&
            Volatile.Read(ref disposeStarted) == 0;
     bool IHardwarePttSequencePort.ToggleMode => TogglePttMode;
     bool IHardwarePttSequencePort.HasActiveTransmission => transmitCoordinator.ActiveChannel is not null;

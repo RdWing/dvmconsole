@@ -7,7 +7,8 @@ internal readonly record struct ConfigurationStudioResponsiveLayout(
     bool UsePhoneChannelList,
     bool StackInspector,
     bool UseTouchTargets,
-    double PreviewMaximumHeight);
+    double PreviewMaximumHeight,
+    bool UseCompactHeight);
 
 internal static class ConfigurationStudioResponsiveLayoutPolicy
 {
@@ -15,15 +16,17 @@ internal static class ConfigurationStudioResponsiveLayoutPolicy
     internal const double SideInspectorWidth = 1180;
     internal const double TouchTargetWidth = 400;
 
-    public static ConfigurationStudioResponsiveLayout Evaluate(double width, double height)
+    public static ConfigurationStudioResponsiveLayout Evaluate(double width, double height, bool touchLayout = false)
     {
-        bool phoneList = width is > 0 and < PhoneChannelListWidth;
+        bool compactHeight = touchLayout && height is > 0 and < 500;
+        bool phoneList = width is > 0 and < PhoneChannelListWidth || compactHeight;
         bool stackInspector = width is > 0 and < SideInspectorWidth;
-        bool touchTargets = width is > 0 and < TouchTargetWidth;
+        bool touchTargets = touchLayout || width is > 0 and < TouchTargetWidth;
         return new ConfigurationStudioResponsiveLayout(
             phoneList,
             stackInspector,
             touchTargets,
-            phoneList ? Math.Max(120, height * 0.4) : double.PositiveInfinity);
+            phoneList ? Math.Max(120, height * 0.4) : double.PositiveInfinity,
+            compactHeight);
     }
 }

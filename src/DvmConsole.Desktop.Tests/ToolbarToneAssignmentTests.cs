@@ -49,8 +49,8 @@ public sealed class ToolbarToneAssignmentTests
     [Fact]
     public void LegacyPathsDisambiguateNamesAndMissingOrMalformedIdentitiesNeverFallBack()
     {
-        var first = new AlertToneViewModel(new() { Name = "Dispatch", FilePath = "/first.wav" });
-        var second = new AlertToneViewModel(new() { Name = "Dispatch", FilePath = "/second.wav" });
+        var first = new AlertToneViewModel(new() { Name = "Dispatch", FilePath = "/first.wav" }, DesktopAlertToneFiles.Instance);
+        var second = new AlertToneViewModel(new() { Name = "Dispatch", FilePath = "/second.wav" }, DesktopAlertToneFiles.Instance);
         AlertToneViewModel[] alerts = [first, second];
         Assert.Same(second, ToolbarCustomAlertResolver.Resolve(alerts, "Dispatch", null, "/second.wav"));
         Assert.Null(ToolbarCustomAlertResolver.Resolve(alerts, "Dispatch", null, "/missing.wav"));

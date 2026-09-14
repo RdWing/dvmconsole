@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 using System.Collections.ObjectModel;
-using System.Globalization;
-using System.Text;
 using DvmConsole.Core.Diagnostics;
 using DvmConsole.FneClient;
+using DvmConsole.Application;
 
 namespace DvmConsole.Desktop;
 
@@ -36,9 +35,9 @@ internal sealed class HistoryDiagnosticsSessionPort(
 /// Owns History commands, Activity projection, redacted diagnostic export,
 /// and subscriber-command audit retention behind the main-window facade.
 /// </summary>
-internal sealed class HistoryDiagnosticsController
+internal sealed class HistoryDiagnosticsController : IDisposable
 {
-    private const int MaximumSubscriberCommandAuditEntries = 50;
+    private readonly ConsoleSubscriberCommandDispatcher subscriberCommands;
     private readonly HistoryRecordingController history;
     private readonly DebugLogWorkspace debugLogs;
     private readonly IHistoryDiagnosticsSession session;
@@ -47,14 +46,25 @@ internal sealed class HistoryDiagnosticsController
     public HistoryDiagnosticsController(
         HistoryRecordingController history,
         DebugLogWorkspace debugLogs,
-        IHistoryDiagnosticsSession session)
+        IHistoryDiagnosticsSession session,
+        ConsoleSubscriberCommandDispatcher? subscriberCommands = null)
     {
         this.history = history ?? throw new ArgumentNullException(nameof(history));
         this.debugLogs = debugLogs ?? throw new ArgumentNullException(nameof(debugLogs));
         this.session = session ?? throw new ArgumentNullException(nameof(session));
+        this.subscriberCommands = subscriberCommands ?? new(SystemClock.Instance, historyLimit: 50);
+        this.subscriberCommands.HistoryChanged += HandleSubscriberHistoryChanged;
         SubscriberCommandAudit = new ReadOnlyObservableCollection<SubscriberCommandAuditEntry>(
             subscriberCommandAudit);
     }
+
+    private void HandleSubscriberHistoryChanged(object? sender, EventArgs args)
+    {
+        if (session.CheckUiAccess()) ProjectSubscriberAudit();
+        else session.PostToUi(ProjectSubscriberAudit);
+    }
+
+    public void Dispose() => subscriberCommands.HistoryChanged -= HandleSubscriberHistoryChanged;
 
     public ReadOnlyObservableCollection<SubscriberCommandAuditEntry> SubscriberCommandAudit { get; }
 
@@ -107,29 +117,10 @@ internal sealed class HistoryDiagnosticsController
 
     public void ExportHistory(Stream destination, bool leaveOpen = false)
     {
-        ArgumentNullException.ThrowIfNull(destination);
-        using var writer = new StreamWriter(
-            destination,
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            bufferSize: 4096,
-            leaveOpen);
-        writer.WriteLine("Start,End,DurationSeconds,System,Channel,SourceId,Caller,Talkgroup,Protocol,Encryption,StreamId");
-        foreach (CallHistoryEntry entry in history.CallHistory)
-        {
-            writer.WriteLine(string.Join(",",
-                Csv(entry.Timestamp.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)),
-                Csv(entry.EndTimestamp?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture) ?? string.Empty),
-                Csv(entry.Duration?.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture) ?? string.Empty),
-                Csv(entry.SystemName),
-                Csv(entry.DisplayChannelText),
-                Csv(entry.DisplaySourceText),
-                Csv(entry.CallerText),
-                Csv(entry.DisplayDestinationText),
-                Csv(entry.ProtocolText),
-                Csv(entry.EncryptionText),
-                entry.StreamId.ToString(CultureInfo.InvariantCulture)));
-        }
-        writer.Flush();
+        CallHistoryCsv.Write(destination, history.CallHistory.Select(entry => new CallHistoryExportRow(
+            entry.Timestamp, entry.EndTimestamp, entry.Duration, entry.SystemName,
+            entry.DisplayChannelText, entry.DisplaySourceText, entry.CallerText,
+            entry.DisplayDestinationText, entry.ProtocolText, entry.EncryptionText, entry.StreamId)), leaveOpen);
         session.PublishStatus(
             $"Exported {history.CallHistory.Count} activity-history " +
             $"entr{(history.CallHistory.Count == 1 ? "y" : "ies")}.");
@@ -165,45 +156,15 @@ internal sealed class HistoryDiagnosticsController
     {
         ArgumentNullException.ThrowIfNull(system);
 
+        // Text parsing and observable projection belong to the desktop adapter.
+        // Validation, transport submission and authoritative audit live in Application.
         if (!P25SubscriberCommandCodec.TryParseSubscriberId(destinationText, out uint destinationId))
-        {
-            message = "Enter a P25 subscriber RID from 1 to 16777215.";
-            RecordSubscriberCommandAudit(system.Name, command, 0, false, message);
-            session.PublishStatus(message);
-            return false;
-        }
-
-        if (!system.IsConnected)
-        {
-            message = $"{system.Name} is not connected to an FNE.";
-            RecordSubscriberCommandAudit(system.Name, command, destinationId, false, message);
-            session.PublishStatus(message);
-            return false;
-        }
-
-        if (system.SourceId is not uint sourceId || !P25SubscriberCommandCodec.IsValidSubscriberId(sourceId))
-        {
-            message = $"{system.Name} does not have a configured source RID.";
-            RecordSubscriberCommandAudit(system.Name, command, destinationId, false, message);
-            session.PublishStatus(message);
-            return false;
-        }
-
-        try
-        {
-            system.SendP25SubscriberCommand(command, destinationId);
-            message = "Sent; acknowledgement decoding is pending.";
-            RecordSubscriberCommandAudit(system.Name, command, destinationId, true, message);
-            session.PublishStatus($"{system.Name}: {CommandName(command)} to RID {destinationId} sent.");
-            return true;
-        }
-        catch (Exception exception)
-        {
-            message = $"Unable to send command: {exception.Message}";
-            RecordSubscriberCommandAudit(system.Name, command, destinationId, false, message);
-            session.PublishStatus($"{system.Name}: {message}");
-            return false;
-        }
+            destinationId = 0;
+        var result = subscriberCommands.Submit(system.Id, system, system,
+            FneSubscriberCommandBindings.ToApplication(command), destinationId);
+        message = result.Detail;
+        session.PublishStatus(result.StatusText);
+        return result.Submitted;
     }
 
     public void ToggleActivityZoneFilter()
@@ -241,23 +202,23 @@ internal sealed class HistoryDiagnosticsController
         session.NotifyPropertyChanged(nameof(MainWindowViewModel.ActivitySubscriberCommandAudit));
     }
 
-    private void RecordSubscriberCommandAudit(
-        string systemName,
-        P25SubscriberCommand command,
-        uint destinationId,
-        bool succeeded,
-        string detail)
+    public void AcknowledgeSubscriber(ConsoleSubscriberAcknowledgement response)
     {
-        if (subscriberCommandAudit.Count >= MaximumSubscriberCommandAuditEntries)
-            subscriberCommandAudit.RemoveAt(subscriberCommandAudit.Count - 1);
+        if (subscriberCommands.Acknowledge(response) is not { } result) return;
+        if (session.CheckUiAccess()) session.PublishStatus(result.StatusText);
+        else session.PostToUi(() => session.PublishStatus(result.StatusText));
+    }
 
-        subscriberCommandAudit.Insert(0, new SubscriberCommandAuditEntry(
-            DateTimeOffset.UtcNow,
-            systemName,
-            command,
-            destinationId,
-            succeeded,
-            detail));
+    public void InterruptSubscriberCommands(SystemId system) => subscriberCommands.Interrupt(system);
+    public void ExpireSubscriberCommands() => subscriberCommands.Expire();
+
+    private void ProjectSubscriberAudit()
+    {
+        subscriberCommandAudit.Clear();
+        foreach (var result in subscriberCommands.History)
+            subscriberCommandAudit.Add(new SubscriberCommandAuditEntry(
+                result.Timestamp, result.SystemName, FneSubscriberCommandBindings.ToFne(result.Command),
+                result.DestinationId, result.Submitted, result.Detail));
         session.NotifyPropertyChanged(nameof(MainWindowViewModel.ActivitySubscriberCommandAudit));
     }
 
@@ -265,16 +226,4 @@ internal sealed class HistoryDiagnosticsController
         => session.PublishStatus($"Exported {count} redacted debug log " +
             $"entr{(count == 1 ? "y" : "ies")} to {destinationName}.");
 
-    private static string Csv(string value)
-        => $"\"{value.Replace("\"", "\"\"")}\"";
-
-    private static string CommandName(P25SubscriberCommand command)
-        => command switch
-        {
-            P25SubscriberCommand.CallAlert => "Page",
-            P25SubscriberCommand.RadioCheck => "Radio check",
-            P25SubscriberCommand.Inhibit => "Inhibit",
-            P25SubscriberCommand.Uninhibit => "Uninhibit",
-            _ => command.ToString()
-        };
 }
